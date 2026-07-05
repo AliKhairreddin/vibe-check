@@ -1,0 +1,1 @@
+{"scripts":{"build":"cd frontend && pnpm build","test":"cd backend && pytest -q"},"devDependencies":{}}
