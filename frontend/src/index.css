@@ -1,0 +1,2 @@
+@import "tailwindcss";
+body{margin:0;background:#0f172a;color:#e2e8f0} input,textarea,select{color:#0f172a}.card{background:#111827;border:1px solid #334155;border-radius:16px;padding:20px}.btn{background:#38bdf8;color:#082f49;border-radius:10px;padding:10px 14px;font-weight:700}.muted{color:#94a3b8}.badge{border:1px solid #475569;border-radius:999px;padding:4px 8px}.field{display:grid;gap:6px}.input{border-radius:10px;padding:10px;width:100%} table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #334155;padding:10px;text-align:left;vertical-align:top}
