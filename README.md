@@ -61,6 +61,27 @@ pnpm run cloudflare:deploy
 
 `pnpm run deploy` runs those two deployment steps in order. `pnpm run cloudflare:dry-run` builds the frontend and validates the Worker bundle without rolling out a container image.
 
+### GitHub Actions deployment
+
+The repository includes `.github/workflows/deploy.yml` to deploy on every push to `main` and from the manual **Run workflow** button in GitHub Actions. The GitHub-hosted Ubuntu runner has Docker available, so this path can build and upload the Cloudflare Container without Docker installed locally.
+
+Required GitHub repository secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account id.
+- `CLOUDFLARE_API_TOKEN`: Cloudflare API token. Use the **Edit Cloudflare Workers** template and include Containers edit access if the template does not include it.
+- `CONVEX_DEPLOY_KEY`: Convex production deploy key with `deployment:deploy` permission.
+- `OPENROUTER_API_KEY`: OpenRouter API key used by the processor.
+- `CONVEX_HTTP_SECRET`: optional for CI. Set it only if you want GitHub Actions to refresh the Cloudflare Worker secret from GitHub. The current shared secret is already set in Convex and Cloudflare.
+
+With GitHub CLI:
+
+```bash
+gh secret set CLOUDFLARE_ACCOUNT_ID --body "33fc046ae39af5e3cc14e465646b1544"
+gh secret set CLOUDFLARE_API_TOKEN
+gh secret set CONVEX_DEPLOY_KEY
+gh secret set OPENROUTER_API_KEY
+```
+
 The Worker is configured in `wrangler.jsonc` for:
 
 ```text
