@@ -70,8 +70,8 @@ Required GitHub repository secrets:
 - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account id.
 - `CLOUDFLARE_API_TOKEN`: Cloudflare API token. Use the **Edit Cloudflare Workers** template and include Containers edit access if the template does not include it.
 - `CONVEX_DEPLOY_KEY`: Convex production deploy key with `deployment:deploy` permission.
-- `OPENROUTER_API_KEY`: OpenRouter API key used by the processor.
-- `CONVEX_HTTP_SECRET`: optional for CI. Set it only if you want GitHub Actions to refresh the Cloudflare Worker secret from GitHub. The current shared secret is already set in Convex and Cloudflare.
+
+Cloudflare Worker secrets are managed directly in Cloudflare with `wrangler secret put`; the current deployment needs `OPENROUTER_API_KEY` and `CONVEX_HTTP_SECRET`, which are already set in Cloudflare.
 
 With GitHub CLI:
 
@@ -79,7 +79,6 @@ With GitHub CLI:
 gh secret set CLOUDFLARE_ACCOUNT_ID --body "33fc046ae39af5e3cc14e465646b1544"
 gh secret set CLOUDFLARE_API_TOKEN
 gh secret set CONVEX_DEPLOY_KEY
-gh secret set OPENROUTER_API_KEY
 ```
 
 The Worker is configured in `wrangler.jsonc` for:
