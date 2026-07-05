@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from app.review_pipeline.models import ComplianceReport, JobStatus
+from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import set_status, get_status
@@ -13,6 +14,14 @@ def test_report_schema_validation():
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
     assert parse_report_json(text).overall_status=='needs_review'
+
+def test_default_guidelines_are_loaded_and_combined():
+    guidelines=load_default_guidelines()
+    assert 'General Publisher Ad Copy & Creative Guidelines' in guidelines
+    assert 'No imagery of car wrecks' in guidelines
+    policy_text, sources=build_policy_context('Extra rule.')
+    assert 'Extra rule.' in policy_text
+    assert sources == ['Saved General Publisher Ad Copy & Creative Guidelines', 'Additional pasted policy/guidelines']
 
 def test_ocr_normalization_deduping():
     items=dedupe_ocr([{'text':' Big   Sale ','timestamp':0},{'text':'big sale','timestamp':1},{'text':'','timestamp':2}])

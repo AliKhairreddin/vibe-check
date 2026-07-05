@@ -1,6 +1,6 @@
 # Ad Compliance Video Reviewer
 
-Cloudflare-native MVP for reviewing MP4 ad videos against pasted platform policies. It extracts video metadata with `ffprobe`, samples frames with `ffmpeg`, runs OCR with Tesseract, uses a manual transcript fallback, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
+Cloudflare-native MVP for reviewing MP4 ad videos against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, samples frames with `ffmpeg`, runs OCR with Tesseract, uses a manual transcript fallback, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
 
 ## Stack
 
@@ -104,7 +104,9 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 ## API
 
-- `POST /api/reviews`: create a job with one MP4, ad copy, policy text, notes, optional transcript, model, frame interval, scene toggle.
+- `POST /api/reviews`: create a job with one MP4, ad copy, optional additional policy text, notes, optional transcript, model, frame interval, scene toggle.
+
+Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
 - `GET /api/reviews/{job_id}`: status and progress.
 - `GET /api/reviews/{job_id}/report`: structured report JSON.
 - `GET /api/reviews/{job_id}/report.json`: downloadable report.

@@ -30,7 +30,7 @@ async def optional_password_gate(request: Request, call_next):
     return await call_next(request)
 
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(video:UploadFile=File(...), ad_copy:str=Form(...), policy_text:str=Form(...), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False)):
+async def create_review(video:UploadFile=File(...), ad_copy:str=Form(...), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False)):
     max_mb=int(os.getenv('MAX_UPLOAD_MB','200'))
     job_id=uuid.uuid4().hex; jd=job_dir(job_id)
     file_name=Path(video.filename or 'upload.mp4').name or 'upload.mp4'

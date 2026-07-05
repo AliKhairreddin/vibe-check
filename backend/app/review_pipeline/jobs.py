@@ -5,6 +5,7 @@ from .models import JobStatus, ReviewRequestMeta
 from .storage import job_dir, set_report, set_status, write_json
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
+from .guidelines import build_policy_context
 from .ocr import run_ocr
 from .llm import review_with_openrouter
 
@@ -27,7 +28,8 @@ async def process_job(job_id:str, video_path:Path, meta:ReviewRequestMeta):
         transcript=await anyio.to_thread.run_sync(transcribe, audio_path, meta.manual_transcript if audio_ok or meta.manual_transcript else meta.manual_transcript)
         write_json(jd/'transcript.json', transcript)
         set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing with LLM')
-        evidence={'ad_copy':meta.ad_copy,'policy_text':meta.policy_text,'notes':meta.notes,'transcript':transcript,'ocr':ocr[:200],'frames':frames[:200],'cost_saving_note':'Full frames are not sent by default; OCR, transcript chunks, and frame references are used.'}
+        policy_text, policy_sources=build_policy_context(meta.policy_text)
+        evidence={'ad_copy':meta.ad_copy,'policy_text':policy_text,'policy_sources':policy_sources,'notes':meta.notes,'transcript':transcript,'ocr':ocr[:200],'frames':frames[:200],'cost_saving_note':'Full frames are not sent by default; OCR, transcript chunks, and frame references are used.'}
         report=await review_with_openrouter(evidence, meta.model)
         set_report(job_id, report.model_dump(mode='json'))
         set_status(job_id, JobStatus.complete, 100, 'Complete')

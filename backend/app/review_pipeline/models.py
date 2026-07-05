@@ -37,7 +37,7 @@ class JobRecord(BaseModel):
 
 class ReviewRequestMeta(BaseModel):
     ad_copy: str
-    policy_text: str
+    policy_text: str = ''
     notes: str = ''
     manual_transcript: str = ''
     model: str | None = None

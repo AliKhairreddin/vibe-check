@@ -303,13 +303,12 @@ function Home() {
                   placeholder="Paste the ad copy here."
                 />
               </FormField>
-              <FormField label="Platform policy/guidelines" htmlFor="policy_text">
+              <FormField label="Additional policy/guidelines" htmlFor="policy_text">
                 <Textarea
                   id="policy_text"
-                  required
                   name="policy_text"
                   className="min-h-32"
-                  placeholder="Paste the policy section or review rules here."
+                  placeholder="Saved publisher guidelines are included automatically."
                 />
               </FormField>
               <FormField label="Optional manual transcript" htmlFor="manual_transcript">
