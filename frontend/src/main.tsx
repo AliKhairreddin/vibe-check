@@ -25,13 +25,12 @@ import {
   AlertCircle,
   CheckCircle2,
   Download,
+  FileImage,
   FileJson,
   Moon,
-  PlayCircle,
   Settings,
   Sun,
   Upload,
-  Video,
 } from 'lucide-react';
 import './index.css';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -123,7 +122,7 @@ function AppShell() {
           <nav className="mx-auto flex max-w-7xl items-center justify-between gap-3">
             <Link to="/" className="flex min-w-0 items-center gap-2">
               <span className="grid size-8 shrink-0 place-items-center rounded-lg border bg-card">
-                <Video className="size-4" />
+                <FileImage className="size-4" />
               </span>
               <span className="truncate font-heading text-base font-medium">
                 Vibe Check
@@ -216,11 +215,11 @@ function Home() {
     setSubmitError('');
 
     const form = event.currentTarget;
-    const fileInput = form.elements.namedItem('video') as HTMLInputElement | null;
+    const fileInput = form.elements.namedItem('creative') as HTMLInputElement | null;
     const files = Array.from(fileInput?.files ?? []);
 
     if (!files.length) {
-      setSubmitError('Choose at least one MP4 video.');
+      setSubmitError('Choose at least one MP4, JPG, PNG, or WebP creative.');
       return;
     }
 
@@ -269,7 +268,7 @@ function Home() {
         <CardHeader>
           <CardTitle className="text-xl">Review workspace</CardTitle>
           <CardDescription>
-            Upload one or more MP4 ads and run compliance review jobs.
+            Upload one or more ad creatives and run compliance review jobs.
           </CardDescription>
           <CardAction>
             <Badge variant="outline">{selectedFiles.length || 0} selected</Badge>
@@ -278,14 +277,14 @@ function Home() {
         <CardContent>
           <form onSubmit={submit} className="grid gap-5">
             <div className="grid gap-2">
-              <Label htmlFor="video">MP4 ad videos</Label>
+              <Label htmlFor="creative">Ad creatives</Label>
               <Input
-                id="video"
+                id="creative"
                 required
                 multiple
-                name="video"
+                name="creative"
                 type="file"
-                accept="video/mp4"
+                accept="video/mp4,image/jpeg,image/png,image/webp"
                 className="h-auto min-h-20 cursor-pointer border-dashed py-5"
                 onChange={(event) => {
                   setSelectedFiles(Array.from(event.currentTarget.files ?? []));
@@ -347,7 +346,7 @@ function Home() {
               <div className="grid gap-1">
                 <Label htmlFor="scene_detection">Scene-change detection</Label>
                 <p className="text-sm text-muted-foreground">
-                  Adds scene cuts to the frame sampling pass.
+                  Adds scene cuts to the MP4 frame sampling pass.
                 </p>
               </div>
               <Switch
@@ -368,8 +367,8 @@ function Home() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted-foreground">
                 {selectedFiles.length > 1
-                  ? `${selectedFiles.length} videos will be queued as separate jobs.`
-                  : 'Each video becomes one review job.'}
+                  ? `${selectedFiles.length} creatives will be queued as separate jobs.`
+                  : 'Each creative becomes one review job.'}
               </p>
               <Button type="submit" disabled={isSubmitting}>
                 <Upload data-icon="inline-start" />
@@ -384,7 +383,7 @@ function Home() {
         <CardHeader>
           <CardTitle className="text-xl">Batch progress</CardTitle>
           <CardDescription>
-            Upload progress first, then backend review progress for each video.
+            Upload progress first, then backend review progress for each creative.
           </CardDescription>
           <CardAction>
             <Badge variant={overallProgress === 100 ? 'secondary' : 'outline'}>
@@ -435,11 +434,11 @@ function EmptyBatchState() {
     <div className="grid min-h-64 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
       <div className="grid max-w-xs gap-2">
         <div className="mx-auto grid size-10 place-items-center rounded-lg border bg-card">
-          <PlayCircle className="size-5 text-muted-foreground" />
+          <FileImage className="size-5 text-muted-foreground" />
         </div>
         <p className="text-sm font-medium">No active batch</p>
         <p className="text-sm text-muted-foreground">
-          Select videos and start a review to watch each job move through the queue.
+          Select creatives and start a review to watch each job move through the queue.
         </p>
       </div>
     </div>
@@ -692,7 +691,7 @@ function SettingsPage() {
         <CardContent className="grid gap-4 text-sm leading-6 text-muted-foreground">
           <p>
             Configure OPENROUTER_API_KEY and CONVEX_HTTP_SECRET as Cloudflare Worker
-            secrets. The Convex URL is non-secret Worker config, and videos stay in
+            secrets. The Convex URL is non-secret Worker config, and creatives stay in
             temporary container storage while Convex saves filename, status, progress,
             and final report JSON.
           </p>
@@ -700,7 +699,7 @@ function SettingsPage() {
             <CheckCircle2 />
             <AlertTitle>Processing model</AlertTitle>
             <AlertDescription>
-              Multi-video uploads create separate jobs. The backend queue processes one
+              Multi-creative uploads create separate jobs. The backend queue processes one
               job at a time by default and reports per-job progress back to the UI.
             </AlertDescription>
           </Alert>
@@ -726,9 +725,9 @@ function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
   return <Badge variant="outline">Low</Badge>;
 }
 
-function buildReviewForm(source: FormData, video: File, sceneDetection: boolean) {
+function buildReviewForm(source: FormData, creative: File, sceneDetection: boolean) {
   const form = new FormData();
-  form.append('video', video);
+  form.append('creative', creative);
 
   for (const key of [
     'ad_copy',

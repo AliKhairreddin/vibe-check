@@ -55,7 +55,7 @@ export async function createReview(
       reject(new Error(request.responseText || `Upload failed with ${request.status}`));
     };
 
-    request.onerror = () => reject(new Error('Network error while uploading video'));
+    request.onerror = () => reject(new Error('Network error while uploading creative'));
     request.send(form);
   });
 }

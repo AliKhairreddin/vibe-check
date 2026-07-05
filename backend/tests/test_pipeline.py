@@ -3,9 +3,11 @@ from pathlib import Path
 from app.review_pipeline.models import ComplianceReport, JobStatus
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.llm import parse_report_json
+from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import set_status, get_status
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
+from PIL import Image
 
 def test_report_schema_validation():
     r=ComplianceReport.model_validate({'overall_status':'pass','summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
@@ -37,3 +39,19 @@ def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'
     cmd=extract_frames_command(Path('ad.mp4'), Path('frame_%06d.jpg'), 1.0)
     assert cmd[0]=='ffmpeg' and 'fps=1.0' in cmd
+
+def test_creative_media_kind_detection():
+    assert detect_media_kind('ad.mp4', 'video/mp4') == 'video'
+    assert detect_media_kind('ad.png', 'image/png') == 'image'
+    assert detect_media_kind('ad.webp', 'application/octet-stream') == 'image'
+
+def test_prepare_image_frame_converts_to_jpeg(tmp_path):
+    source=tmp_path/'ad.png'
+    Image.new('RGBA', (20, 10), (255, 0, 0, 128)).save(source)
+    frames=prepare_image_frame(source, tmp_path/'frames')
+    frame_path=tmp_path/'frames'/frames[0]['filename']
+    assert frames == [{'filename':'frame_still.jpg','timestamp':None,'source':'still_image'}]
+    assert frame_path.exists()
+    with Image.open(frame_path) as img:
+        assert img.format == 'JPEG'
+        assert img.size == (20, 10)

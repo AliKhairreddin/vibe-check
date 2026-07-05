@@ -1,6 +1,6 @@
-# Ad Compliance Video Reviewer
+# Ad Compliance Creative Reviewer
 
-Cloudflare-native MVP for reviewing MP4 ad videos against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, samples frames with `ffmpeg`, runs OCR with Tesseract, uses a manual transcript fallback, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
+Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, samples video frames with `ffmpeg`, prepares still images for OCR with Pillow, runs OCR with Tesseract, uses a manual transcript fallback, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
 
 ## Stack
 
@@ -14,10 +14,10 @@ Cloudflare-native MVP for reviewing MP4 ad videos against saved publisher guidel
 
 - Static frontend routes are served from `frontend/dist` via Workers Static Assets.
 - `/api/*` routes are forwarded to a Cloudflare Container running the FastAPI backend.
-- Uploaded videos, extracted audio, sampled frames, and OCR artifacts stay in temporary container scratch space only.
+- Uploaded creatives, extracted audio, sampled frames, prepared image frames, and OCR artifacts stay in temporary container scratch space only.
 - Convex stores the uploaded filename, job status/progress, and final compliance report JSON.
 
-R2 is not required for this MVP because uploaded videos and frame artifacts are intentionally not durable.
+R2 is not required for this MVP because uploaded creatives and frame artifacts are intentionally not durable.
 
 ## Local Development
 
@@ -31,13 +31,13 @@ uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev
 ```
 
-Open the Vite dev URL and upload one or more MP4s with ad copy and policy text.
-The UI creates one review job per selected video and shows upload progress first,
+Open the Vite dev URL and upload one or more MP4, JPG, PNG, or WebP creatives with ad copy and policy text.
+The UI creates one review job per selected creative and shows upload progress first,
 then backend queue and processing progress for each job.
 
 ## Cloudflare Deployment
 
-Cloudflare Containers require a Workers Paid plan. Docker or a compatible Docker engine must also be running on the machine or CI runner that executes `wrangler deploy`, because Wrangler builds and pushes the container image during deployment. The configured container instance type is `standard-1` so ffmpeg, Tesseract, and OpenCV have enough memory/disk for normal MP4 review jobs.
+Cloudflare Containers require a Workers Paid plan. Docker or a compatible Docker engine must also be running on the machine or CI runner that executes `wrangler deploy`, because Wrangler builds and pushes the container image during deployment. The configured container instance type is `standard-1` so ffmpeg, Tesseract, and OpenCV have enough memory/disk for normal creative review jobs.
 
 One-time setup:
 
@@ -104,7 +104,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 ## API
 
-- `POST /api/reviews`: create a job with one MP4, ad copy, optional additional policy text, notes, optional transcript, model, frame interval, scene toggle.
+- `POST /api/reviews`: create a job with one MP4, JPG, PNG, or WebP creative, ad copy, optional additional policy text, notes, optional transcript, model, frame interval, scene toggle.
 
 Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
 - `GET /api/reviews/{job_id}`: status and progress.
@@ -114,7 +114,7 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename, current status/progress, and final report JSON. Multi-video uploads are represented as multiple jobs in the UI. Videos, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename, current status/progress, and final report JSON. Multi-creative uploads are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 
@@ -125,7 +125,7 @@ The backend does not send every full frame to the LLM by default. It sends trans
 - 1 frame/sec can miss quick flashes.
 - OCR can miss stylized, animated, obscured, or tiny text.
 - Local ASR is not enabled by default; paste a manual transcript for MVP transcript coverage.
-- Visual review depends on selected model capability and is conservative in this MVP because full images are not sent by default.
+- Visual review depends on selected model capability and is conservative in this MVP because full video frames and still-image pixels are not sent by default.
 - Automated review is not official platform approval and should be treated as decision support.
 
 ## Testing

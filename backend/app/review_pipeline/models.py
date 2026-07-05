@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 class JobStatus(str, Enum):
-    queued='queued'; processing_video='processing_video'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; transcribing_audio='transcribing_audio'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
+    queued='queued'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
 
 class Finding(BaseModel):
     severity: Literal['low','medium','high']

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .jobs import process_job
+from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
 from .storage import set_status
 
@@ -14,7 +15,8 @@ from .storage import set_status
 @dataclass(frozen=True)
 class QueuedReviewJob:
     job_id: str
-    video_path: Path
+    media_path: Path
+    media_kind: MediaKind
     meta: ReviewRequestMeta
 
 
@@ -47,7 +49,8 @@ async def stop_job_workers() -> None:
 
 async def enqueue_job(
     job_id: str,
-    video_path: Path,
+    media_path: Path,
+    media_kind: MediaKind,
     meta: ReviewRequestMeta,
     file_name: str,
 ):
@@ -56,7 +59,7 @@ async def enqueue_job(
     if position > _worker_count():
         message = f'Queued for processing ({position - _worker_count()} ahead)'
     record = set_status(job_id, JobStatus.queued, 0, message, file_name)
-    await _queue.put(QueuedReviewJob(job_id, video_path, meta))
+    await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta))
     return record
 
 
@@ -65,6 +68,6 @@ async def _process_queue(worker_index: int) -> None:
         job = await _queue.get()
         try:
             set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
-            await process_job(job.job_id, job.video_path, job.meta)
+            await process_job(job.job_id, job.media_path, job.media_kind, job.meta)
         finally:
             _queue.task_done()
