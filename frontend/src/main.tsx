@@ -359,7 +359,7 @@ function Home() {
                   placeholder="Saved publisher guidelines are included automatically."
                 />
               </FormField>
-              <FormField label="Optional manual transcript" htmlFor="manual_transcript">
+              <FormField label="Optional transcript override" htmlFor="manual_transcript">
                 <Textarea
                   id="manual_transcript"
                   name="manual_transcript"

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from app.review_pipeline.models import ComplianceReport, JobStatus
+from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
@@ -86,6 +87,8 @@ def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'
     cmd=extract_frames_command(Path('ad.mp4'), Path('frame_%06d.jpg'), 1.0)
     assert cmd[0]=='ffmpeg' and 'fps=1.0' in cmd
+    audio_cmd=extract_audio_command(Path('ad.mp4'), Path('audio.wav'))
+    assert audio_cmd[0]=='ffmpeg' and '-vn' in audio_cmd and 'audio.wav' in audio_cmd
 
 def test_creative_media_kind_detection():
     assert detect_media_kind('ad.mp4', 'video/mp4') == 'video'
@@ -102,3 +105,62 @@ def test_prepare_image_frame_converts_to_jpeg(tmp_path):
     with Image.open(frame_path) as img:
         assert img.format == 'JPEG'
         assert img.size == (20, 10)
+
+def test_manual_transcript_takes_precedence(tmp_path, monkeypatch):
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    audio=tmp_path/'audio.wav'
+    audio.write_bytes(b'wav')
+    transcript=transcribe(audio, 'Limited time offer.')
+    assert transcript['source']=='manual'
+    assert transcript['chunks'][0]['text']=='Limited time offer.'
+
+def test_transcribe_reports_missing_openrouter_key(tmp_path, monkeypatch):
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    audio=tmp_path/'audio.wav'
+    audio.write_bytes(b'wav')
+    transcript=transcribe(audio)
+    assert transcript['source']=='unavailable'
+    assert 'OPENROUTER_API_KEY' in transcript['limitations'][0]
+
+def test_transcribe_uses_openrouter_stt(tmp_path, monkeypatch):
+    calls={}
+    audio=tmp_path/'audio.wav'
+    audio.write_bytes(b'test audio')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_STT_MODEL', 'openai/whisper-large-v3')
+    monkeypatch.setenv('OPENROUTER_STT_LANGUAGE', 'en')
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {'text':'Test transcript.', 'usage':{'seconds':1.2}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            calls['timeout']=timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, url, headers, json):
+            calls['url']=url
+            calls['headers']=headers
+            calls['json']=json
+            return FakeResponse()
+
+    monkeypatch.setattr('app.review_pipeline.audio.httpx.Client', FakeClient)
+    transcript=transcribe(audio)
+    assert transcript['source']=='openrouter'
+    assert transcript['model']=='openai/whisper-large-v3'
+    assert transcript['chunks'][0]['text']=='Test transcript.'
+    assert transcript['usage']['seconds']==1.2
+    assert calls['url'].endswith('/audio/transcriptions')
+    assert calls['headers']['Authorization']=='Bearer test-key'
+    assert calls['json']['input_audio']['format']=='wav'
+    assert calls['json']['input_audio']['data']=='dGVzdCBhdWRpbw=='
+    assert calls['json']['language']=='en'
