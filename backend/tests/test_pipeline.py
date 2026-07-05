@@ -17,6 +17,40 @@ def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
     assert parse_report_json(text).overall_status=='needs_review'
 
+def test_openrouter_report_normalizes_policy_compliance_wrapper():
+    text=json.dumps({
+        'policy_compliance': {
+            'overall_compliance': 'non-compliant',
+            'issues': [{
+                'risk_level': 'high',
+                'source': 'ad copy',
+                'issue': 'Mentions a savings claim without a required disclaimer.',
+                'policy_rule': 'Claims that imply financial savings need clear support.',
+                'recommendation': 'Add a clear disclaimer and substantiation for the savings claim.',
+                'confidence': 'high',
+            }],
+        }
+    })
+    report=parse_report_json(text)
+    assert report.overall_status=='likely_violation'
+    assert report.summary=='Mentions a savings claim without a required disclaimer.'
+    assert report.findings[0].source=='ad_copy'
+    assert report.findings[0].severity=='high'
+
+def test_openrouter_report_normalizes_review_list_wrapper():
+    text=json.dumps({
+        'review': [{
+            'policy_rule': 'TCPA',
+            'compliance': 'non-compliant',
+            'evidence': 'The ad includes a call prompt without consent language.',
+            'suggested_fix': 'Add opt-in consent language before asking users to call.',
+        }]
+    })
+    report=parse_report_json(text)
+    assert report.overall_status=='likely_violation'
+    assert report.summary=='The ad includes a call prompt without consent language.'
+    assert report.findings[0].policy_reason=='TCPA'
+
 def test_default_guidelines_are_loaded_and_combined():
     guidelines=load_default_guidelines()
     assert 'General Publisher Ad Copy & Creative Guidelines' in guidelines
