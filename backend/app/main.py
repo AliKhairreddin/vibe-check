@@ -3,6 +3,7 @@ import os, uuid
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import ReviewRequestMeta, JobRecord, ComplianceReport
@@ -11,6 +12,8 @@ from .review_pipeline.jobs import process_job
 from .review_pipeline.models import JobStatus
 
 app=FastAPI(title='Ad Compliance Video Reviewer')
+allowed_hosts=[h.strip() for h in os.getenv('APP_ALLOWED_HOSTS','*').split(',') if h.strip()]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
 
 @app.middleware('http')

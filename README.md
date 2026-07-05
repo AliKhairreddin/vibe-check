@@ -57,7 +57,29 @@ Each job is saved under `data/jobs/{job_id}/` with `metadata.json`, `frames/`, `
 
 - Render/Railway: deploy the Dockerfile, set env vars, attach persistent disk for `/app/data/jobs` if reports must persist.
 - Fly.io: use the Dockerfile and mount a Fly volume at `/app/data/jobs`.
-- Cloudflare can later host DNS, frontend, R2 storage, or auth, but should not be the main processor for MP4/OCR/transcription because native ffmpeg/Tesseract dependencies need a container.
+- Cloudflare can host DNS and route traffic to the container through Cloudflare Tunnel, while the MP4/OCR/transcription processor still runs in Docker because native ffmpeg/Tesseract dependencies need a container.
+
+### Cloudflare Tunnel for `vibe-check.thatcanadian.dev`
+
+This repository includes `cloudflare-tunnel.yml` and `docker-compose.cloudflare.yml` to expose only the VibeCheck subdomain through Cloudflare Tunnel. The tunnel ingress sends `https://vibe-check.thatcanadian.dev` to the Docker app on `http://app:8000` and returns `404` for every other hostname. The compose override also sets `APP_ALLOWED_HOSTS=vibe-check.thatcanadian.dev`, so the FastAPI app rejects requests whose `Host` header is not the VibeCheck subdomain.
+
+One-time setup on the deployment host:
+
+```bash
+mkdir -p cloudflare
+docker run --rm -it -v "$PWD/cloudflare:/etc/cloudflared" cloudflare/cloudflared:latest tunnel login
+docker run --rm -it -v "$PWD/cloudflare:/etc/cloudflared" cloudflare/cloudflared:latest tunnel create vibe-check
+docker run --rm -it -v "$PWD/cloudflare:/etc/cloudflared" cloudflare/cloudflared:latest tunnel route dns vibe-check vibe-check.thatcanadian.dev
+cp cloudflare/<TUNNEL_ID>.json cloudflare/vibe-check.json
+```
+
+Then deploy the app and tunnel together:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cloudflare.yml up -d --build
+```
+
+Keep `cloudflare/` out of git because it contains Cloudflare account credentials.
 
 ## Cost-saving notes
 

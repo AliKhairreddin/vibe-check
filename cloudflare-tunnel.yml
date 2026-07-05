@@ -1,0 +1,7 @@
+tunnel: vibe-check
+credentials-file: /etc/cloudflared/creds/vibe-check.json
+
+ingress:
+  - hostname: vibe-check.thatcanadian.dev
+    service: http://app:8000
+  - service: http_status:404
