@@ -20,9 +20,18 @@ class SafeRewrite(BaseModel):
     ad_copy: str = ''
     onscreen_text: list[str] = Field(default_factory=list)
 
+class SourceResult(BaseModel):
+    status: Literal['pass','needs_review','likely_violation']
+    summary: str = ''
+
+class SourceResults(BaseModel):
+    creative: SourceResult | None = None
+    ad_copy: SourceResult | None = None
+
 class ComplianceReport(BaseModel):
     overall_status: Literal['pass','needs_review','likely_violation']
     summary: str
+    source_results: SourceResults = Field(default_factory=SourceResults)
     findings: list[Finding] = Field(default_factory=list)
     safe_rewrite: SafeRewrite = Field(default_factory=SafeRewrite)
     limitations: list[str] = Field(default_factory=list)

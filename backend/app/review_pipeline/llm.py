@@ -43,6 +43,7 @@ SOURCE_ALIASES = {
     'voiceover': 'audio',
     'voice over': 'audio',
     'transcript': 'audio',
+    'audio transcript': 'audio',
     'onscreen': 'onscreen_text',
     'on screen': 'onscreen_text',
     'onscreen text': 'onscreen_text',
@@ -55,6 +56,11 @@ SOURCE_ALIASES = {
     'frame': 'visual',
     'ad copy': 'ad_copy',
     'ad_copy': 'ad_copy',
+    'submitted ad copy': 'ad_copy',
+    'submitted_ad_copy': 'ad_copy',
+    'platform copy': 'ad_copy',
+    'platform caption': 'ad_copy',
+    'social caption': 'ad_copy',
     'copy': 'ad_copy',
     'caption': 'ad_copy',
     'policy': 'policy',
@@ -204,6 +210,54 @@ def _confidence(value: Any) -> str:
     if cleaned in {'low', 'medium', 'high'}:
         return cleaned
     return 'medium'
+
+
+def _source_result(value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        status = _status_from_value(value)
+        return {'status': status, 'summary': ''} if status else None
+    if not isinstance(value, dict):
+        return None
+
+    status = _status_from_value(
+        _first_present(value, ('status', 'result', 'verdict', 'overall_status', 'overallStatus'))
+    )
+    if not status:
+        return None
+    summary = (
+        _summary_from_value(_first_present(value, ('summary', 'details', 'reason', 'explanation')))
+        or ''
+    )
+    return {'status': status, 'summary': summary}
+
+
+def _source_results(report: dict[str, Any]) -> dict[str, Any]:
+    raw = (
+        report.get('source_results')
+        or report.get('sourceResults')
+        or report.get('surface_results')
+        or report.get('surfaceResults')
+        or report.get('component_results')
+        or report.get('componentResults')
+        or {}
+    )
+    if not isinstance(raw, dict):
+        return {}
+
+    creative = _source_result(
+        _first_present(raw, ('creative', 'media', 'asset', 'visual_creative', 'visualCreative'))
+    )
+    ad_copy = _source_result(
+        _first_present(raw, ('ad_copy', 'adCopy', 'submitted_ad_copy', 'submittedAdCopy', 'copy', 'caption'))
+    )
+    results: dict[str, Any] = {}
+    if creative:
+        results['creative'] = creative
+    if ad_copy:
+        results['ad_copy'] = ad_copy
+    return results
 
 
 def _optional_str(value: Any) -> str | None:
@@ -356,10 +410,15 @@ def _normalize_report(data: Any) -> dict[str, Any]:
     if isinstance(limitations, str):
         limitations = [limitations]
 
+    source_results = _source_results(report)
+    if not source_results and nested is not data:
+        source_results = _source_results(data)
+
     return {
         **report,
         'overall_status': status,
         'summary': summary,
+        'source_results': source_results,
         'findings': findings if findings else report.get('findings', []),
         'safe_rewrite': report.get('safe_rewrite') or report.get('safeRewrite') or {},
         'limitations': limitations,
@@ -374,7 +433,7 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
     key=os.getenv('OPENROUTER_API_KEY')
     if not key:
         return ComplianceReport(overall_status='needs_review', summary='OpenRouter API key is not configured; generated placeholder report.', limitations=['Set OPENROUTER_API_KEY to enable LLM compliance review.'])
-    payload={'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'), 'messages':[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':build_user_prompt(evidence)}], 'response_format': {'type':'json_object'}}
+    payload={'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'), 'messages':[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':build_user_prompt(evidence)}], 'response_format': {'type':'json_object'}, 'temperature': 0}
     async with httpx.AsyncClient(timeout=120) as client:
         r=await client.post('https://openrouter.ai/api/v1/chat/completions', headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}, json=payload)
         r.raise_for_status(); content=r.json()['choices'][0]['message']['content']

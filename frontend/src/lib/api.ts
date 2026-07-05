@@ -21,9 +21,21 @@ export type Finding = {
   confidence: 'low' | 'medium' | 'high';
 };
 
+export type OverallStatus = 'pass' | 'needs_review' | 'likely_violation';
+
 export type Report = {
-  overall_status: 'pass' | 'needs_review' | 'likely_violation';
+  overall_status: OverallStatus;
   summary: string;
+  source_results?: {
+    creative?: {
+      status: OverallStatus;
+      summary: string;
+    } | null;
+    ad_copy?: {
+      status: OverallStatus;
+      summary: string;
+    } | null;
+  };
   findings: Finding[];
   safe_rewrite: { ad_copy: string; onscreen_text: string[] };
   limitations: string[];

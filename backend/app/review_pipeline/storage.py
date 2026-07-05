@@ -107,6 +107,18 @@ def _finding_source(finding:Any)->str:
     source=finding.get('source')
     return source if isinstance(source, str) else ''
 
+def _source_result_status(report:dict[str, Any]|None, key:str)->str|None:
+    if not isinstance(report, dict):
+        return None
+    results=report.get('source_results')
+    if not isinstance(results, dict):
+        return None
+    result=results.get(key)
+    if not isinstance(result, dict):
+        return None
+    status=result.get('status')
+    return status if status in RESULT_STATUSES else None
+
 def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
     status=_overall_status(report)
     if not isinstance(report, dict):
@@ -127,12 +139,12 @@ def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
     return 'needs_review'
 
 def _creative_result(report:dict[str, Any]|None)->str|None:
-    return _split_result(report, lambda source: source != 'ad_copy')
+    return _source_result_status(report, 'creative') or _split_result(report, lambda source: source != 'ad_copy')
 
 def _ad_copy_result(report:dict[str, Any]|None, has_ad_copy:bool)->str|None:
     if not has_ad_copy:
         return None
-    return _split_result(report, lambda source: source == 'ad_copy')
+    return _source_result_status(report, 'ad_copy') or _split_result(report, lambda source: source == 'ad_copy')
 
 def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
     limit=max(1, min(limit, 100))

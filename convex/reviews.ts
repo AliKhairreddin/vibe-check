@@ -35,6 +35,20 @@ function findingSource(finding: unknown) {
   return typeof source === "string" ? source : "";
 }
 
+function sourceResultStatus(report: unknown, key: "creative" | "ad_copy") {
+  if (!report || typeof report !== "object") return null;
+  const sourceResults = (report as { source_results?: unknown }).source_results;
+  if (!sourceResults || typeof sourceResults !== "object") return null;
+  const result = (sourceResults as Record<string, unknown>)[key];
+  if (!result || typeof result !== "object") return null;
+  const status = (result as { status?: unknown }).status;
+  return status === "pass" ||
+    status === "needs_review" ||
+    status === "likely_violation"
+    ? status
+    : null;
+}
+
 function splitResult(
   report: unknown,
   sourceMatches: (source: string) => boolean
@@ -59,12 +73,12 @@ function splitResult(
 }
 
 function creativeResult(report: unknown) {
-  return splitResult(report, (source) => source !== "ad_copy");
+  return sourceResultStatus(report, "creative") ?? splitResult(report, (source) => source !== "ad_copy");
 }
 
 function adCopyResult(report: unknown, hasAdCopy: boolean) {
   if (!hasAdCopy) return null;
-  return splitResult(report, (source) => source === "ad_copy");
+  return sourceResultStatus(report, "ad_copy") ?? splitResult(report, (source) => source === "ad_copy");
 }
 
 function publicReview(review: {

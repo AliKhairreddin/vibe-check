@@ -12,6 +12,38 @@ from .llm import review_with_openrouter
 
 INTERMEDIATE_FILES=('request.json','metadata.json','frames.json','ocr.json','transcript.json')
 
+def build_review_evidence(
+    media_kind: MediaKind,
+    meta: ReviewRequestMeta,
+    policy_text: str,
+    policy_sources: list[str],
+    transcript: dict,
+    ocr: list[dict],
+    frames: list[dict],
+    evidence_note: str,
+) -> dict:
+    return {
+        'source_definitions': {
+            'ad_copy': 'Submitted platform caption/body text from the form only.',
+            'audio': 'Spoken words from the extracted or manually supplied audio transcript only.',
+            'onscreen_text': 'Text detected inside creative frames by OCR only.',
+            'visual': 'Non-text visual creative elements and frame references.',
+            'policy': 'Supplied saved or pasted policy/guideline text.',
+        },
+        'media_type': media_kind,
+        'submitted_ad_copy': {
+            'present': meta.has_ad_copy,
+            'text': meta.ad_copy,
+        },
+        'audio_transcript': transcript,
+        'onscreen_text_ocr': ocr[:200],
+        'visual_frame_references': frames[:200],
+        'policy_text': policy_text,
+        'policy_sources': policy_sources,
+        'notes': meta.notes,
+        'cost_saving_note': evidence_note,
+    }
+
 async def process_job(job_id:str, media_path:Path, media_kind:MediaKind, meta:ReviewRequestMeta):
     jd=job_dir(job_id)
     audio_path=jd/'audio.wav'
@@ -39,7 +71,7 @@ async def process_job(job_id:str, media_path:Path, media_kind:MediaKind, meta:Re
         write_json(jd/'transcript.json', transcript)
         set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing with LLM')
         policy_text, policy_sources=build_policy_context(meta.policy_text)
-        evidence={'media_type':media_kind,'ad_copy':meta.ad_copy,'policy_text':policy_text,'policy_sources':policy_sources,'notes':meta.notes,'transcript':transcript,'ocr':ocr[:200],'frames':frames[:200],'cost_saving_note':evidence_note}
+        evidence=build_review_evidence(media_kind, meta, policy_text, policy_sources, transcript, ocr, frames, evidence_note)
         report=await review_with_openrouter(evidence, meta.model)
         if evidence_note not in report.limitations:
             report.limitations.append(evidence_note)

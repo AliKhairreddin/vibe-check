@@ -3,6 +3,7 @@ from pathlib import Path
 from app.review_pipeline.models import ComplianceReport, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
+from app.review_pipeline.jobs import build_review_evidence
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
@@ -18,6 +19,24 @@ def test_review_request_meta_tracks_optional_ad_copy():
     assert not ReviewRequestMeta().has_ad_copy
     assert not ReviewRequestMeta(ad_copy='   ').has_ad_copy
     assert ReviewRequestMeta(ad_copy='Save up to 20%.').has_ad_copy
+
+def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
+    meta=ReviewRequestMeta(ad_copy='Facebook caption text.', notes='Brand note.')
+    evidence=build_review_evidence(
+        'video',
+        meta,
+        'Policy text.',
+        ['Saved rules'],
+        {'source':'manual','chunks':[{'text':'Spoken transcript.'}]},
+        [{'text':'On-screen words.'}],
+        [{'filename':'frame_000001.jpg','timestamp':1.0}],
+        'Evidence note.',
+    )
+    assert 'ad_copy' not in evidence
+    assert evidence['submitted_ad_copy'] == {'present': True, 'text': 'Facebook caption text.'}
+    assert evidence['audio_transcript']['chunks'][0]['text'] == 'Spoken transcript.'
+    assert evidence['onscreen_text_ocr'][0]['text'] == 'On-screen words.'
+    assert 'platform caption/body' in evidence['source_definitions']['ad_copy']
 
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
@@ -42,6 +61,24 @@ def test_openrouter_report_normalizes_policy_compliance_wrapper():
     assert report.summary=='Mentions a savings claim without a required disclaimer.'
     assert report.findings[0].source=='ad_copy'
     assert report.findings[0].severity=='high'
+
+def test_openrouter_report_normalizes_source_results():
+    text=json.dumps({
+        'overall_status':'needs_review',
+        'summary':'split result',
+        'sourceResults': {
+            'creative': {'result':'pass', 'summary':'Creative surfaces are clear.'},
+            'adCopy': {'verdict':'needs review', 'details':'Caption claim needs substantiation.'},
+        },
+        'findings': [],
+        'safeRewrite': {'ad_copy':'', 'onscreen_text': []},
+    })
+    report=parse_report_json(text)
+    assert report.source_results.creative is not None
+    assert report.source_results.creative.status == 'pass'
+    assert report.source_results.ad_copy is not None
+    assert report.source_results.ad_copy.status == 'needs_review'
+    assert report.source_results.ad_copy.summary == 'Caption claim needs substantiation.'
 
 def test_openrouter_report_normalizes_review_list_wrapper():
     text=json.dumps({
@@ -143,6 +180,25 @@ def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch
     assert not history[0].has_ad_copy
     assert history[0].creative_result=='needs_review'
     assert history[0].ad_copy_result is None
+
+def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.mp4', has_ad_copy=True)
+    set_report('j1', {
+        'overall_status':'likely_violation',
+        'summary':'overall mixed result',
+        'source_results':{
+            'creative':{'status':'pass','summary':'Creative is clear.'},
+            'ad_copy':{'status':'needs_review','summary':'Caption needs substantiation.'},
+        },
+        'findings':[],
+    })
+    set_status('j1', JobStatus.complete, 100, 'Complete')
+    history=list_reviews()
+    assert history[0].creative_result=='pass'
+    assert history[0].ad_copy_result=='needs_review'
 
 def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'

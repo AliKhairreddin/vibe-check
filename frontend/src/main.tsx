@@ -76,6 +76,7 @@ import {
   getReport,
   getStatus,
   listReviews,
+  type OverallStatus,
   type ReviewHistoryItem,
   type Status,
 } from '@/lib/api';
@@ -94,7 +95,21 @@ type BatchItem = {
 };
 
 const queryClient = new QueryClient();
-const ACTIVE_BATCH_KEY = 'vibe-check-active-batch';
+const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v2';
+const SOURCE_LABELS: Record<Finding['source'], string> = {
+  ad_copy: 'Ad Copy',
+  audio: 'Audio Transcript',
+  onscreen_text: 'On-screen Text',
+  policy: 'Policy',
+  visual: 'Visual',
+};
+const STATUS_LABELS: Record<OverallStatus | 'complete' | 'failed', string> = {
+  complete: 'Complete',
+  failed: 'Failed',
+  likely_violation: 'Likely Violation',
+  needs_review: 'Needs Review',
+  pass: 'Pass',
+};
 
 function loadActiveBatch(): BatchItem[] {
   if (typeof window === 'undefined') return [];
@@ -342,12 +357,12 @@ function Home() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <FormField label="Ad copy (optional)" htmlFor="ad_copy">
+              <FormField label="Shared ad copy / platform caption (optional)" htmlFor="ad_copy">
                 <Textarea
                   id="ad_copy"
                   name="ad_copy"
                   className="min-h-32"
-                  placeholder="Paste the ad copy here, or leave blank."
+                  placeholder="Paste the Facebook, Instagram, or platform caption/body text."
                 />
               </FormField>
               <FormField label="Additional policy/guidelines" htmlFor="policy_text">
@@ -729,7 +744,10 @@ function ReportPage() {
           `${row.timestamp_start ?? ''}${row.timestamp_end ? ` - ${row.timestamp_end}` : ''}`,
         { id: 'timestamp', header: 'Timestamp' }
       ),
-      column.accessor('source', { header: 'Source' }),
+      column.accessor('source', {
+        header: 'Source',
+        cell: (info) => <Badge variant="outline">{formatSource(info.getValue())}</Badge>,
+      }),
       column.accessor('evidence', { header: 'Evidence' }),
       column.accessor('policy_reason', { header: 'Policy reason' }),
       column.accessor('suggested_fix', { header: 'Suggested fix' }),
@@ -948,7 +966,14 @@ function phaseMessage(phase: UploadPhase) {
 }
 
 function formatStatus(status: string) {
-  return status.replace(/_/g, ' ');
+  if (status in STATUS_LABELS) return STATUS_LABELS[status as keyof typeof STATUS_LABELS];
+  return status
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatSource(source: Finding['source']) {
+  return SOURCE_LABELS[source] ?? formatStatus(source);
 }
 
 function formatBytes(bytes: number) {
