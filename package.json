@@ -1,1 +1,26 @@
-{"scripts":{"build":"cd frontend && pnpm build","test":"cd backend && pytest -q"},"devDependencies":{}}
+{
+  "name": "vibe-check",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.4.0",
+  "scripts": {
+    "build": "pnpm --dir frontend build",
+    "cloudflare:deploy": "pnpm run build && wrangler deploy",
+    "cloudflare:dry-run": "pnpm run build && wrangler deploy --dry-run --containers-rollout=none",
+    "convex:deploy": "CONVEX_DEPLOYMENT=prod:energetic-partridge-813 convex deploy",
+    "convex:dev": "convex dev --once",
+    "deploy": "pnpm run convex:deploy && pnpm run cloudflare:deploy",
+    "test": "scripts/test-backend.sh",
+    "typecheck:worker": "tsc -p tsconfig.worker.json --noEmit",
+    "verify": "pnpm run wrangler:types && pnpm run typecheck:worker && pnpm run test && pnpm run build",
+    "wrangler:types": "wrangler types worker-configuration.d.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "latest",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/node": "^26.1.0",
+    "convex": "^1.42.1",
+    "typescript": "5.9.3",
+    "wrangler": "^4.107.0"
+  }
+}

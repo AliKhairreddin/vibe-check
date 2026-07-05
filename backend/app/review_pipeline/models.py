@@ -29,6 +29,7 @@ class ComplianceReport(BaseModel):
 
 class JobRecord(BaseModel):
     job_id: str
+    file_name: str = ''
     status: JobStatus = JobStatus.queued
     progress: int = 0
     message: str = ''

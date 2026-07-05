@@ -1,45 +1,84 @@
 # Ad Compliance Video Reviewer
 
-Docker-first MVP for reviewing MP4 ad videos against pasted platform policies. It extracts video metadata with `ffprobe`, samples frames with `ffmpeg`, runs OCR with Tesseract through an abstraction, uses a manual transcript fallback, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
+Cloudflare-native MVP for reviewing MP4 ad videos against pasted platform policies. It extracts video metadata with `ffprobe`, samples frames with `ffmpeg`, runs OCR with Tesseract, uses a manual transcript fallback, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
 
 ## Stack
 
-- Frontend: Vite, React, TypeScript, TanStack Router, TanStack Query, TanStack Table, Tailwind CSS, shadcn-style Base UI-ready local components, lucide-react.
+- Frontend: Vite, React, TypeScript, TanStack Router, TanStack Query, TanStack Table, Tailwind CSS, local shadcn-style components, lucide-react.
 - Backend: FastAPI, Pydantic, ffmpeg/ffprobe, OpenCV/Pillow, pytesseract, OpenRouter.
-- Runtime: Docker and docker-compose. The video processor runs in a Linux container, not Cloudflare Workers.
+- Cloud runtime: Cloudflare Worker, Cloudflare Containers, Convex.
 
-## Local development
+## Cloudflare Architecture
+
+`vibe-check.thatcanadian.dev` is served by a Cloudflare Worker.
+
+- Static frontend routes are served from `frontend/dist` via Workers Static Assets.
+- `/api/*` routes are forwarded to a Cloudflare Container running the FastAPI backend.
+- Uploaded videos, extracted audio, sampled frames, and OCR artifacts stay in temporary container scratch space only.
+- Convex stores the uploaded filename, job status/progress, and final compliance report JSON.
+
+R2 is not required for this MVP because uploaded videos and frame artifacts are intentionally not durable.
+
+## Local Development
 
 ```bash
 cp .env.example .env
-python -m venv .venv
+/opt/homebrew/bin/python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -r backend/requirements.txt
-uvicorn backend.app.main:app --reload --port 8000
-cd frontend
 pnpm install
-pnpm dev
+uvicorn backend.app.main:app --reload --port 8000
+pnpm --dir frontend dev
 ```
 
 Open the Vite dev URL and upload an MP4 with ad copy and policy text.
 
-## Docker
+## Cloudflare Deployment
+
+Cloudflare Containers require a Workers Paid plan. Docker or a compatible Docker engine must also be running on the machine or CI runner that executes `wrangler deploy`, because Wrangler builds and pushes the container image during deployment. The configured container instance type is `standard-1` so ffmpeg, Tesseract, and OpenCV have enough memory/disk for normal MP4 review jobs.
+
+One-time setup:
 
 ```bash
-cp .env.example .env
-# edit OPENROUTER_API_KEY in .env
-docker compose up --build
+pnpm install
+pnpm run wrangler:types
+
+shared_secret="$(openssl rand -hex 32)"
+printf '%s' "$shared_secret" | pnpm exec convex env set --deployment energetic-partridge-813 CONVEX_HTTP_SECRET
+printf '%s' "$shared_secret" | pnpm exec wrangler secret put CONVEX_HTTP_SECRET
+
+pnpm exec wrangler secret put OPENROUTER_API_KEY
 ```
 
-Open <http://localhost:8000>.
+The production Convex URL is configured as `https://energetic-partridge-813.convex.cloud` in `wrangler.jsonc`. Keep `CONVEX_HTTP_SECRET` out of git and set the same random value in both Convex and Cloudflare.
 
-## Environment variables
+Deploy:
 
-- `OPENROUTER_API_KEY`: required for real LLM review.
-- `OPENROUTER_MODEL`: default model, e.g. `openai/gpt-4o-mini` for cost-effective text review or a vision-capable model for future visual review expansion.
-- `APP_PASSWORD`: reserved optional simple password gate for deployed MVP.
+```bash
+pnpm run convex:deploy
+pnpm run cloudflare:deploy
+```
+
+`pnpm run deploy` runs those two deployment steps in order. `pnpm run cloudflare:dry-run` builds the frontend and validates the Worker bundle without rolling out a container image.
+
+The Worker is configured in `wrangler.jsonc` for:
+
+```text
+https://vibe-check.thatcanadian.dev
+```
+
+If the custom domain cannot be created by Wrangler, add it in the Cloudflare dashboard under Workers & Pages > vibe-check > Settings > Domains & Routes, or re-authenticate Wrangler with a token/profile that can manage the `thatcanadian.dev` zone.
+
+## Environment Variables
+
+- `OPENROUTER_API_KEY`: required for real LLM review. Store as a Cloudflare Worker secret.
+- `OPENROUTER_MODEL`: default model, currently `openai/gpt-4o-mini`.
+- `CONVEX_DEPLOYMENT`: Convex deployment selector for CLI commands, currently `prod:energetic-partridge-813`.
+- `CONVEX_URL`: Convex deployment URL ending in `.convex.cloud`. This is non-secret config in `wrangler.jsonc`.
+- `CONVEX_HTTP_SECRET`: shared secret used by the container when writing to Convex. Store the same value in Convex env vars and Cloudflare Worker secrets.
+- `APP_PASSWORD`: optional simple API password gate for deployed MVP.
 - `MAX_UPLOAD_MB`: upload limit, default `200`.
-- `JOB_DATA_DIR`: job artifact directory, default `data/jobs` locally and `/app/data/jobs` in Docker.
+- `JOB_DATA_DIR`: scratch job artifact directory inside the container, default `/tmp/vibe-check/jobs` in Cloudflare.
 
 ## API
 
@@ -49,39 +88,11 @@ Open <http://localhost:8000>.
 - `GET /api/reviews/{job_id}/report.json`: downloadable report.
 - `GET /api/reviews/{job_id}/frames/{filename}`: frame thumbnail.
 
-## Job artifacts
+## Job Records
 
-Each job is saved under `data/jobs/{job_id}/` with `metadata.json`, `frames/`, `frames.json`, `ocr.json`, `transcript.json`, `report.json`, and `error.json` on failure.
+Each job persists a Convex `reviews` row with the job id, uploaded filename, current status/progress, and final report JSON. Videos, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
 
-## Deployment notes
-
-- Render/Railway: deploy the Dockerfile, set env vars, attach persistent disk for `/app/data/jobs` if reports must persist.
-- Fly.io: use the Dockerfile and mount a Fly volume at `/app/data/jobs`.
-- Cloudflare can host DNS and route traffic to the container through Cloudflare Tunnel, while the MP4/OCR/transcription processor still runs in Docker because native ffmpeg/Tesseract dependencies need a container.
-
-### Cloudflare Tunnel for `vibe-check.thatcanadian.dev`
-
-This repository includes `cloudflare-tunnel.yml` and `docker-compose.cloudflare.yml` to expose only the VibeCheck subdomain through Cloudflare Tunnel. The tunnel ingress sends `https://vibe-check.thatcanadian.dev` to the Docker app on `http://app:8000` and returns `404` for every other hostname. The compose override also sets `APP_ALLOWED_HOSTS=vibe-check.thatcanadian.dev`, so the FastAPI app rejects requests whose `Host` header is not the VibeCheck subdomain.
-
-One-time setup on the deployment host:
-
-```bash
-mkdir -p cloudflare
-docker run --rm -it -v "$PWD/cloudflare:/etc/cloudflared" cloudflare/cloudflared:latest tunnel login
-docker run --rm -it -v "$PWD/cloudflare:/etc/cloudflared" cloudflare/cloudflared:latest tunnel create vibe-check
-docker run --rm -it -v "$PWD/cloudflare:/etc/cloudflared" cloudflare/cloudflared:latest tunnel route dns vibe-check vibe-check.thatcanadian.dev
-cp cloudflare/<TUNNEL_ID>.json cloudflare/vibe-check.json
-```
-
-Then deploy the app and tunnel together:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.cloudflare.yml up -d --build
-```
-
-Keep `cloudflare/` out of git because it contains Cloudflare account credentials.
-
-## Cost-saving notes
+## Cost-Saving Notes
 
 The backend does not send every full frame to the LLM by default. It sends transcript chunks, deduplicated OCR text, and sampled frame references. Increase frame sampling intervals to reduce OCR and storage cost. Use cheaper text models when you do not need vision review.
 
@@ -96,6 +107,7 @@ The backend does not send every full frame to the LLM by default. It sends trans
 ## Testing
 
 ```bash
-cd backend
-pytest -q
+pnpm run test
+pnpm run build
+pnpm run typecheck:worker
 ```

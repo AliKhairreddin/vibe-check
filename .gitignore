@@ -1,9 +1,13 @@
 __pycache__/
 *.py[cod]
 .venv/
+.wrangler/
+backend/.pytest_cache/
 node_modules/
 frontend/dist/
-.env
+frontend/tsconfig.tsbuildinfo
+.env*
+!.env.example
 data/jobs/*
 !data/jobs/.gitkeep
 

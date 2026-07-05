@@ -1,12 +1,14 @@
 from __future__ import annotations
-import shutil, traceback, anyio
+import shutil, anyio
 from pathlib import Path
 from .models import JobStatus, ReviewRequestMeta
-from .storage import job_dir, set_status, write_json
+from .storage import job_dir, set_report, set_status, write_json
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .ocr import run_ocr
 from .llm import review_with_openrouter
+
+INTERMEDIATE_FILES=('request.json','metadata.json','frames.json','ocr.json','transcript.json')
 
 async def process_job(job_id:str, video_path:Path, meta:ReviewRequestMeta):
     jd=job_dir(job_id)
@@ -27,8 +29,19 @@ async def process_job(job_id:str, video_path:Path, meta:ReviewRequestMeta):
         set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing with LLM')
         evidence={'ad_copy':meta.ad_copy,'policy_text':meta.policy_text,'notes':meta.notes,'transcript':transcript,'ocr':ocr[:200],'frames':frames[:200],'cost_saving_note':'Full frames are not sent by default; OCR, transcript chunks, and frame references are used.'}
         report=await review_with_openrouter(evidence, meta.model)
-        write_json(jd/'report.json', report.model_dump(mode='json'))
+        set_report(job_id, report.model_dump(mode='json'))
         set_status(job_id, JobStatus.complete, 100, 'Complete')
     except Exception as e:
-        write_json(jd/'error.json', {'error':str(e), 'traceback':traceback.format_exc()})
         set_status(job_id, JobStatus.failed, 100, str(e))
+    finally:
+        for path in (video_path, jd/'audio.wav'):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        for name in INTERMEDIATE_FILES:
+            try:
+                (jd/name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        shutil.rmtree(jd/'frames', ignore_errors=True)

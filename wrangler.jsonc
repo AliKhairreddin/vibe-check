@@ -1,0 +1,54 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vibe-check",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-07-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "containers": [
+    {
+      "class_name": "ReviewBackend",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "ReviewBackend",
+        "name": "REVIEW_BACKEND"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["ReviewBackend"],
+      "tag": "v1"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "vibe-check.thatcanadian.dev",
+      "custom_domain": true
+    }
+  ],
+  "secrets": {
+    "required": ["CONVEX_HTTP_SECRET", "OPENROUTER_API_KEY"]
+  },
+  "vars": {
+    "APP_ALLOWED_HOSTS": "vibe-check.thatcanadian.dev",
+    "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",
+    "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
+    "MAX_UPLOAD_MB": "200",
+    "OPENROUTER_MODEL": "openai/gpt-4o-mini"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
