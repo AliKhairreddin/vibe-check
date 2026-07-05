@@ -329,7 +329,7 @@ function Home() {
                 <Input
                   id="model"
                   name="model"
-                  placeholder="openai/gpt-4o-mini"
+                  placeholder="deepseek/deepseek-v4-flash"
                 />
               </FormField>
               <FormField label="Frame interval" htmlFor="frame_interval_seconds">

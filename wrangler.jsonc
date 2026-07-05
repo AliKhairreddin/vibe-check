@@ -45,7 +45,7 @@
     "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
     "MAX_UPLOAD_MB": "200",
-    "OPENROUTER_MODEL": "openai/gpt-4o-mini"
+    "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash"
   },
   "observability": {
     "enabled": true,

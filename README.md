@@ -94,7 +94,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 ## Environment Variables
 
 - `OPENROUTER_API_KEY`: required for real LLM review. Store as a Cloudflare Worker secret.
-- `OPENROUTER_MODEL`: default model, currently `openai/gpt-4o-mini`.
+- `OPENROUTER_MODEL`: default model, currently `deepseek/deepseek-v4-flash`.
 - `CONVEX_DEPLOYMENT`: Convex deployment selector for CLI commands, currently `prod:energetic-partridge-813`.
 - `CONVEX_URL`: Convex deployment URL ending in `.convex.cloud`. This is non-secret config in `wrangler.jsonc`.
 - `CONVEX_HTTP_SECRET`: shared secret used by the container when writing to Convex. Store the same value in Convex env vars and Cloudflare Worker secrets.

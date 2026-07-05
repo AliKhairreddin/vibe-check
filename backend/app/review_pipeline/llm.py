@@ -15,7 +15,7 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
     key=os.getenv('OPENROUTER_API_KEY')
     if not key:
         return ComplianceReport(overall_status='needs_review', summary='OpenRouter API key is not configured; generated placeholder report.', limitations=['Set OPENROUTER_API_KEY to enable LLM compliance review.'])
-    payload={'model': model or os.getenv('OPENROUTER_MODEL','openai/gpt-4o-mini'), 'messages':[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':build_user_prompt(evidence)}], 'response_format': {'type':'json_object'}}
+    payload={'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'), 'messages':[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':build_user_prompt(evidence)}], 'response_format': {'type':'json_object'}}
     async with httpx.AsyncClient(timeout=120) as client:
         r=await client.post('https://openrouter.ai/api/v1/chat/completions', headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}, json=payload)
         r.raise_for_status(); content=r.json()['choices'][0]['message']['content']
