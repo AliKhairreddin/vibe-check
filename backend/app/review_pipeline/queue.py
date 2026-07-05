@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from .jobs import process_job
+from .models import JobStatus, ReviewRequestMeta
+from .storage import set_status
+
+
+@dataclass(frozen=True)
+class QueuedReviewJob:
+    job_id: str
+    video_path: Path
+    meta: ReviewRequestMeta
+
+
+_queue: asyncio.Queue[QueuedReviewJob] = asyncio.Queue()
+_workers: list[asyncio.Task[None]] = []
+
+
+def _worker_count() -> int:
+    try:
+        return max(1, int(os.getenv('JOB_WORKER_CONCURRENCY', '1')))
+    except ValueError:
+        return 1
+
+
+async def start_job_workers() -> None:
+    if _workers:
+        return
+    for index in range(_worker_count()):
+        _workers.append(asyncio.create_task(_process_queue(index)))
+
+
+async def stop_job_workers() -> None:
+    for worker in _workers:
+        worker.cancel()
+    for worker in _workers:
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+    _workers.clear()
+
+
+async def enqueue_job(
+    job_id: str,
+    video_path: Path,
+    meta: ReviewRequestMeta,
+    file_name: str,
+):
+    position = _queue.qsize() + 1
+    message = 'Queued for processing'
+    if position > _worker_count():
+        message = f'Queued for processing ({position - _worker_count()} ahead)'
+    record = set_status(job_id, JobStatus.queued, 0, message, file_name)
+    await _queue.put(QueuedReviewJob(job_id, video_path, meta))
+    return record
+
+
+async def _process_queue(worker_index: int) -> None:
+    while True:
+        job = await _queue.get()
+        try:
+            set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
+            await process_job(job.job_id, job.video_path, job.meta)
+        finally:
+            _queue.task_done()

@@ -1,5 +1,73 @@
-export type Status={job_id:string;file_name:string;status:string;progress:number;message:string;report_ready:boolean};
-export type Report={overall_status:string;summary:string;findings:any[];safe_rewrite:{ad_copy:string;onscreen_text:string[]};limitations:string[]};
-export async function createReview(form:FormData):Promise<Status>{const r=await fetch('/api/reviews',{method:'POST',body:form}); if(!r.ok) throw new Error(await r.text()); return r.json()}
-export async function getStatus(id:string):Promise<Status>{const r=await fetch(`/api/reviews/${id}`); if(!r.ok) throw new Error(await r.text()); return r.json()}
-export async function getReport(id:string):Promise<Report>{const r=await fetch(`/api/reviews/${id}/report`); if(!r.ok) throw new Error(await r.text()); return r.json()}
+export type Status = {
+  job_id: string;
+  file_name: string;
+  status: string;
+  progress: number;
+  message: string;
+  report_ready: boolean;
+};
+
+export type Finding = {
+  severity: 'low' | 'medium' | 'high';
+  source: 'audio' | 'onscreen_text' | 'visual' | 'ad_copy' | 'policy';
+  timestamp_start?: string | null;
+  timestamp_end?: string | null;
+  evidence: string;
+  policy_reason: string;
+  suggested_fix: string;
+  confidence: 'low' | 'medium' | 'high';
+};
+
+export type Report = {
+  overall_status: 'pass' | 'needs_review' | 'likely_violation';
+  summary: string;
+  findings: Finding[];
+  safe_rewrite: { ad_copy: string; onscreen_text: string[] };
+  limitations: string[];
+};
+
+export async function createReview(
+  form: FormData,
+  onUploadProgress?: (progress: number) => void
+): Promise<Status> {
+  if (!onUploadProgress) {
+    const response = await fetch('/api/reviews', { method: 'POST', body: form });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/api/reviews');
+
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onUploadProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onUploadProgress(100);
+        resolve(JSON.parse(request.responseText) as Status);
+        return;
+      }
+      reject(new Error(request.responseText || `Upload failed with ${request.status}`));
+    };
+
+    request.onerror = () => reject(new Error('Network error while uploading video'));
+    request.send(form);
+  });
+}
+
+export async function getStatus(id: string): Promise<Status> {
+  const response = await fetch(`/api/reviews/${id}`);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function getReport(id: string): Promise<Report> {
+  const response = await fetch(`/api/reviews/${id}/report`);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}

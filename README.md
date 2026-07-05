@@ -31,7 +31,9 @@ uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev
 ```
 
-Open the Vite dev URL and upload an MP4 with ad copy and policy text.
+Open the Vite dev URL and upload one or more MP4s with ad copy and policy text.
+The UI creates one review job per selected video and shows upload progress first,
+then backend queue and processing progress for each job.
 
 ## Cloudflare Deployment
 
@@ -102,7 +104,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 ## API
 
-- `POST /api/reviews`: create a job with MP4, ad copy, policy text, notes, optional transcript, model, frame interval, scene toggle.
+- `POST /api/reviews`: create a job with one MP4, ad copy, policy text, notes, optional transcript, model, frame interval, scene toggle.
 - `GET /api/reviews/{job_id}`: status and progress.
 - `GET /api/reviews/{job_id}/report`: structured report JSON.
 - `GET /api/reviews/{job_id}/report.json`: downloadable report.
@@ -110,7 +112,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename, current status/progress, and final report JSON. Videos, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename, current status/progress, and final report JSON. Multi-video uploads are represented as multiple jobs in the UI. Videos, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 
