@@ -18,6 +18,40 @@ function requireSecret(secret: string) {
   }
 }
 
+function overallStatus(report: unknown) {
+  if (!report || typeof report !== "object") return null;
+  const status = (report as { overall_status?: unknown }).overall_status;
+  return status === "pass" ||
+    status === "needs_review" ||
+    status === "likely_violation"
+    ? status
+    : null;
+}
+
+function publicReview(review: {
+  createdAt: number;
+  fileName: string;
+  jobId: string;
+  message: string;
+  progress: number;
+  report?: unknown;
+  reportReady: boolean;
+  status: string;
+  updatedAt: number;
+}) {
+  return {
+    created_at: review.createdAt,
+    file_name: review.fileName,
+    job_id: review.jobId,
+    message: review.message,
+    overall_status: overallStatus(review.report),
+    progress: review.progress,
+    report_ready: review.reportReady,
+    status: review.status,
+    updated_at: review.updatedAt,
+  };
+}
+
 export const upsertStatus = mutationGeneric({
   args: statusArgs,
   handler: async (ctx, args) => {
@@ -83,14 +117,7 @@ export const getStatus = queryGeneric({
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
     if (!review) return null;
-    return {
-      file_name: review.fileName,
-      job_id: review.jobId,
-      message: review.message,
-      progress: review.progress,
-      report_ready: review.reportReady,
-      status: review.status,
-    };
+    return publicReview(review);
   },
 });
 
@@ -106,5 +133,22 @@ export const getReport = queryGeneric({
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
     return review?.report ?? null;
+  },
+});
+
+export const listRecent = queryGeneric({
+  args: {
+    secret: v.string(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const limit = Math.max(1, Math.min(args.limit, 100));
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_created_at")
+      .order("desc")
+      .take(limit);
+    return reviews.map(publicReview);
   },
 });

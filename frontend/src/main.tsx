@@ -75,6 +75,8 @@ import {
   type Finding,
   getReport,
   getStatus,
+  listReviews,
+  type ReviewHistoryItem,
   type Status,
 } from '@/lib/api';
 
@@ -92,6 +94,30 @@ type BatchItem = {
 };
 
 const queryClient = new QueryClient();
+const ACTIVE_BATCH_KEY = 'vibe-check-active-batch';
+
+function loadActiveBatch(): BatchItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = window.localStorage.getItem(ACTIVE_BATCH_KEY);
+    const parsed = saved ? JSON.parse(saved) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((value) => {
+      const item = value as Partial<BatchItem>;
+      if (typeof item.jobId !== 'string' || !item.jobId) return [];
+      return [{
+        id: item.jobId,
+        fileName: typeof item.fileName === 'string' && item.fileName ? item.fileName : item.jobId,
+        size: typeof item.size === 'number' ? item.size : 0,
+        uploadProgress: 100,
+        phase: 'queued' as const,
+        jobId: item.jobId,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
 
 function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
@@ -177,9 +203,30 @@ const rootRoute = createRootRoute({ component: AppShell });
 function Home() {
   const [sceneDetection, setSceneDetection] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
+  const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const persisted = batchItems.filter((item) => item.jobId);
+    if (persisted.length) {
+      window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(persisted));
+      return;
+    }
+    window.localStorage.removeItem(ACTIVE_BATCH_KEY);
+  }, [batchItems]);
+
+  const historyQuery = useQuery({
+    queryKey: ['reviews', 'history'],
+    queryFn: () => listReviews(50),
+    refetchInterval: (query) => {
+      const reviews = query.state.data;
+      return reviews?.some((review) => !review.report_ready && review.status !== 'failed')
+        ? 3000
+        : false;
+    },
+  });
 
   const statusQueries = useQueries({
     queries: batchItems.map((item) => ({
@@ -250,6 +297,7 @@ function Home() {
           uploadProgress: 100,
         });
         queryClient.setQueryData(['status', status.job_id], status);
+        queryClient.invalidateQueries({ queryKey: ['reviews', 'history'] });
       } catch (error) {
         updateBatchItem(item.id, {
           phase: 'failed',
@@ -263,8 +311,9 @@ function Home() {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
-      <Card>
+    <div className="grid gap-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
+        <Card>
         <CardHeader>
           <CardTitle className="text-xl">Review workspace</CardTitle>
           <CardDescription>
@@ -344,9 +393,11 @@ function Home() {
 
             <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/30 px-3 py-3">
               <div className="grid gap-1">
-                <Label htmlFor="scene_detection">Scene-change detection</Label>
+                <Label htmlFor="scene_detection">Video scene-change detection</Label>
                 <p className="text-sm text-muted-foreground">
-                  Adds scene cuts to the MP4 frame sampling pass.
+                  For MP4s, also samples frames at sharp visual cuts so quick
+                  cutaways and brief on-screen text are less likely to be missed.
+                  This can add a little processing time.
                 </p>
               </div>
               <Switch
@@ -377,37 +428,56 @@ function Home() {
             </div>
           </form>
         </CardContent>
-      </Card>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-xl">Batch progress</CardTitle>
-          <CardDescription>
-            Upload progress first, then backend review progress for each creative.
-          </CardDescription>
-          <CardAction>
-            <Badge variant={overallProgress === 100 ? 'secondary' : 'outline'}>
-              {overallProgress}%
-            </Badge>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <Progress value={overallProgress}>
-            <ProgressLabel>Overall</ProgressLabel>
-            <ProgressValue />
-          </Progress>
-          <Separator />
-          {rows.length ? (
-            <div className="grid gap-3">
-              {rows.map(({ item, status }) => (
-                <BatchRow key={item.id} item={item} status={status} />
-              ))}
-            </div>
-          ) : (
-            <EmptyBatchState />
-          )}
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Batch progress</CardTitle>
+            <CardDescription>
+              Upload progress first, then backend review progress for each creative.
+            </CardDescription>
+            <CardAction>
+              <div className="flex items-center gap-2">
+                {rows.length ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setBatchItems([])}
+                  >
+                    Clear
+                  </Button>
+                ) : null}
+                <Badge variant={overallProgress === 100 ? 'secondary' : 'outline'}>
+                  {overallProgress}%
+                </Badge>
+              </div>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <Progress value={overallProgress}>
+              <ProgressLabel>Overall</ProgressLabel>
+              <ProgressValue />
+            </Progress>
+            <Separator />
+            {rows.length ? (
+              <div className="grid gap-3">
+                {rows.map(({ item, status }) => (
+                  <BatchRow key={item.id} item={item} status={status} />
+                ))}
+              </div>
+            ) : (
+              <EmptyBatchState />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <HistoryCard
+        error={historyQuery.error}
+        isLoading={historyQuery.isLoading}
+        reviews={historyQuery.data ?? []}
+      />
     </div>
   );
 }
@@ -482,6 +552,109 @@ function BatchRow({ item, status }: { item: BatchItem; status?: Status }) {
         </Link>
       ) : null}
     </div>
+  );
+}
+
+function HistoryCard({
+  error,
+  isLoading,
+  reviews,
+}: {
+  error: Error | null;
+  isLoading: boolean;
+  reviews: ReviewHistoryItem[];
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-xl">Review history</CardTitle>
+        <CardDescription>
+          Previous creative reviews stay here with filenames, upload dates, progress,
+          and report links.
+        </CardDescription>
+        <CardAction>
+          <Badge variant="outline">{reviews.length} saved</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertTitle>History unavailable</AlertTitle>
+            <AlertDescription>{String(error)}</AlertDescription>
+          </Alert>
+        ) : isLoading ? (
+          <div className="grid gap-3">
+            <Skeleton className="h-10" />
+            <Skeleton className="h-24" />
+          </div>
+        ) : reviews.length ? (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Creative</TableHead>
+                  <TableHead>Uploaded</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Result</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {reviews.map((review) => (
+                  <TableRow key={review.job_id}>
+                    <TableCell className="min-w-48 max-w-80">
+                      <span className="block truncate font-medium">
+                        {review.file_name || review.job_id}
+                      </span>
+                    </TableCell>
+                    <TableCell className="min-w-40 text-muted-foreground">
+                      {formatDateTime(review.created_at)}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={review.status} />
+                    </TableCell>
+                    <TableCell>
+                      {review.overall_status ? (
+                        <StatusBadge status={review.overall_status} />
+                      ) : (
+                        <span className="text-sm text-muted-foreground">Not ready</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {review.report_ready ? (
+                        <Link
+                          to="/reviews/$jobId/report"
+                          params={{ jobId: review.job_id }}
+                          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                        >
+                          <FileJson data-icon="inline-start" />
+                          Open report
+                        </Link>
+                      ) : (
+                        <Link
+                          to="/reviews/$jobId"
+                          params={{ jobId: review.job_id }}
+                          className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
+                        >
+                          View job
+                        </Link>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Completed and in-progress reviews will appear here after the first upload.
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -769,6 +942,14 @@ function formatBytes(bytes: number) {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** index;
   return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatDateTime(value?: number | null) {
+  if (!value) return 'Unknown';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
 }
 
 const indexRoute = createRoute({

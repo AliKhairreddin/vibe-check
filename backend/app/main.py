@@ -7,8 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from .review_pipeline.models import ReviewRequestMeta, JobRecord, ComplianceReport
-from .review_pipeline.storage import get_report as get_stored_report, get_status, job_dir
+from .review_pipeline.models import ReviewRequestMeta, JobRecord, ComplianceReport, ReviewHistoryItem
+from .review_pipeline.storage import get_report as get_stored_report, get_status, job_dir, list_reviews
 from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
 from .review_pipeline.media import detect_media_kind
 
@@ -53,6 +53,10 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
     rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name)
     return rec
+
+@app.get('/api/reviews', response_model=list[ReviewHistoryItem])
+def review_history(limit:int=50):
+    return list_reviews(limit)
 
 @app.get('/api/reviews/{job_id}', response_model=JobRecord)
 def review_status(job_id:str):

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .models import JobRecord, JobStatus
+from .models import JobRecord, JobStatus, ReviewHistoryItem
 
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
 CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
@@ -21,6 +22,9 @@ def write_json(path:Path, data):
 
 def read_json(path:Path):
     return json.loads(path.read_text(encoding='utf-8'))
+
+def now_ms()->int:
+    return int(time.time() * 1000)
 
 def convex_enabled()->bool:
     return bool(CONVEX_URL and CONVEX_HTTP_SECRET)
@@ -48,10 +52,14 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
 def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='')->JobRecord:
     current_file_name=file_name
     local_path=job_dir(job_id)/'status.json'
-    if not current_file_name and local_path.exists():
-        current_file_name=JobRecord.model_validate(read_json(local_path)).file_name
+    created_at=now_ms()
+    if local_path.exists():
+        current=JobRecord.model_validate(read_json(local_path))
+        if not current_file_name:
+            current_file_name=current.file_name
+        created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete))
+    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),created_at=created_at,updated_at=now_ms())
     write_json(local_path, rec.model_dump(mode='json'))
     _convex_call('mutation', 'reviews:upsertStatus', {
         'fileName': rec.file_name,
@@ -83,3 +91,34 @@ def get_report(job_id:str)->dict[str, Any]|None:
     if not p.exists():
         return None
     return read_json(p)
+
+def _overall_status(report:dict[str, Any]|None)->str|None:
+    status=report.get('overall_status') if isinstance(report, dict) else None
+    return status if status in {'pass','needs_review','likely_violation'} else None
+
+def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
+    limit=max(1, min(limit, 100))
+    remote=_convex_call('query', 'reviews:listRecent', {'limit': limit})
+    if remote is not None:
+        return [ReviewHistoryItem.model_validate(item) for item in remote]
+
+    if not JOB_DATA_DIR.exists():
+        return []
+
+    items=[]
+    for status_path in JOB_DATA_DIR.glob('*/status.json'):
+        try:
+            rec=JobRecord.model_validate(read_json(status_path))
+        except (OSError, ValueError):
+            continue
+        stat=status_path.stat()
+        report_path=status_path.parent/'report.json'
+        report=read_json(report_path) if report_path.exists() else None
+        data=rec.model_dump(mode='json')
+        data['created_at']=rec.created_at or int(stat.st_ctime * 1000)
+        data['updated_at']=rec.updated_at or int(stat.st_mtime * 1000)
+        data['overall_status']=_overall_status(report)
+        items.append(ReviewHistoryItem(**data))
+
+    items.sort(key=lambda item: item.created_at or 0, reverse=True)
+    return items[:limit]

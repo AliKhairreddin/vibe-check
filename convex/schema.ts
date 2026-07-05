@@ -12,5 +12,7 @@ export default defineSchema({
     reportReady: v.boolean(),
     status: v.string(),
     updatedAt: v.number(),
-  }).index("by_job_id", ["jobId"]),
+  })
+    .index("by_job_id", ["jobId"])
+    .index("by_created_at", ["createdAt"]),
 });

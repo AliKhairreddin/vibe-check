@@ -5,6 +5,8 @@ export type Status = {
   progress: number;
   message: string;
   report_ready: boolean;
+  created_at?: number | null;
+  updated_at?: number | null;
 };
 
 export type Finding = {
@@ -24,6 +26,10 @@ export type Report = {
   findings: Finding[];
   safe_rewrite: { ad_copy: string; onscreen_text: string[] };
   limitations: string[];
+};
+
+export type ReviewHistoryItem = Status & {
+  overall_status?: Report['overall_status'] | null;
 };
 
 export async function createReview(
@@ -62,6 +68,12 @@ export async function createReview(
 
 export async function getStatus(id: string): Promise<Status> {
   const response = await fetch(`/api/reviews/${id}`);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
+  const response = await fetch(`/api/reviews?limit=${limit}`);
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }

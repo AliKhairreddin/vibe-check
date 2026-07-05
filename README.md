@@ -107,6 +107,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 - `POST /api/reviews`: create a job with one MP4, JPG, PNG, or WebP creative, ad copy, optional additional policy text, notes, optional transcript, model, frame interval, scene toggle.
 
 Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
+- `GET /api/reviews`: recent review history with filename, upload date, status, progress, and final result when available.
 - `GET /api/reviews/{job_id}`: status and progress.
 - `GET /api/reviews/{job_id}/report`: structured report JSON.
 - `GET /api/reviews/{job_id}/report.json`: downloadable report.
@@ -114,7 +115,7 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename, current status/progress, and final report JSON. Multi-creative uploads are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename, upload/update timestamps, current status/progress, and final report JSON. Multi-creative uploads are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 

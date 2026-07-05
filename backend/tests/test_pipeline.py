@@ -5,7 +5,7 @@ from app.review_pipeline.guidelines import build_policy_context, load_default_gu
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import set_status, get_status
+from app.review_pipeline.storage import set_status, get_status, set_report, list_reviews
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from PIL import Image
 
@@ -34,6 +34,19 @@ def test_job_status_transitions(tmp_path, monkeypatch):
     set_status('j1', JobStatus.queued, 0)
     set_status('j1', JobStatus.running_ocr, 60)
     assert get_status('j1').status == JobStatus.running_ocr
+
+def test_review_history_lists_local_jobs(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.mp4')
+    set_report('j1', {'overall_status':'pass','summary':'ok','findings':[]})
+    set_status('j1', JobStatus.complete, 100, 'Complete')
+    history=list_reviews()
+    assert len(history)==1
+    assert history[0].file_name=='creative.mp4'
+    assert history[0].overall_status=='pass'
+    assert history[0].created_at is not None
 
 def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'
