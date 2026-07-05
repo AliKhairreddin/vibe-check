@@ -342,13 +342,12 @@ function Home() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <FormField label="Ad copy" htmlFor="ad_copy">
+              <FormField label="Ad copy (optional)" htmlFor="ad_copy">
                 <Textarea
                   id="ad_copy"
-                  required
                   name="ad_copy"
                   className="min-h-32"
-                  placeholder="Paste the ad copy here."
+                  placeholder="Paste the ad copy here, or leave blank."
                 />
               </FormField>
               <FormField label="Additional policy/guidelines" htmlFor="policy_text">
@@ -569,8 +568,7 @@ function HistoryCard({
       <CardHeader>
         <CardTitle className="text-xl">Review history</CardTitle>
         <CardDescription>
-          Previous creative reviews stay here with filenames, upload dates, progress,
-          and report links.
+          Previous creative reviews stay here with split creative and copy results.
         </CardDescription>
         <CardAction>
           <Badge variant="outline">{reviews.length} saved</Badge>
@@ -596,7 +594,8 @@ function HistoryCard({
                   <TableHead>Creative</TableHead>
                   <TableHead>Uploaded</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Result</TableHead>
+                  <TableHead>Creative Result</TableHead>
+                  <TableHead>Ad Copy Result</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -615,10 +614,18 @@ function HistoryCard({
                       <StatusBadge status={review.status} />
                     </TableCell>
                     <TableCell>
-                      {review.overall_status ? (
-                        <StatusBadge status={review.overall_status} />
+                      <ResultCell status={review.creative_result ?? review.overall_status} />
+                    </TableCell>
+                    <TableCell>
+                      {review.has_ad_copy ?? true ? (
+                        <ResultCell
+                          status={
+                            review.ad_copy_result ??
+                            (review.has_ad_copy === undefined ? review.overall_status : null)
+                          }
+                        />
                       ) : (
-                        <span className="text-sm text-muted-foreground">Not ready</span>
+                        <span className="text-sm text-muted-foreground">N/A</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
@@ -896,6 +903,14 @@ function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
   if (severity === 'high') return <Badge variant="destructive">High</Badge>;
   if (severity === 'medium') return <Badge variant="secondary">Medium</Badge>;
   return <Badge variant="outline">Low</Badge>;
+}
+
+function ResultCell({ status }: { status?: string | null }) {
+  return status ? (
+    <StatusBadge status={status} />
+  ) : (
+    <span className="text-sm text-muted-foreground">Not ready</span>
+  );
 }
 
 function buildReviewForm(source: FormData, creative: File, sceneDetection: boolean) {

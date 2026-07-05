@@ -5,6 +5,7 @@ export default defineSchema({
   reviews: defineTable({
     createdAt: v.number(),
     fileName: v.string(),
+    hasAdCopy: v.optional(v.boolean()),
     jobId: v.string(),
     message: v.string(),
     progress: v.number(),

@@ -4,6 +4,7 @@ import { v } from "convex/values";
 const statusArgs = {
   secret: v.string(),
   fileName: v.optional(v.string()),
+  hasAdCopy: v.optional(v.boolean()),
   jobId: v.string(),
   message: v.string(),
   progress: v.number(),
@@ -28,9 +29,48 @@ function overallStatus(report: unknown) {
     : null;
 }
 
+function findingSource(finding: unknown) {
+  if (!finding || typeof finding !== "object") return "";
+  const source = (finding as { source?: unknown }).source;
+  return typeof source === "string" ? source : "";
+}
+
+function splitResult(
+  report: unknown,
+  sourceMatches: (source: string) => boolean
+) {
+  const status = overallStatus(report);
+  if (!report || typeof report !== "object") return null;
+  const findings = (report as { findings?: unknown }).findings;
+  if (!Array.isArray(findings) || findings.length === 0) {
+    return status;
+  }
+
+  const relevant = findings.filter((finding) => sourceMatches(findingSource(finding)));
+  if (!relevant.length) return status ? "pass" : null;
+  return relevant.some(
+    (finding) =>
+      finding &&
+      typeof finding === "object" &&
+      (finding as { severity?: unknown }).severity === "high"
+  )
+    ? "likely_violation"
+    : "needs_review";
+}
+
+function creativeResult(report: unknown) {
+  return splitResult(report, (source) => source !== "ad_copy");
+}
+
+function adCopyResult(report: unknown, hasAdCopy: boolean) {
+  if (!hasAdCopy) return null;
+  return splitResult(report, (source) => source === "ad_copy");
+}
+
 function publicReview(review: {
   createdAt: number;
   fileName: string;
+  hasAdCopy?: boolean;
   jobId: string;
   message: string;
   progress: number;
@@ -39,9 +79,13 @@ function publicReview(review: {
   status: string;
   updatedAt: number;
 }) {
+  const hasAdCopy = review.hasAdCopy ?? true;
   return {
+    ad_copy_result: adCopyResult(review.report, hasAdCopy),
     created_at: review.createdAt,
+    creative_result: creativeResult(review.report),
     file_name: review.fileName,
+    has_ad_copy: hasAdCopy,
     job_id: review.jobId,
     message: review.message,
     overall_status: overallStatus(review.report),
@@ -64,6 +108,7 @@ export const upsertStatus = mutationGeneric({
 
     const value = {
       fileName: args.fileName ?? existing?.fileName ?? "",
+      hasAdCopy: args.hasAdCopy ?? existing?.hasAdCopy ?? true,
       jobId: args.jobId,
       message: args.message,
       progress: args.progress,

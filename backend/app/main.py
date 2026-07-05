@@ -31,7 +31,7 @@ async def optional_password_gate(request: Request, call_next):
     return await call_next(request)
 
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(...), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False)):
+async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False)):
     upload=creative or video
     if upload is None:
         raise HTTPException(400, 'Choose a creative file to review.')
@@ -49,7 +49,7 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
             size += len(chunk)
             if size > max_mb*1024*1024: raise HTTPException(413, f'Max upload is {max_mb} MB')
             f.write(chunk)
-    meta=ReviewRequestMeta(ad_copy=ad_copy, policy_text=policy_text, notes=notes, manual_transcript=manual_transcript, model=model or None, frame_interval_seconds=frame_interval_seconds, scene_detection=scene_detection)
+    meta=ReviewRequestMeta(ad_copy=ad_copy.strip(), policy_text=policy_text, notes=notes, manual_transcript=manual_transcript, model=model or None, frame_interval_seconds=frame_interval_seconds, scene_detection=scene_detection)
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
     rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name)
     return rec

@@ -5,6 +5,7 @@ export type Status = {
   progress: number;
   message: string;
   report_ready: boolean;
+  has_ad_copy?: boolean;
   created_at?: number | null;
   updated_at?: number | null;
 };
@@ -30,6 +31,8 @@ export type Report = {
 
 export type ReviewHistoryItem = Status & {
   overall_status?: Report['overall_status'] | null;
+  creative_result?: Report['overall_status'] | null;
+  ad_copy_result?: Report['overall_status'] | null;
 };
 
 export async function createReview(

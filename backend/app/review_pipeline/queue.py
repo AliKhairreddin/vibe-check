@@ -58,7 +58,14 @@ async def enqueue_job(
     message = 'Queued for processing'
     if position > _worker_count():
         message = f'Queued for processing ({position - _worker_count()} ahead)'
-    record = set_status(job_id, JobStatus.queued, 0, message, file_name)
+    record = set_status(
+        job_id,
+        JobStatus.queued,
+        0,
+        message,
+        file_name,
+        has_ad_copy=meta.has_ad_copy,
+    )
     await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta))
     return record
 

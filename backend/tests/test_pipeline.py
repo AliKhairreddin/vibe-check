@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from app.review_pipeline.models import ComplianceReport, JobStatus
+from app.review_pipeline.models import ComplianceReport, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.llm import parse_report_json
@@ -13,6 +13,11 @@ from PIL import Image
 def test_report_schema_validation():
     r=ComplianceReport.model_validate({'overall_status':'pass','summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
     assert r.overall_status=='pass'
+
+def test_review_request_meta_tracks_optional_ad_copy():
+    assert not ReviewRequestMeta().has_ad_copy
+    assert not ReviewRequestMeta(ad_copy='   ').has_ad_copy
+    assert ReviewRequestMeta(ad_copy='Save up to 20%.').has_ad_copy
 
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
@@ -82,6 +87,62 @@ def test_review_history_lists_local_jobs(tmp_path, monkeypatch):
     assert history[0].file_name=='creative.mp4'
     assert history[0].overall_status=='pass'
     assert history[0].created_at is not None
+
+def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.mp4', has_ad_copy=True)
+    set_report('j1', {
+        'overall_status':'likely_violation',
+        'summary':'mixed issues',
+        'findings':[
+            {
+                'severity':'high',
+                'source':'visual',
+                'evidence':'Crash imagery',
+                'policy_reason':'No wreck imagery',
+                'suggested_fix':'Use a neutral driving scene.',
+                'confidence':'high',
+            },
+            {
+                'severity':'medium',
+                'source':'ad_copy',
+                'evidence':'Limited time savings claim',
+                'policy_reason':'Urgency claims need review',
+                'suggested_fix':'Remove urgency language.',
+                'confidence':'medium',
+            },
+        ],
+    })
+    set_status('j1', JobStatus.complete, 100, 'Complete')
+    history=list_reviews()
+    assert history[0].has_ad_copy
+    assert history[0].creative_result=='likely_violation'
+    assert history[0].ad_copy_result=='needs_review'
+
+def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.png', has_ad_copy=False)
+    set_report('j1', {
+        'overall_status':'needs_review',
+        'summary':'creative needs review',
+        'findings':[{
+            'severity':'medium',
+            'source':'onscreen_text',
+            'evidence':'Unsupported savings claim',
+            'policy_reason':'Savings claims need substantiation',
+            'suggested_fix':'Add substantiation.',
+            'confidence':'medium',
+        }],
+    })
+    set_status('j1', JobStatus.complete, 100, 'Complete')
+    history=list_reviews()
+    assert not history[0].has_ad_copy
+    assert history[0].creative_result=='needs_review'
+    assert history[0].ad_copy_result is None
 
 def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'

@@ -34,17 +34,24 @@ class JobRecord(BaseModel):
     progress: int = 0
     message: str = ''
     report_ready: bool = False
+    has_ad_copy: bool = True
     created_at: int | None = None
     updated_at: int | None = None
 
 class ReviewHistoryItem(JobRecord):
     overall_status: Literal['pass','needs_review','likely_violation'] | None = None
+    creative_result: Literal['pass','needs_review','likely_violation'] | None = None
+    ad_copy_result: Literal['pass','needs_review','likely_violation'] | None = None
 
 class ReviewRequestMeta(BaseModel):
-    ad_copy: str
+    ad_copy: str = ''
     policy_text: str = ''
     notes: str = ''
     manual_transcript: str = ''
     model: str | None = None
     frame_interval_seconds: float = 1.0
     scene_detection: bool = False
+
+    @property
+    def has_ad_copy(self) -> bool:
+        return bool(self.ad_copy.strip())

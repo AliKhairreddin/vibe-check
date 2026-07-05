@@ -12,6 +12,7 @@ from .models import JobRecord, JobStatus, ReviewHistoryItem
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
 CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
 CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
+RESULT_STATUSES = {'pass','needs_review','likely_violation'}
 
 def job_dir(job_id:str)->Path:
     p=JOB_DATA_DIR/job_id; p.mkdir(parents=True, exist_ok=True); return p
@@ -49,20 +50,24 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
 
-def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='')->JobRecord:
+def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', has_ad_copy:bool|None=None)->JobRecord:
     current_file_name=file_name
+    current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
     local_path=job_dir(job_id)/'status.json'
     created_at=now_ms()
     if local_path.exists():
         current=JobRecord.model_validate(read_json(local_path))
         if not current_file_name:
             current_file_name=current.file_name
+        if has_ad_copy is None:
+            current_has_ad_copy=current.has_ad_copy
         created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),created_at=created_at,updated_at=now_ms())
+    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_ad_copy=current_has_ad_copy,created_at=created_at,updated_at=now_ms())
     write_json(local_path, rec.model_dump(mode='json'))
     _convex_call('mutation', 'reviews:upsertStatus', {
         'fileName': rec.file_name,
+        'hasAdCopy': rec.has_ad_copy,
         'jobId': rec.job_id,
         'message': rec.message,
         'progress': rec.progress,
@@ -96,6 +101,39 @@ def _overall_status(report:dict[str, Any]|None)->str|None:
     status=report.get('overall_status') if isinstance(report, dict) else None
     return status if status in {'pass','needs_review','likely_violation'} else None
 
+def _finding_source(finding:Any)->str:
+    if not isinstance(finding, dict):
+        return ''
+    source=finding.get('source')
+    return source if isinstance(source, str) else ''
+
+def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
+    status=_overall_status(report)
+    if not isinstance(report, dict):
+        return None
+
+    findings=report.get('findings')
+    if not isinstance(findings, list) or not findings:
+        return status
+
+    relevant=[
+        finding for finding in findings
+        if source_matches(_finding_source(finding))
+    ]
+    if not relevant:
+        return 'pass' if status in RESULT_STATUSES else None
+    if any(isinstance(finding, dict) and finding.get('severity') == 'high' for finding in relevant):
+        return 'likely_violation'
+    return 'needs_review'
+
+def _creative_result(report:dict[str, Any]|None)->str|None:
+    return _split_result(report, lambda source: source != 'ad_copy')
+
+def _ad_copy_result(report:dict[str, Any]|None, has_ad_copy:bool)->str|None:
+    if not has_ad_copy:
+        return None
+    return _split_result(report, lambda source: source == 'ad_copy')
+
 def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
     limit=max(1, min(limit, 100))
     remote=_convex_call('query', 'reviews:listRecent', {'limit': limit})
@@ -118,6 +156,8 @@ def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
         data['created_at']=rec.created_at or int(stat.st_ctime * 1000)
         data['updated_at']=rec.updated_at or int(stat.st_mtime * 1000)
         data['overall_status']=_overall_status(report)
+        data['creative_result']=_creative_result(report)
+        data['ad_copy_result']=_ad_copy_result(report, rec.has_ad_copy)
         items.append(ReviewHistoryItem(**data))
 
     items.sort(key=lambda item: item.created_at or 0, reverse=True)
