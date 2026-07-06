@@ -15,7 +15,7 @@ from .storage import set_status
 @dataclass(frozen=True)
 class QueuedReviewJob:
     job_id: str
-    media_path: Path
+    media_path: Path | None
     media_kind: MediaKind
     meta: ReviewRequestMeta
 
@@ -49,7 +49,7 @@ async def stop_job_workers() -> None:
 
 async def enqueue_job(
     job_id: str,
-    media_path: Path,
+    media_path: Path | None,
     media_kind: MediaKind,
     meta: ReviewRequestMeta,
     file_name: str,
@@ -65,6 +65,7 @@ async def enqueue_job(
         message,
         file_name,
         has_ad_copy=meta.has_ad_copy,
+        has_creative=media_kind != 'copy_only',
     )
     await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta))
     return record

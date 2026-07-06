@@ -1,13 +1,15 @@
 import json
+import asyncio
 from pathlib import Path
+from app.main import copy_review_file_name
 from app.review_pipeline.models import ComplianceReport, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
-from app.review_pipeline.jobs import build_review_evidence
+from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import set_status, get_status, set_report, list_reviews
+from app.review_pipeline.storage import set_status, get_status, set_report, get_report, list_reviews
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from PIL import Image
 
@@ -37,6 +39,29 @@ def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
     assert evidence['audio_transcript']['chunks'][0]['text'] == 'Spoken transcript.'
     assert evidence['onscreen_text_ocr'][0]['text'] == 'On-screen words.'
     assert 'platform caption/body' in evidence['source_definitions']['ad_copy']
+
+def test_review_evidence_supports_copy_only_jobs():
+    meta=ReviewRequestMeta(ad_copy='Standalone ad copy.', notes='Brand note.')
+    evidence=build_review_evidence(
+        'copy_only',
+        meta,
+        'Policy text.',
+        ['Saved rules'],
+        {'source':'not_applicable','chunks':[], 'limitations':['No creative was submitted.']},
+        [],
+        [],
+        'No creative was submitted; review is based on submitted ad copy, policy text, and notes only.',
+    )
+    assert evidence['media_type']=='copy_only'
+    assert evidence['submitted_ad_copy'] == {'present': True, 'text': 'Standalone ad copy.'}
+    assert evidence['audio_transcript']['chunks'] == []
+    assert evidence['onscreen_text_ocr'] == []
+    assert evidence['visual_frame_references'] == []
+
+def test_copy_review_file_name_uses_copy_preview():
+    label=copy_review_file_name('  Save money now with a very long claim that should still make a compact history label for reviewers.  ')
+    assert label.startswith('Ad copy: Save money now')
+    assert len(label) <= 72
 
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
@@ -180,6 +205,20 @@ def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch
     assert not history[0].has_ad_copy
     assert history[0].creative_result=='needs_review'
     assert history[0].ad_copy_result is None
+
+def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    asyncio.run(process_job('j1', None, 'copy_only', ReviewRequestMeta(ad_copy='Save today.')))
+    status=get_status('j1')
+    report=get_report('j1')
+    assert status.status == JobStatus.complete
+    assert status.report_ready
+    assert not status.has_creative
+    assert report is not None
+    assert 'No creative was submitted' in report['limitations'][-1]
 
 def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

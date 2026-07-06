@@ -50,9 +50,10 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
 
-def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', has_ad_copy:bool|None=None)->JobRecord:
+def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', has_ad_copy:bool|None=None, has_creative:bool|None=None)->JobRecord:
     current_file_name=file_name
     current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
+    current_has_creative=True if has_creative is None else has_creative
     local_path=job_dir(job_id)/'status.json'
     created_at=now_ms()
     if local_path.exists():
@@ -61,13 +62,16 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
             current_file_name=current.file_name
         if has_ad_copy is None:
             current_has_ad_copy=current.has_ad_copy
+        if has_creative is None:
+            current_has_creative=current.has_creative
         created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_ad_copy=current_has_ad_copy,created_at=created_at,updated_at=now_ms())
+    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,created_at=created_at,updated_at=now_ms())
     write_json(local_path, rec.model_dump(mode='json'))
     _convex_call('mutation', 'reviews:upsertStatus', {
         'fileName': rec.file_name,
         'hasAdCopy': rec.has_ad_copy,
+        'hasCreative': rec.has_creative,
         'jobId': rec.job_id,
         'message': rec.message,
         'progress': rec.progress,
@@ -138,7 +142,9 @@ def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
         return 'likely_violation'
     return 'needs_review'
 
-def _creative_result(report:dict[str, Any]|None)->str|None:
+def _creative_result(report:dict[str, Any]|None, has_creative:bool=True)->str|None:
+    if not has_creative:
+        return None
     return _source_result_status(report, 'creative') or _split_result(report, lambda source: source != 'ad_copy')
 
 def _ad_copy_result(report:dict[str, Any]|None, has_ad_copy:bool)->str|None:
@@ -168,7 +174,7 @@ def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
         data['created_at']=rec.created_at or int(stat.st_ctime * 1000)
         data['updated_at']=rec.updated_at or int(stat.st_mtime * 1000)
         data['overall_status']=_overall_status(report)
-        data['creative_result']=_creative_result(report)
+        data['creative_result']=_creative_result(report, rec.has_creative)
         data['ad_copy_result']=_ad_copy_result(report, rec.has_ad_copy)
         items.append(ReviewHistoryItem(**data))
 

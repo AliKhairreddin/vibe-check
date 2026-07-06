@@ -5,6 +5,7 @@ export type Status = {
   progress: number;
   message: string;
   report_ready: boolean;
+  has_creative?: boolean;
   has_ad_copy?: boolean;
   created_at?: number | null;
   updated_at?: number | null;
@@ -76,7 +77,7 @@ export async function createReview(
       reject(new Error(request.responseText || `Upload failed with ${request.status}`));
     };
 
-    request.onerror = () => reject(new Error('Network error while uploading creative'));
+    request.onerror = () => reject(new Error('Network error while creating review'));
     request.send(form);
   });
 }

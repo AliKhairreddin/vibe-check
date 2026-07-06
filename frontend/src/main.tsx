@@ -87,6 +87,7 @@ type UploadPhase = 'pending' | 'uploading' | 'queued' | 'failed';
 type BatchItem = {
   id: string;
   fileName: string;
+  kind: 'creative' | 'ad_copy';
   size: number;
   uploadProgress: number;
   phase: UploadPhase;
@@ -96,6 +97,7 @@ type BatchItem = {
 
 const queryClient = new QueryClient();
 const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v2';
+const AD_COPY_PREVIEW_LENGTH = 56;
 const SOURCE_LABELS: Record<Finding['source'], string> = {
   ad_copy: 'Ad Copy',
   audio: 'Audio Transcript',
@@ -120,9 +122,11 @@ function loadActiveBatch(): BatchItem[] {
     return parsed.flatMap((value) => {
       const item = value as Partial<BatchItem>;
       if (typeof item.jobId !== 'string' || !item.jobId) return [];
+      const kind = item.kind === 'ad_copy' ? 'ad_copy' : 'creative';
       return [{
         id: item.jobId,
         fileName: typeof item.fileName === 'string' && item.fileName ? item.fileName : item.jobId,
+        kind,
         size: typeof item.size === 'number' ? item.size : 0,
         uploadProgress: 100,
         phase: 'queued' as const,
@@ -218,9 +222,11 @@ const rootRoute = createRootRoute({ component: AppShell });
 function Home() {
   const [sceneDetection, setSceneDetection] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const adCopyLines = useMemo(() => splitAdCopyLines(adCopyText), [adCopyText]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -279,31 +285,44 @@ function Home() {
     const form = event.currentTarget;
     const fileInput = form.elements.namedItem('creative') as HTMLInputElement | null;
     const files = Array.from(fileInput?.files ?? []);
+    const copyOnly = files.length === 0;
 
-    if (!files.length) {
-      setSubmitError('Choose at least one MP4, JPG, PNG, or WebP creative.');
+    if (!files.length && !adCopyLines.length) {
+      setSubmitError('Choose at least one creative or enter ad copy to review.');
       return;
     }
 
     const sharedFields = new FormData(form);
-    const nextItems = files.map((file, index) => ({
-      id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
-      fileName: file.name,
-      size: file.size,
-      uploadProgress: 0,
-      phase: 'pending' as const,
-    }));
+    const batchStamp = Date.now();
+    const nextItems = copyOnly
+      ? adCopyLines.map((copy, index) => ({
+          id: `copy-${batchStamp}-${index}`,
+          fileName: adCopyItemName(copy, index),
+          kind: 'ad_copy' as const,
+          size: new Blob([copy]).size,
+          uploadProgress: 0,
+          phase: 'pending' as const,
+        }))
+      : files.map((file, index) => ({
+          id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+          fileName: file.name,
+          kind: 'creative' as const,
+          size: file.size,
+          uploadProgress: 0,
+          phase: 'pending' as const,
+        }));
 
     setBatchItems(nextItems);
     setIsSubmitting(true);
 
-    for (const [index, file] of files.entries()) {
-      const item = nextItems[index];
+    for (const [index, item] of nextItems.entries()) {
+      const copyLine = copyOnly ? adCopyLines[index] : undefined;
+      const file = copyOnly ? null : files[index] ?? null;
       updateBatchItem(item.id, { phase: 'uploading' });
 
       try {
         const status = await createReview(
-          buildReviewForm(sharedFields, file, sceneDetection),
+          buildReviewForm(sharedFields, file, sceneDetection, copyLine),
           (progress) => updateBatchItem(item.id, { uploadProgress: progress })
         );
         updateBatchItem(item.id, {
@@ -332,10 +351,12 @@ function Home() {
         <CardHeader>
           <CardTitle className="text-xl">Review workspace</CardTitle>
           <CardDescription>
-            Upload one or more ad creatives and run compliance review jobs.
+            Upload ad creatives or review platform copy by itself.
           </CardDescription>
           <CardAction>
-            <Badge variant="outline">{selectedFiles.length || 0} selected</Badge>
+            <Badge variant="outline">
+              {selectionBadgeLabel(selectedFiles.length, adCopyLines.length)}
+            </Badge>
           </CardAction>
         </CardHeader>
         <CardContent>
@@ -344,7 +365,6 @@ function Home() {
               <Label htmlFor="creative">Ad creatives</Label>
               <Input
                 id="creative"
-                required
                 multiple
                 name="creative"
                 type="file"
@@ -357,12 +377,14 @@ function Home() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <FormField label="Shared ad copy / platform caption (optional)" htmlFor="ad_copy">
+              <FormField label="Ad copy / platform captions" htmlFor="ad_copy">
                 <Textarea
                   id="ad_copy"
                   name="ad_copy"
+                  value={adCopyText}
                   className="min-h-32"
-                  placeholder="Paste the Facebook, Instagram, or platform caption/body text."
+                  placeholder={'Save more today.\nGet a free quote in minutes.'}
+                  onChange={(event) => setAdCopyText(event.currentTarget.value)}
                 />
               </FormField>
               <FormField label="Additional policy/guidelines" htmlFor="policy_text">
@@ -431,9 +453,7 @@ function Home() {
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted-foreground">
-                {selectedFiles.length > 1
-                  ? `${selectedFiles.length} creatives will be queued as separate jobs.`
-                  : 'Each creative becomes one review job.'}
+                {submissionHint(selectedFiles.length, adCopyLines.length)}
               </p>
               <Button type="submit" disabled={isSubmitting}>
                 <Upload data-icon="inline-start" />
@@ -448,7 +468,7 @@ function Home() {
           <CardHeader>
             <CardTitle className="text-xl">Batch progress</CardTitle>
             <CardDescription>
-              Upload progress first, then backend review progress for each creative.
+              Submission progress first, then backend review progress for each job.
             </CardDescription>
             <CardAction>
               <div className="flex items-center gap-2">
@@ -522,7 +542,7 @@ function EmptyBatchState() {
         </div>
         <p className="text-sm font-medium">No active batch</p>
         <p className="text-sm text-muted-foreground">
-          Select creatives and start a review to watch each job move through the queue.
+          Start a review to watch each job move through the queue.
         </p>
       </div>
     </div>
@@ -532,14 +552,16 @@ function EmptyBatchState() {
 function BatchRow({ item, status }: { item: BatchItem; status?: Status }) {
   const progress = progressFor(item, status);
   const displayStatus = item.error ? 'failed' : status?.status ?? item.phase;
-  const message = item.error ?? status?.message ?? phaseMessage(item.phase);
+  const message = item.error ?? status?.message ?? phaseMessage(item.phase, item.kind);
 
   return (
     <div className="grid gap-3 rounded-lg border bg-card/60 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{item.fileName}</p>
-          <p className="text-xs text-muted-foreground">{formatBytes(item.size)}</p>
+          <p className="text-xs text-muted-foreground">
+            {item.kind === 'ad_copy' ? 'Ad copy only' : formatBytes(item.size)}
+          </p>
         </div>
         <StatusBadge status={displayStatus} />
       </div>
@@ -583,7 +605,7 @@ function HistoryCard({
       <CardHeader>
         <CardTitle className="text-xl">Review history</CardTitle>
         <CardDescription>
-          Previous creative reviews stay here with split creative and copy results.
+          Previous reviews stay here with split creative and copy results.
         </CardDescription>
         <CardAction>
           <Badge variant="outline">{reviews.length} saved</Badge>
@@ -629,7 +651,16 @@ function HistoryCard({
                       <StatusBadge status={review.status} />
                     </TableCell>
                     <TableCell>
-                      <ResultCell status={review.creative_result ?? review.overall_status} />
+                      {review.has_creative ?? true ? (
+                        <ResultCell
+                          status={
+                            review.creative_result ??
+                            (review.has_creative === undefined ? review.overall_status : null)
+                          }
+                        />
+                      ) : (
+                        <span className="text-sm text-muted-foreground">N/A</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       {review.has_ad_copy ?? true ? (
@@ -931,9 +962,14 @@ function ResultCell({ status }: { status?: string | null }) {
   );
 }
 
-function buildReviewForm(source: FormData, creative: File, sceneDetection: boolean) {
+function buildReviewForm(
+  source: FormData,
+  creative: File | null,
+  sceneDetection: boolean,
+  adCopyOverride?: string
+) {
   const form = new FormData();
-  form.append('creative', creative);
+  if (creative) form.append('creative', creative);
 
   for (const key of [
     'ad_copy',
@@ -943,12 +979,47 @@ function buildReviewForm(source: FormData, creative: File, sceneDetection: boole
     'model',
     'frame_interval_seconds',
   ]) {
+    if (key === 'ad_copy' && adCopyOverride !== undefined) {
+      form.append(key, adCopyOverride);
+      continue;
+    }
     const value = source.get(key);
     if (typeof value === 'string') form.append(key, value);
   }
 
   if (sceneDetection) form.append('scene_detection', 'true');
   return form;
+}
+
+function splitAdCopyLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function adCopyItemName(copy: string, index: number) {
+  const preview = copy.replace(/\s+/g, ' ').trim();
+  if (!preview) return `Ad copy ${index + 1}`;
+  const trimmed =
+    preview.length > AD_COPY_PREVIEW_LENGTH
+      ? `${preview.slice(0, AD_COPY_PREVIEW_LENGTH - 3).trim()}...`
+      : preview;
+  return `Ad copy ${index + 1}: ${trimmed}`;
+}
+
+function selectionBadgeLabel(creativeCount: number, copyLineCount: number) {
+  if (creativeCount) return `${creativeCount} creative${creativeCount === 1 ? '' : 's'}`;
+  if (copyLineCount) return `${copyLineCount} copy line${copyLineCount === 1 ? '' : 's'}`;
+  return '0 selected';
+}
+
+function submissionHint(creativeCount: number, copyLineCount: number) {
+  if (creativeCount > 1) return `${creativeCount} creatives will be queued as separate jobs.`;
+  if (creativeCount === 1) return 'Each creative becomes one review job.';
+  if (copyLineCount > 1) return `${copyLineCount} ad copy lines will be queued as separate jobs.`;
+  if (copyLineCount === 1) return 'This ad copy line becomes one review job.';
+  return 'Select a creative or enter ad copy to create a review job.';
 }
 
 function progressFor(item: BatchItem, status?: Status) {
@@ -958,11 +1029,11 @@ function progressFor(item: BatchItem, status?: Status) {
   return 0;
 }
 
-function phaseMessage(phase: UploadPhase) {
-  if (phase === 'uploading') return 'Uploading';
+function phaseMessage(phase: UploadPhase, kind: BatchItem['kind']) {
+  if (phase === 'uploading') return kind === 'ad_copy' ? 'Submitting' : 'Uploading';
   if (phase === 'queued') return 'Queued';
   if (phase === 'failed') return 'Failed';
-  return 'Pending upload';
+  return kind === 'ad_copy' ? 'Pending submission' : 'Pending upload';
 }
 
 function formatStatus(status: string) {

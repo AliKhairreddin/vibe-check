@@ -43,6 +43,7 @@ class JobRecord(BaseModel):
     progress: int = 0
     message: str = ''
     report_ready: bool = False
+    has_creative: bool = True
     has_ad_copy: bool = True
     created_at: int | None = None
     updated_at: int | None = None

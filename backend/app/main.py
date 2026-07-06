@@ -12,6 +12,19 @@ from .review_pipeline.storage import get_report as get_stored_report, get_status
 from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
 from .review_pipeline.media import detect_media_kind
 
+COPY_LABEL_MAX_LENGTH = 72
+
+
+def copy_review_file_name(ad_copy: str) -> str:
+    prefix = 'Ad copy: '
+    preview = ' '.join(ad_copy.split())
+    if not preview:
+        return 'Ad copy'
+    max_preview = max(1, COPY_LABEL_MAX_LENGTH - len(prefix))
+    if len(preview) > max_preview:
+        preview = preview[: max_preview - 3].rstrip() + '...'
+    return f'{prefix}{preview}'
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await start_job_workers()
@@ -33,8 +46,15 @@ async def optional_password_gate(request: Request, call_next):
 @app.post('/api/reviews', response_model=JobRecord)
 async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False)):
     upload=creative or video
+    ad_copy=ad_copy.strip()
+    meta=ReviewRequestMeta(ad_copy=ad_copy, policy_text=policy_text, notes=notes, manual_transcript=manual_transcript, model=model or None, frame_interval_seconds=frame_interval_seconds, scene_detection=scene_detection)
     if upload is None:
-        raise HTTPException(400, 'Choose a creative file to review.')
+        if not meta.has_ad_copy:
+            raise HTTPException(400, 'Choose a creative file or enter ad copy to review.')
+        job_id=uuid.uuid4().hex; jd=job_dir(job_id)
+        (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
+        rec=await enqueue_job(job_id, None, 'copy_only', meta, copy_review_file_name(ad_copy))
+        return rec
     file_name=Path(upload.filename or 'upload').name or 'upload'
     try:
         media_kind=detect_media_kind(file_name, upload.content_type)
@@ -49,7 +69,6 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
             size += len(chunk)
             if size > max_mb*1024*1024: raise HTTPException(413, f'Max upload is {max_mb} MB')
             f.write(chunk)
-    meta=ReviewRequestMeta(ad_copy=ad_copy.strip(), policy_text=policy_text, notes=notes, manual_transcript=manual_transcript, model=model or None, frame_interval_seconds=frame_interval_seconds, scene_detection=scene_detection)
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
     rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name)
     return rec

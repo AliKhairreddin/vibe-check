@@ -8,19 +8,21 @@ Source rules:
 - "policy" means a policy/guideline issue that is not tied to one observed creative surface.
 - If the same risky words appear in multiple places, create separate findings for each real source instead of merging them.
 - If submitted_ad_copy.present is false, source_results.ad_copy must be null, do not create findings with source "ad_copy", and leave safe_rewrite.ad_copy empty.
+- If media_type is "copy_only", source_results.creative must be null and findings must only use "ad_copy" or "policy" sources.
 
 Evaluate source_results.ad_copy using only submitted_ad_copy.text. Evaluate source_results.creative using audio_transcript, onscreen_text_ocr, visual_frame_references, media_type, and notes, excluding submitted_ad_copy.text.
+For media_type "copy_only", evaluate only submitted_ad_copy.text, policy_text, and notes.
 
 Return exactly one JSON object with this shape and no wrapper keys:
 {
   "overall_status": "pass" | "needs_review" | "likely_violation",
   "summary": "plain English summary",
   "source_results": {
-    "creative": {
+    "creative": null | {
       "status": "pass" | "needs_review" | "likely_violation",
       "summary": "plain English creative-only result; exclude submitted ad copy"
     },
-    "ad_copy": {
+    "ad_copy": null | {
       "status": "pass" | "needs_review" | "likely_violation",
       "summary": "plain English ad-copy-only result based only on submitted_ad_copy.text"
     }

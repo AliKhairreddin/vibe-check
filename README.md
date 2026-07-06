@@ -1,6 +1,6 @@
 # Ad Compliance Creative Reviewer
 
-Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, extracts WAV audio and samples video frames with `ffmpeg`, prepares still images for OCR with Pillow, runs OCR with Tesseract, transcribes audio through OpenRouter Speech-to-Text with a manual transcript override, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
+Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives, or standalone pasted ad copy, against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, extracts WAV audio and samples video frames with `ffmpeg`, prepares still images for OCR with Pillow, runs OCR with Tesseract, transcribes audio through OpenRouter Speech-to-Text with a manual transcript override, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
 
 ## Stack
 
@@ -31,9 +31,10 @@ uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev
 ```
 
-Open the Vite dev URL and upload one or more MP4, JPG, PNG, or WebP creatives with optional ad copy and policy text. Ad copy means the submitted platform caption/body text, separate from audio transcript and on-creative OCR text.
+Open the Vite dev URL and upload one or more MP4, JPG, PNG, or WebP creatives with optional ad copy and policy text, or paste standalone ad copy without a creative. Ad copy means the submitted platform caption/body text, separate from audio transcript and on-creative OCR text.
 The UI creates one review job per selected creative and shows upload progress first,
-then backend queue and processing progress for each job.
+then backend queue and processing progress for each job. With no creative selected,
+each non-empty ad copy line becomes its own review job.
 
 ## Cloudflare Deployment
 
@@ -106,7 +107,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 ## API
 
-- `POST /api/reviews`: create a job with one MP4, JPG, PNG, or WebP creative, optional platform caption/body ad copy, optional additional policy text, notes, optional manual transcript override, model, frame interval, scene toggle.
+- `POST /api/reviews`: create a job with one MP4, JPG, PNG, or WebP creative, optional platform caption/body ad copy, optional additional policy text, notes, optional manual transcript override, model, frame interval, scene toggle. If no creative file is submitted, `ad_copy` is required and the job reviews copy only.
 
 Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
 - `GET /api/reviews`: recent review history with filename, upload date, status, progress, and final result when available.
@@ -117,7 +118,7 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Multi-creative uploads are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Multi-creative uploads and multi-line copy-only submissions are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 

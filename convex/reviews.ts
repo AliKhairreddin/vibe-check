@@ -5,6 +5,7 @@ const statusArgs = {
   secret: v.string(),
   fileName: v.optional(v.string()),
   hasAdCopy: v.optional(v.boolean()),
+  hasCreative: v.optional(v.boolean()),
   jobId: v.string(),
   message: v.string(),
   progress: v.number(),
@@ -72,7 +73,8 @@ function splitResult(
     : "needs_review";
 }
 
-function creativeResult(report: unknown) {
+function creativeResult(report: unknown, hasCreative: boolean) {
+  if (!hasCreative) return null;
   return sourceResultStatus(report, "creative") ?? splitResult(report, (source) => source !== "ad_copy");
 }
 
@@ -85,6 +87,7 @@ function publicReview(review: {
   createdAt: number;
   fileName: string;
   hasAdCopy?: boolean;
+  hasCreative?: boolean;
   jobId: string;
   message: string;
   progress: number;
@@ -94,12 +97,14 @@ function publicReview(review: {
   updatedAt: number;
 }) {
   const hasAdCopy = review.hasAdCopy ?? true;
+  const hasCreative = review.hasCreative ?? true;
   return {
     ad_copy_result: adCopyResult(review.report, hasAdCopy),
     created_at: review.createdAt,
-    creative_result: creativeResult(review.report),
+    creative_result: creativeResult(review.report, hasCreative),
     file_name: review.fileName,
     has_ad_copy: hasAdCopy,
+    has_creative: hasCreative,
     job_id: review.jobId,
     message: review.message,
     overall_status: overallStatus(review.report),
@@ -123,6 +128,7 @@ export const upsertStatus = mutationGeneric({
     const value = {
       fileName: args.fileName ?? existing?.fileName ?? "",
       hasAdCopy: args.hasAdCopy ?? existing?.hasAdCopy ?? true,
+      hasCreative: args.hasCreative ?? existing?.hasCreative ?? true,
       jobId: args.jobId,
       message: args.message,
       progress: args.progress,

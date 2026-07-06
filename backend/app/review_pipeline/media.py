@@ -5,7 +5,7 @@ from typing import Literal
 
 from PIL import Image, ImageOps
 
-MediaKind = Literal['video', 'image']
+MediaKind = Literal['video', 'image', 'copy_only']
 
 IMAGE_CONTENT_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}

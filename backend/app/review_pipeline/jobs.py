@@ -44,32 +44,44 @@ def build_review_evidence(
         'cost_saving_note': evidence_note,
     }
 
-async def process_job(job_id:str, media_path:Path, media_kind:MediaKind, meta:ReviewRequestMeta):
+async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, meta:ReviewRequestMeta):
     jd=job_dir(job_id)
     audio_path=jd/'audio.wav'
     try:
-        if media_kind == 'video':
-            set_status(job_id, JobStatus.processing_video, 10, 'Reading video metadata')
-            write_json(jd/'metadata.json', await anyio.to_thread.run_sync(metadata, media_path))
-            set_status(job_id, JobStatus.extracting_audio, 25, 'Extracting audio track')
-            await anyio.to_thread.run_sync(extract_audio, media_path, audio_path)
-            set_status(job_id, JobStatus.extracting_frames, 40, 'Sampling frames')
-            frames=await anyio.to_thread.run_sync(extract_frames, media_path, jd/'frames', meta.frame_interval_seconds, meta.scene_detection)
-            evidence_note='Full video frames are not sent by default; OCR, transcript chunks, and frame references are used.'
+        if media_kind == 'copy_only':
+            frames=[]
+            ocr=[]
+            transcript={'source':'not_applicable','chunks':[], 'limitations':['No creative was submitted for this review.']}
+            evidence_note='No creative was submitted; review is based on submitted ad copy, policy text, and notes only.'
+            write_json(jd/'frames.json', frames)
+            write_json(jd/'ocr.json', ocr)
+            write_json(jd/'transcript.json', transcript)
+            set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing ad copy with LLM', has_ad_copy=meta.has_ad_copy, has_creative=False)
         else:
-            set_status(job_id, JobStatus.processing_image, 10, 'Reading image metadata')
-            write_json(jd/'metadata.json', await anyio.to_thread.run_sync(image_metadata, media_path))
-            set_status(job_id, JobStatus.extracting_frames, 40, 'Preparing image for OCR')
-            frames=await anyio.to_thread.run_sync(prepare_image_frame, media_path, jd/'frames')
-            evidence_note='Full image pixels are not sent by default; OCR, supplied copy, notes, and image metadata are used.'
-        write_json(jd/'frames.json', frames)
-        set_status(job_id, JobStatus.running_ocr, 60, 'Running OCR')
-        ocr=await anyio.to_thread.run_sync(run_ocr, jd/'frames', frames)
-        write_json(jd/'ocr.json', ocr)
-        set_status(job_id, JobStatus.preparing_transcript, 75, 'Preparing transcript')
-        transcript=await anyio.to_thread.run_sync(transcribe, audio_path, meta.manual_transcript)
-        write_json(jd/'transcript.json', transcript)
-        set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing with LLM')
+            if media_path is None:
+                raise ValueError('Creative file path is required for media review jobs.')
+            if media_kind == 'video':
+                set_status(job_id, JobStatus.processing_video, 10, 'Reading video metadata')
+                write_json(jd/'metadata.json', await anyio.to_thread.run_sync(metadata, media_path))
+                set_status(job_id, JobStatus.extracting_audio, 25, 'Extracting audio track')
+                await anyio.to_thread.run_sync(extract_audio, media_path, audio_path)
+                set_status(job_id, JobStatus.extracting_frames, 40, 'Sampling frames')
+                frames=await anyio.to_thread.run_sync(extract_frames, media_path, jd/'frames', meta.frame_interval_seconds, meta.scene_detection)
+                evidence_note='Full video frames are not sent by default; OCR, transcript chunks, and frame references are used.'
+            else:
+                set_status(job_id, JobStatus.processing_image, 10, 'Reading image metadata')
+                write_json(jd/'metadata.json', await anyio.to_thread.run_sync(image_metadata, media_path))
+                set_status(job_id, JobStatus.extracting_frames, 40, 'Preparing image for OCR')
+                frames=await anyio.to_thread.run_sync(prepare_image_frame, media_path, jd/'frames')
+                evidence_note='Full image pixels are not sent by default; OCR, supplied copy, notes, and image metadata are used.'
+            write_json(jd/'frames.json', frames)
+            set_status(job_id, JobStatus.running_ocr, 60, 'Running OCR')
+            ocr=await anyio.to_thread.run_sync(run_ocr, jd/'frames', frames)
+            write_json(jd/'ocr.json', ocr)
+            set_status(job_id, JobStatus.preparing_transcript, 75, 'Preparing transcript')
+            transcript=await anyio.to_thread.run_sync(transcribe, audio_path, meta.manual_transcript)
+            write_json(jd/'transcript.json', transcript)
+            set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing with LLM')
         policy_text, policy_sources=build_policy_context(meta.policy_text)
         evidence=build_review_evidence(media_kind, meta, policy_text, policy_sources, transcript, ocr, frames, evidence_note)
         report=await review_with_openrouter(evidence, meta.model)
@@ -81,6 +93,8 @@ async def process_job(job_id:str, media_path:Path, media_kind:MediaKind, meta:Re
         set_status(job_id, JobStatus.failed, 100, str(e))
     finally:
         for path in (media_path, audio_path):
+            if path is None:
+                continue
             try:
                 path.unlink(missing_ok=True)
             except OSError:
