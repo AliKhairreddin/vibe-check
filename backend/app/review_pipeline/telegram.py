@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from .media import MediaKind
 from .models import JobRecord
 
 STATUS_LABELS = {
@@ -34,6 +35,7 @@ def build_review_message(
     record: JobRecord,
     report: dict[str, Any],
     ad_copy_text: str = '',
+    media_kind: MediaKind | None = None,
 ) -> str:
     report_url = build_report_url(record.job_id)
     lines = ['<b>Vibe Check Result</b>']
@@ -41,7 +43,7 @@ def build_review_message(
     if record.has_creative:
         _add_source_section(
             lines,
-            'Creative',
+            _creative_type_label(media_kind),
             record.file_name or record.job_id,
             _source_result(report, 'creative'),
             report_url,
@@ -49,7 +51,7 @@ def build_review_message(
     if record.has_ad_copy:
         _add_source_section(
             lines,
-            'Ad Copy',
+            'Ad copy',
             _ad_copy_name(record, ad_copy_text),
             _source_result(report, 'ad_copy'),
             report_url,
@@ -62,6 +64,7 @@ def send_review_message(
     record: JobRecord,
     report: dict[str, Any],
     ad_copy_text: str = '',
+    media_kind: MediaKind | None = None,
 ) -> bool:
     token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
@@ -70,7 +73,7 @@ def send_review_message(
 
     payload: dict[str, Any] = {
         'chat_id': chat_id,
-        'text': build_review_message(record, report, ad_copy_text),
+        'text': build_review_message(record, report, ad_copy_text, media_kind),
         'parse_mode': 'HTML',
         'disable_web_page_preview': True,
     }
@@ -94,12 +97,12 @@ def send_review_message(
 
 def _add_source_section(
     lines: list[str],
-    title: str,
+    type_label: str,
     name: str,
     result: dict[str, str] | None,
     report_url: str,
 ) -> None:
-    lines.extend(['', f'<b>{html.escape(title)}</b>'])
+    lines.extend(['', f'<b>Type:</b> {html.escape(type_label)}'])
     _add_field(lines, 'Name', name, max_chars=MAX_NAME_CHARS)
     _add_field(
         lines,
@@ -108,7 +111,7 @@ def _add_source_section(
         max_chars=40,
     )
     if report_url:
-        lines.append('<b>Report Link</b>')
+        lines.append('<b>Report Link:</b>')
         lines.append(
             f'<a href="{html.escape(report_url, quote=True)}">'
             f'Open report</a>'
@@ -124,7 +127,7 @@ def _add_field(
 ) -> None:
     if value in (None, ''):
         return
-    lines.append(f'<b>{html.escape(label)}</b>')
+    lines.append(f'<b>{html.escape(label)}:</b>')
     lines.append(html.escape(_wrap_text(value, max_chars=max_chars)))
 
 
@@ -196,3 +199,11 @@ def _ad_copy_name(record: JobRecord, ad_copy_text: str) -> str:
     if not record.has_creative:
         return record.file_name or record.job_id
     return f'Ad copy for {record.file_name or record.job_id}'
+
+
+def _creative_type_label(media_kind: MediaKind | None) -> str:
+    if media_kind == 'video':
+        return 'Creative Vid'
+    if media_kind == 'image':
+        return 'Creative Image'
+    return 'Creative'

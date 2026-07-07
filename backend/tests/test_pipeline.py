@@ -274,12 +274,12 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
             'suggested_fix':'Soften the claim or add clear substantiation.',
             'confidence':'high',
         }],
-    }, 'Save $600 this month')
-    assert '<b>Creative</b>' in message
-    assert '<b>Ad Copy</b>' in message
-    assert '<b>Name</b>' in message
-    assert '<b>Result</b>' in message
-    assert '<b>Report Link</b>' in message
+    }, 'Save $600 this month', 'video')
+    assert '<b>Type:</b> Creative Vid' in message
+    assert '<b>Type:</b> Ad copy' in message
+    assert '<b>Name:</b>' in message
+    assert '<b>Result:</b>' in message
+    assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
     assert '<b>Findings</b>' not in message
     assert '<b>Summary</b>' not in message
@@ -309,12 +309,35 @@ def test_telegram_message_omits_missing_source_sections(monkeypatch):
         },
         'findings':[],
     })
-    assert '<b>Creative</b>' not in message
-    assert '<b>Ad Copy</b>' in message
-    assert '<b>Name</b>' in message
-    assert '<b>Result</b>' in message
-    assert '<b>Report Link</b>' in message
+    assert 'Creative Vid' not in message
+    assert 'Creative Image' not in message
+    assert '<b>Type:</b> Ad copy' in message
+    assert '<b>Name:</b>' in message
+    assert '<b>Result:</b>' in message
+    assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
+
+def test_telegram_message_labels_image_creatives(monkeypatch):
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    record=JobRecord(
+        job_id='image123',
+        file_name='static-ad.png',
+        status=JobStatus.complete,
+        progress=100,
+        message='Complete',
+        report_ready=True,
+        has_ad_copy=False,
+        has_creative=True,
+    )
+    message=build_review_message(record, {
+        'overall_status':'needs_review',
+        'source_results':{
+            'creative':{'status':'needs_review','summary':'Image needs review.'},
+        },
+        'findings':[],
+    }, media_kind='image')
+    assert '<b>Type:</b> Creative Image' in message
+    assert 'static-ad.png' in message
 
 def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'

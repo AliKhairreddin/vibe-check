@@ -91,7 +91,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         report_json=report.model_dump(mode='json')
         set_report(job_id, report_json)
         rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
-        send_review_message(rec, report_json, meta.ad_copy)
+        send_review_message(rec, report_json, meta.ad_copy, media_kind)
     except Exception as e:
         set_status(job_id, JobStatus.failed, 100, str(e))
     finally:
