@@ -1,7 +1,13 @@
 import { Container } from "@cloudflare/containers";
 
 const BACKEND_INSTANCE = "primary";
-type OptionalSecrets = Env & { APP_PASSWORD?: string };
+type OptionalSecrets = Env & {
+  APP_PASSWORD?: string;
+  APP_PUBLIC_URL?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_CHAT_ID?: string;
+  TELEGRAM_MESSAGE_THREAD_ID?: string;
+};
 
 export class ReviewBackend extends Container<Env> {
   defaultPort = 8000;
@@ -13,6 +19,7 @@ export class ReviewBackend extends Container<Env> {
     this.envVars = {
       APP_PASSWORD: optionalSecrets.APP_PASSWORD ?? "",
       APP_ALLOWED_HOSTS: env.APP_ALLOWED_HOSTS,
+      APP_PUBLIC_URL: optionalSecrets.APP_PUBLIC_URL ?? "",
       CONVEX_HTTP_SECRET: env.CONVEX_HTTP_SECRET,
       CONVEX_URL: env.CONVEX_URL,
       JOB_DATA_DIR: env.JOB_DATA_DIR,
@@ -21,6 +28,9 @@ export class ReviewBackend extends Container<Env> {
       OPENROUTER_MODEL: env.OPENROUTER_MODEL,
       OPENROUTER_STT_MODEL: env.OPENROUTER_STT_MODEL,
       OPENROUTER_STT_LANGUAGE: env.OPENROUTER_STT_LANGUAGE,
+      TELEGRAM_BOT_TOKEN: optionalSecrets.TELEGRAM_BOT_TOKEN ?? "",
+      TELEGRAM_CHAT_ID: optionalSecrets.TELEGRAM_CHAT_ID ?? "",
+      TELEGRAM_MESSAGE_THREAD_ID: optionalSecrets.TELEGRAM_MESSAGE_THREAD_ID ?? "",
     };
   }
 }

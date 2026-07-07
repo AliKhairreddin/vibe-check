@@ -4,6 +4,7 @@ from pathlib import Path
 from .media import MediaKind, image_metadata, prepare_image_frame
 from .models import JobStatus, ReviewRequestMeta
 from .storage import job_dir, set_report, set_status, write_json
+from .telegram import send_review_message
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_policy_context
@@ -87,8 +88,10 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         report=await review_with_openrouter(evidence, meta.model)
         if evidence_note not in report.limitations:
             report.limitations.append(evidence_note)
-        set_report(job_id, report.model_dump(mode='json'))
-        set_status(job_id, JobStatus.complete, 100, 'Complete')
+        report_json=report.model_dump(mode='json')
+        set_report(job_id, report_json)
+        rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
+        send_review_message(rec, report_json, meta.ad_copy)
     except Exception as e:
         set_status(job_id, JobStatus.failed, 100, str(e))
     finally:

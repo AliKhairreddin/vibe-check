@@ -51,6 +51,8 @@ printf '%s' "$shared_secret" | pnpm exec convex env set --deployment energetic-p
 printf '%s' "$shared_secret" | pnpm exec wrangler secret put CONVEX_HTTP_SECRET
 
 pnpm exec wrangler secret put OPENROUTER_API_KEY
+pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
+pnpm exec wrangler secret put TELEGRAM_CHAT_ID
 ```
 
 The production Convex URL is configured as `https://energetic-partridge-813.convex.cloud` in `wrangler.jsonc`. Keep `CONVEX_HTTP_SECRET` out of git and set the same random value in both Convex and Cloudflare.
@@ -102,6 +104,10 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 - `CONVEX_URL`: Convex deployment URL ending in `.convex.cloud`. This is non-secret config in `wrangler.jsonc`.
 - `CONVEX_HTTP_SECRET`: shared secret used by the container when writing to Convex. Store the same value in Convex env vars and Cloudflare Worker secrets.
 - `APP_PASSWORD`: optional simple API password gate for deployed MVP.
+- `APP_PUBLIC_URL`: public app URL used when Telegram notifications link to completed reports.
+- `TELEGRAM_BOT_TOKEN`: optional bot token for completed-review Telegram alerts. Store as a Cloudflare Worker secret.
+- `TELEGRAM_CHAT_ID`: optional group chat id for completed-review Telegram alerts. Store as a Cloudflare Worker secret.
+- `TELEGRAM_MESSAGE_THREAD_ID`: optional Telegram topic/thread id when posting into a forum topic.
 - `MAX_UPLOAD_MB`: upload limit, default `200`.
 - `JOB_DATA_DIR`: scratch job artifact directory inside the container, default `/tmp/vibe-check/jobs` in Cloudflare.
 

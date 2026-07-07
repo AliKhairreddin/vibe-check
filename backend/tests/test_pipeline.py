@@ -2,7 +2,7 @@ import json
 import asyncio
 from pathlib import Path
 from app.main import copy_review_file_name
-from app.review_pipeline.models import ComplianceReport, JobStatus, ReviewRequestMeta
+from app.review_pipeline.models import ComplianceReport, JobRecord, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
@@ -10,6 +10,7 @@ from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import set_status, get_status, set_report, get_report, list_reviews
+from app.review_pipeline.telegram import build_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from PIL import Image
 
@@ -238,6 +239,82 @@ def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
     history=list_reviews()
     assert history[0].creative_result=='pass'
     assert history[0].ad_copy_result=='needs_review'
+
+def test_telegram_message_includes_minimal_split_results_and_report_links(monkeypatch):
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    record=JobRecord(
+        job_id='abc123',
+        file_name='summer-drive-video.mp4',
+        status=JobStatus.complete,
+        progress=100,
+        message='Complete',
+        report_ready=True,
+        has_ad_copy=True,
+        has_creative=True,
+        created_at=1783450800000,
+    )
+    message=build_review_message(record, {
+        'overall_status':'needs_review',
+        'summary':'overall mixed result',
+        'source_results':{
+            'creative':{
+                'status':'pass',
+                'summary':'Creative surfaces are clear and do not contain restricted visual claims.',
+            },
+            'ad_copy':{
+                'status':'likely_violation',
+                'summary':'Caption includes a guaranteed savings claim that needs support.',
+            },
+        },
+        'findings':[{
+            'severity':'high',
+            'source':'ad_copy',
+            'evidence':'Unsupported guaranteed savings claim',
+            'policy_reason':'Savings claims need substantiation',
+            'suggested_fix':'Soften the claim or add clear substantiation.',
+            'confidence':'high',
+        }],
+    }, 'Save $600 this month')
+    assert '<b>Creative</b>' in message
+    assert '<b>Ad Copy</b>' in message
+    assert '<b>Name</b>' in message
+    assert '<b>Result</b>' in message
+    assert '<b>Report Link</b>' in message
+    assert 'Open report' in message
+    assert '<b>Findings</b>' not in message
+    assert '<b>Summary</b>' not in message
+    assert 'Ad copy: Save $600 this month' in message
+    assert 'Unsupported guaranteed savings claim' not in message
+    assert 'Caption includes a guaranteed' not in message
+    assert message.count('/reviews/abc123/report') == 2
+
+def test_telegram_message_omits_missing_source_sections(monkeypatch):
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    record=JobRecord(
+        job_id='copy123',
+        file_name='Ad copy: Save today.',
+        status=JobStatus.complete,
+        progress=100,
+        message='Complete',
+        report_ready=True,
+        has_ad_copy=True,
+        has_creative=False,
+        created_at=1783450800000,
+    )
+    message=build_review_message(record, {
+        'overall_status':'pass',
+        'summary':'copy is clear',
+        'source_results':{
+            'ad_copy':{'status':'pass','summary':'Copy is clear.'},
+        },
+        'findings':[],
+    })
+    assert '<b>Creative</b>' not in message
+    assert '<b>Ad Copy</b>' in message
+    assert '<b>Name</b>' in message
+    assert '<b>Result</b>' in message
+    assert '<b>Report Link</b>' in message
+    assert 'Open report' in message
 
 def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'

@@ -38,10 +38,16 @@
     }
   ],
   "secrets": {
-    "required": ["CONVEX_HTTP_SECRET", "OPENROUTER_API_KEY"]
+    "required": [
+      "CONVEX_HTTP_SECRET",
+      "OPENROUTER_API_KEY",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHAT_ID"
+    ]
   },
   "vars": {
     "APP_ALLOWED_HOSTS": "vibe-check.thatcanadian.dev",
+    "APP_PUBLIC_URL": "https://vibe-check.thatcanadian.dev",
     "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
     "MAX_UPLOAD_MB": "200",
