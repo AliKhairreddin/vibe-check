@@ -52,8 +52,15 @@
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
     "MAX_UPLOAD_MB": "200",
     "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash",
+    "OPENROUTER_VISION_ENABLED": "true",
+    "OPENROUTER_VISION_MODEL": "minimax/minimax-m3",
+    "OPENROUTER_VISION_MAX_FRAMES": "12",
+    "OPENROUTER_VISION_MAX_IMAGE_EDGE": "1024",
+    "OPENROUTER_VISION_JPEG_QUALITY": "75",
     "OPENROUTER_STT_MODEL": "openai/whisper-large-v3",
-    "OPENROUTER_STT_LANGUAGE": ""
+    "OPENROUTER_STT_LANGUAGE": "",
+    "OPENROUTER_STT_CHUNK_SECONDS": "10",
+    "OPENROUTER_STT_MAX_CHUNKS": "30"
   },
   "observability": {
     "enabled": true,

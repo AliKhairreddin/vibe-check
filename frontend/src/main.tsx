@@ -105,7 +105,8 @@ const SOURCE_LABELS: Record<Finding['source'], string> = {
   policy: 'Policy',
   visual: 'Visual',
 };
-const STATUS_LABELS: Record<OverallStatus | 'complete' | 'failed', string> = {
+const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | 'failed', string> = {
+  analyzing_visuals: 'Analyzing Visuals',
   complete: 'Complete',
   failed: 'Failed',
   likely_violation: 'Likely Violation',

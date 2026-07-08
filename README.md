@@ -1,6 +1,6 @@
 # Ad Compliance Creative Reviewer
 
-Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives, or standalone pasted ad copy, against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, extracts WAV audio and samples video frames with `ffmpeg`, prepares still images for OCR with Pillow, runs OCR with Tesseract, transcribes audio through OpenRouter Speech-to-Text with a manual transcript override, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
+Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives, or standalone pasted ad copy, against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, extracts WAV audio and samples video frames with `ffmpeg`, prepares still images for OCR with Pillow, runs OCR with Tesseract, transcribes audio through OpenRouter Speech-to-Text with a manual transcript override, optionally extracts compact visual observations from sampled frames with an OpenRouter vision model, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
 
 ## Stack
 
@@ -14,7 +14,7 @@ Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives, or sta
 
 - Static frontend routes are served from `frontend/dist` via Workers Static Assets.
 - `/api/*` routes are forwarded to a Cloudflare Container running the FastAPI backend.
-- Uploaded creatives, extracted audio, sampled frames, prepared image frames, and OCR artifacts stay in temporary container scratch space only.
+- Uploaded creatives, extracted audio, sampled frames, prepared image frames, OCR artifacts, and visual observation artifacts stay in temporary container scratch space only.
 - Convex stores the uploaded filename, job status/progress, and final compliance report JSON.
 
 R2 is not required for this MVP because uploaded creatives and frame artifacts are intentionally not durable.
@@ -98,8 +98,15 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 - `OPENROUTER_API_KEY`: required for real LLM review and automatic audio transcription. Store as a Cloudflare Worker secret.
 - `OPENROUTER_MODEL`: default model, currently `deepseek/deepseek-v4-flash`.
+- `OPENROUTER_VISION_ENABLED`: set to `false` to skip sampled-frame vision review, default `true`.
+- `OPENROUTER_VISION_MODEL`: vision pre-pass model, currently `minimax/minimax-m3`.
+- `OPENROUTER_VISION_MAX_FRAMES`: maximum sampled frames sent to the vision model per creative, default `12`.
+- `OPENROUTER_VISION_MAX_IMAGE_EDGE`: resized max image dimension before vision upload, default `1024`.
+- `OPENROUTER_VISION_JPEG_QUALITY`: JPEG quality for vision input frames, default `75`.
 - `OPENROUTER_STT_MODEL`: default speech-to-text model, currently `openai/whisper-large-v3`.
 - `OPENROUTER_STT_LANGUAGE`: optional ISO-639-1 transcription language code. Leave empty for auto-detection.
+- `OPENROUTER_STT_CHUNK_SECONDS`: automatic transcript chunk size for approximate audio timestamps, default `10`.
+- `OPENROUTER_STT_MAX_CHUNKS`: maximum automatic transcript chunks, default `30`.
 - `CONVEX_DEPLOYMENT`: Convex deployment selector for CLI commands, currently `prod:energetic-partridge-813`.
 - `CONVEX_URL`: Convex deployment URL ending in `.convex.cloud`. This is non-secret config in `wrangler.jsonc`.
 - `CONVEX_HTTP_SECRET`: shared secret used by the container when writing to Convex. Store the same value in Convex env vars and Cloudflare Worker secrets.
@@ -124,19 +131,19 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Multi-creative uploads and multi-line copy-only submissions are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Multi-creative uploads and multi-line copy-only submissions are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 
-The backend does not send every full frame to the LLM by default. It sends transcript chunks, deduplicated OCR text, and sampled frame references. Increase frame sampling intervals to reduce OCR and storage cost. Use cheaper text models when you do not need vision review.
+The backend sends at most `OPENROUTER_VISION_MAX_FRAMES` resized sampled frames to the vision pre-pass, then sends only compact visual observations to the final compliance LLM. It also sends timestamped transcript chunks, deduplicated OCR text, and sampled frame references. Increase frame sampling intervals or lower the vision frame cap to reduce OCR, vision, and transcription cost.
 
 ## Limitations
 
 - 1 frame/sec can miss quick flashes.
 - OCR can miss stylized, animated, obscured, or tiny text.
-- Automatic transcription uses OpenRouter Speech-to-Text and requires `OPENROUTER_API_KEY`; paste a manual transcript when audio is unavailable or transcription fails.
+- Automatic transcription uses OpenRouter Speech-to-Text and requires `OPENROUTER_API_KEY`; automatic audio timestamps are approximate chunk ranges, not word-level alignment. Paste a manual transcript when audio is unavailable or transcription fails.
 - Long audio may exceed upstream transcription timeouts; short ad creatives are the intended MVP path.
-- Visual review depends on selected model capability and is conservative in this MVP because full video frames and still-image pixels are not sent by default.
+- Visual review depends on selected model capability and is based on capped, resized sampled frames rather than every video frame.
 - Automated review is not official platform approval and should be treated as decision support.
 
 ## Testing

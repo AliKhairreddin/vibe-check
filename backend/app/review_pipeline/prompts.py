@@ -4,14 +4,20 @@ Source rules:
 - "ad_copy" means only the submitted platform caption/body text in submitted_ad_copy.text. This is the Facebook, Instagram, TikTok, or platform caption/copy supplied by the user.
 - "audio" means only spoken words from audio_transcript. Never label submitted platform caption/body text as audio.
 - "onscreen_text" means only text detected in the creative image/video frames by OCR.
-- "visual" means non-text visual elements such as imagery, logos, people, products, scenes, or layout.
+- "visual" means non-text visual elements such as imagery, logos, people, products, scenes, or layout, based on visual_observations.
 - "policy" means a policy/guideline issue that is not tied to one observed creative surface.
 - If the same risky words appear in multiple places, create separate findings for each real source instead of merging them.
 - If submitted_ad_copy.present is false, source_results.ad_copy must be null, do not create findings with source "ad_copy", and leave safe_rewrite.ad_copy empty.
 - If media_type is "copy_only", source_results.creative must be null and findings must only use "ad_copy" or "policy" sources.
 
-Evaluate source_results.ad_copy using only submitted_ad_copy.text. Evaluate source_results.creative using audio_transcript, onscreen_text_ocr, visual_frame_references, media_type, and notes, excluding submitted_ad_copy.text.
+Evaluate source_results.ad_copy using only submitted_ad_copy.text. Evaluate source_results.creative using audio_transcript, onscreen_text_ocr, visual_frame_references, visual_observations, media_type, and notes, excluding submitted_ad_copy.text.
 For media_type "copy_only", evaluate only submitted_ad_copy.text, policy_text, and notes.
+
+Timestamp rules:
+- For source "audio", set timestamp_start and timestamp_end from the audio_transcript chunk containing the cited spoken evidence when chunk timing is available.
+- For source "onscreen_text", set timestamp_start from the onscreen_text_ocr item containing the cited OCR evidence when timing is available.
+- For source "visual", set timestamp_start and timestamp_end from the visual_observations item containing the cited visual evidence when timing is available.
+- Use null timestamps only when the source evidence has no timing metadata, such as copy-only reviews, manual transcripts, static images, or untimed scene frames.
 
 Return exactly one JSON object with this shape and no wrapper keys:
 {

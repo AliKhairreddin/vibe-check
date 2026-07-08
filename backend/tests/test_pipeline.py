@@ -12,6 +12,7 @@ from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import set_status, get_status, set_report, get_report, list_reviews
 from app.review_pipeline.telegram import build_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
+from app.review_pipeline.vision import select_frame_records
 from PIL import Image
 
 def test_report_schema_validation():
@@ -33,12 +34,14 @@ def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
         {'source':'manual','chunks':[{'text':'Spoken transcript.'}]},
         [{'text':'On-screen words.'}],
         [{'filename':'frame_000001.jpg','timestamp':1.0}],
+        {'source':'openrouter_vision','observations':[{'filename':'frame_000001.jpg','timestamp_start':'1','scene':'Person holding paperwork.'}]},
         'Evidence note.',
     )
     assert 'ad_copy' not in evidence
     assert evidence['submitted_ad_copy'] == {'present': True, 'text': 'Facebook caption text.'}
     assert evidence['audio_transcript']['chunks'][0]['text'] == 'Spoken transcript.'
     assert evidence['onscreen_text_ocr'][0]['text'] == 'On-screen words.'
+    assert evidence['visual_observations']['observations'][0]['scene'] == 'Person holding paperwork.'
     assert 'platform caption/body' in evidence['source_definitions']['ad_copy']
 
 def test_review_evidence_supports_copy_only_jobs():
@@ -51,6 +54,7 @@ def test_review_evidence_supports_copy_only_jobs():
         {'source':'not_applicable','chunks':[], 'limitations':['No creative was submitted.']},
         [],
         [],
+        {'source':'not_applicable','observations':[]},
         'No creative was submitted; review is based on submitted ad copy, policy text, and notes only.',
     )
     assert evidence['media_type']=='copy_only'
@@ -58,6 +62,7 @@ def test_review_evidence_supports_copy_only_jobs():
     assert evidence['audio_transcript']['chunks'] == []
     assert evidence['onscreen_text_ocr'] == []
     assert evidence['visual_frame_references'] == []
+    assert evidence['visual_observations']['observations'] == []
 
 def test_copy_review_file_name_uses_copy_preview():
     label=copy_review_file_name('  Save money now with a very long claim that should still make a compact history label for reviewers.  ')
@@ -420,3 +425,43 @@ def test_transcribe_uses_openrouter_stt(tmp_path, monkeypatch):
     assert calls['json']['input_audio']['format']=='wav'
     assert calls['json']['input_audio']['data']=='dGVzdCBhdWRpbw=='
     assert calls['json']['language']=='en'
+
+def test_transcribe_splits_audio_into_timestamped_chunks(tmp_path, monkeypatch):
+    audio=tmp_path/'audio.wav'
+    audio.write_bytes(b'test audio')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_STT_CHUNK_SECONDS', '5')
+    monkeypatch.setenv('OPENROUTER_STT_MAX_CHUNKS', '10')
+    monkeypatch.setattr('app.review_pipeline.audio._audio_duration_seconds', lambda path: 12.0)
+
+    extracted=[]
+    def fake_extract(source, target, start, duration):
+        extracted.append((start, duration))
+        target.write_bytes(f'chunk {start}'.encode())
+
+    def fake_post(client, chunk_path, model, language):
+        return {'text':f'transcript {chunk_path.stem}', 'usage':{'seconds':1}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout=timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr('app.review_pipeline.audio._extract_audio_segment', fake_extract)
+    monkeypatch.setattr('app.review_pipeline.audio._post_transcription', fake_post)
+    monkeypatch.setattr('app.review_pipeline.audio.httpx.Client', FakeClient)
+
+    transcript=transcribe(audio)
+    assert transcript['source']=='openrouter'
+    assert extracted == [(0, 5), (5, 5), (10, 2.0)]
+    assert [chunk['timestamp_start'] for chunk in transcript['chunks']] == [0, 5, 10]
+    assert [chunk['timestamp_end'] for chunk in transcript['chunks']] == [5, 10, 12.0]
+    assert transcript['usage']['seconds'] == 3
+
+def test_select_frame_records_samples_evenly():
+    frames=[{'filename':f'frame_{index}.jpg','timestamp':index} for index in range(10)]
+    selected=select_frame_records(frames, 4)
+    assert [frame['filename'] for frame in selected] == ['frame_0.jpg', 'frame_3.jpg', 'frame_6.jpg', 'frame_9.jpg']

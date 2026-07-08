@@ -9,9 +9,10 @@ from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_policy_context
 from .ocr import run_ocr
+from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 
-INTERMEDIATE_FILES=('request.json','metadata.json','frames.json','ocr.json','transcript.json')
+INTERMEDIATE_FILES=('request.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 
 def build_review_evidence(
     media_kind: MediaKind,
@@ -21,6 +22,7 @@ def build_review_evidence(
     transcript: dict,
     ocr: list[dict],
     frames: list[dict],
+    visual_observations: dict | None,
     evidence_note: str,
 ) -> dict:
     return {
@@ -28,7 +30,7 @@ def build_review_evidence(
             'ad_copy': 'Submitted platform caption/body text from the form only.',
             'audio': 'Spoken words from the extracted or manually supplied audio transcript only.',
             'onscreen_text': 'Text detected inside creative frames by OCR only.',
-            'visual': 'Non-text visual creative elements and frame references.',
+            'visual': 'Non-text visual creative elements observed from sampled image/video frames.',
             'policy': 'Supplied saved or pasted policy/guideline text.',
         },
         'media_type': media_kind,
@@ -39,6 +41,7 @@ def build_review_evidence(
         'audio_transcript': transcript,
         'onscreen_text_ocr': ocr[:200],
         'visual_frame_references': frames[:200],
+        'visual_observations': visual_observations or {'source':'not_run','observations':[]},
         'policy_text': policy_text,
         'policy_sources': policy_sources,
         'notes': meta.notes,
@@ -52,10 +55,12 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         if media_kind == 'copy_only':
             frames=[]
             ocr=[]
+            visual_observations={'source':'not_applicable','observations':[], 'limitations':['No creative was submitted for visual review.']}
             transcript={'source':'not_applicable','chunks':[], 'limitations':['No creative was submitted for this review.']}
             evidence_note='No creative was submitted; review is based on submitted ad copy, policy text, and notes only.'
             write_json(jd/'frames.json', frames)
             write_json(jd/'ocr.json', ocr)
+            write_json(jd/'visual_observations.json', visual_observations)
             write_json(jd/'transcript.json', transcript)
             set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing ad copy with LLM', has_ad_copy=meta.has_ad_copy, has_creative=False)
         else:
@@ -68,23 +73,26 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 await anyio.to_thread.run_sync(extract_audio, media_path, audio_path)
                 set_status(job_id, JobStatus.extracting_frames, 40, 'Sampling frames')
                 frames=await anyio.to_thread.run_sync(extract_frames, media_path, jd/'frames', meta.frame_interval_seconds, meta.scene_detection)
-                evidence_note='Full video frames are not sent by default; OCR, transcript chunks, and frame references are used.'
+                evidence_note='Selected sampled video frames may be sent to a vision model; the final LLM receives OCR, transcript chunks, frame references, and compact visual observations.'
             else:
                 set_status(job_id, JobStatus.processing_image, 10, 'Reading image metadata')
                 write_json(jd/'metadata.json', await anyio.to_thread.run_sync(image_metadata, media_path))
                 set_status(job_id, JobStatus.extracting_frames, 40, 'Preparing image for OCR')
                 frames=await anyio.to_thread.run_sync(prepare_image_frame, media_path, jd/'frames')
-                evidence_note='Full image pixels are not sent by default; OCR, supplied copy, notes, and image metadata are used.'
+                evidence_note='The prepared still image frame may be sent to a vision model; the final LLM receives OCR, supplied copy, notes, image metadata, and compact visual observations.'
             write_json(jd/'frames.json', frames)
             set_status(job_id, JobStatus.running_ocr, 60, 'Running OCR')
             ocr=await anyio.to_thread.run_sync(run_ocr, jd/'frames', frames)
             write_json(jd/'ocr.json', ocr)
-            set_status(job_id, JobStatus.preparing_transcript, 75, 'Preparing transcript')
+            set_status(job_id, JobStatus.analyzing_visuals, 70, 'Analyzing sampled frames with vision model')
+            visual_observations=await observe_frames_with_openrouter(jd/'frames', frames, ocr)
+            write_json(jd/'visual_observations.json', visual_observations)
+            set_status(job_id, JobStatus.preparing_transcript, 80, 'Preparing timestamped transcript')
             transcript=await anyio.to_thread.run_sync(transcribe, audio_path, meta.manual_transcript)
             write_json(jd/'transcript.json', transcript)
-            set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing with LLM')
+            set_status(job_id, JobStatus.reviewing_with_llm, 90, 'Reviewing with LLM')
         policy_text, policy_sources=build_policy_context(meta.policy_text)
-        evidence=build_review_evidence(media_kind, meta, policy_text, policy_sources, transcript, ocr, frames, evidence_note)
+        evidence=build_review_evidence(media_kind, meta, policy_text, policy_sources, transcript, ocr, frames, visual_observations, evidence_note)
         report=await review_with_openrouter(evidence, meta.model)
         if evidence_note not in report.limitations:
             report.limitations.append(evidence_note)
