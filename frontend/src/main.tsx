@@ -23,11 +23,16 @@ import {
 } from '@tanstack/react-table';
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   Download,
   ExternalLink,
   FileImage,
   FileJson,
+  FolderOpen,
+  HardDrive,
+  Laptop,
+  LoaderCircle,
   Moon,
   RefreshCw,
   Search,
@@ -75,6 +80,7 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
+  createDriveReview,
   createReviewBatch,
   createReview,
   type Finding,
@@ -82,6 +88,7 @@ import {
   getReport,
   getReviewSources,
   getStatus,
+  listDriveCreatives,
   listReviews,
   reportBatchUploadFailure,
   type OverallStatus,
@@ -92,7 +99,8 @@ import {
 } from '@/lib/api';
 
 type Theme = 'light' | 'dark';
-type UploadPhase = 'pending' | 'uploading' | 'queued' | 'failed';
+type CreativeSource = 'drive' | 'computer';
+type UploadPhase = 'pending' | 'uploading' | 'importing' | 'queued' | 'failed';
 
 type BatchItem = {
   id: string;
@@ -103,6 +111,7 @@ type BatchItem = {
   phase: UploadPhase;
   batchId?: string;
   mediaKind: 'video' | 'image' | 'copy_only';
+  driveFileId?: string;
   jobId?: string;
   error?: string;
 };
@@ -268,12 +277,32 @@ const rootRoute = createRootRoute({ component: AppShell });
 
 function Home() {
   const [sceneDetection, setSceneDetection] = useState(false);
+  const [creativeSource, setCreativeSource] = useState<CreativeSource>('drive');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedDriveIds, setSelectedDriveIds] = useState<Set<string>>(new Set());
+  const [driveSearch, setDriveSearch] = useState('');
   const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const adCopyLines = useMemo(() => splitAdCopyLines(adCopyText), [adCopyText]);
+
+  const driveFilesQuery = useQuery({
+    queryKey: ['drive', 'creatives'],
+    queryFn: listDriveCreatives,
+    enabled: creativeSource === 'drive',
+    staleTime: 60_000,
+  });
+  const filteredDriveFiles = useMemo(() => {
+    const query = driveSearch.trim().toLocaleLowerCase();
+    const files = driveFilesQuery.data ?? [];
+    return query ? files.filter((file) => file.name.toLocaleLowerCase().includes(query)) : files;
+  }, [driveFilesQuery.data, driveSearch]);
+  const selectedDriveFiles = useMemo(
+    () => (driveFilesQuery.data ?? []).filter((file) => selectedDriveIds.has(file.file_id)),
+    [driveFilesQuery.data, selectedDriveIds]
+  );
+  const creativeCount = creativeSource === 'drive' ? selectedDriveFiles.length : selectedFiles.length;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -347,17 +376,19 @@ function Home() {
 
     const form = event.currentTarget;
     const fileInput = form.elements.namedItem('creative') as HTMLInputElement | null;
-    const files = Array.from(fileInput?.files ?? []);
-    const copyOnly = files.length === 0;
+    const files = creativeSource === 'computer' ? Array.from(fileInput?.files ?? []) : [];
+    const driveFiles = creativeSource === 'drive' ? selectedDriveFiles : [];
+    const creatives = creativeSource === 'drive' ? driveFiles : files;
+    const copyOnly = creatives.length === 0;
 
-    if (!files.length && !adCopyLines.length) {
+    if (!creatives.length && !adCopyLines.length) {
       setSubmitError('Choose at least one creative or enter ad copy to review.');
       return;
     }
 
     const sharedFields = new FormData(form);
     sharedFields.set('model', loadOpenRouterModel());
-    const batchId = (copyOnly ? adCopyLines.length : files.length) > 1 ? randomId() : undefined;
+    const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
     const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
           id: randomId(),
@@ -369,17 +400,18 @@ function Home() {
           uploadProgress: 0,
           phase: 'pending' as const,
         }))
-      : files.map((file, index) => ({
+      : creatives.map((file) => ({
           id: randomId(),
           batchId,
           fileName: file.name,
           kind: 'creative' as const,
-          mediaKind: file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')
+          mediaKind: ('mime_type' in file ? file.mime_type : file.type).startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')
             ? 'video' as const
             : 'image' as const,
-          size: file.size,
+          size: file.size ?? 0,
           uploadProgress: 0,
           phase: 'pending' as const,
+          driveFileId: 'file_id' in file ? file.file_id : undefined,
         }));
 
     setBatchItems(nextItems);
@@ -399,20 +431,31 @@ function Home() {
       await runWithConcurrency(nextItems, UPLOAD_CONCURRENCY, async (item, index) => {
         const copyLine = copyOnly ? adCopyLines[index] : undefined;
         const file = copyOnly ? null : files[index] ?? null;
-        updateBatchItem(item.id, { phase: 'uploading' });
+        const driveFile = item.driveFileId
+          ? driveFiles.find((candidate) => candidate.file_id === item.driveFileId)
+          : undefined;
+        updateBatchItem(item.id, { phase: driveFile ? 'importing' : 'uploading' });
 
         try {
-          const status = await createReview(
-            buildReviewForm(
-              sharedFields,
-              file,
-              sceneDetection,
-              copyLine,
-              batchId,
-              item.id
-            ),
-            (progress) => updateBatchItem(item.id, { uploadProgress: progress })
-          );
+          const status = driveFile
+            ? await createDriveReview(buildDriveReviewInput(
+                sharedFields,
+                driveFile.file_id,
+                sceneDetection,
+                batchId,
+                item.id
+              ))
+            : await createReview(
+                buildReviewForm(
+                  sharedFields,
+                  file,
+                  sceneDetection,
+                  copyLine,
+                  batchId,
+                  item.id
+                ),
+                (progress) => updateBatchItem(item.id, { uploadProgress: progress })
+              );
           updateBatchItem(item.id, {
             jobId: status.job_id,
             phase: 'queued',
@@ -459,33 +502,183 @@ function Home() {
         <CardHeader>
           <CardTitle as="h1" className="text-xl">Review workspace</CardTitle>
           <CardDescription>
-            Upload ad creatives or review platform copy by itself.
+            Select creatives from Google Drive, upload from your computer, or review copy by itself.
           </CardDescription>
           <CardAction>
             <Badge variant="outline">
-              {selectionBadgeLabel(selectedFiles.length, adCopyLines.length)}
+              {selectionBadgeLabel(creativeCount, adCopyLines.length)}
             </Badge>
           </CardAction>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="grid gap-5">
-            <div className="grid gap-2">
-              <Label htmlFor="creative">Ad creatives</Label>
-              <Input
-                id="creative"
-                multiple
-                name="creative"
-                type="file"
-                accept="video/mp4,image/jpeg,image/png,image/webp"
-                aria-describedby="creative-help"
-                className="h-auto min-h-20 cursor-pointer border-dashed py-5 file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-2 hover:file:bg-accent"
-                onChange={(event) => {
-                  setSelectedFiles(Array.from(event.currentTarget.files ?? []));
-                }}
-              />
-              <p id="creative-help" className="text-xs leading-5 text-muted-foreground">
-                MP4, JPG, PNG, or WebP · up to 200 MB each · batches start four at a time
-              </p>
+            <div className="grid gap-3">
+              <Label>Ad creatives</Label>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="tablist" aria-label="Creative source">
+                <Button
+                  type="button"
+                  variant={creativeSource === 'drive' ? 'secondary' : 'ghost'}
+                  aria-selected={creativeSource === 'drive'}
+                  role="tab"
+                  onClick={() => {
+                    setCreativeSource('drive');
+                    setSelectedFiles([]);
+                  }}
+                >
+                  <HardDrive />
+                  Google Drive
+                </Button>
+                <Button
+                  type="button"
+                  variant={creativeSource === 'computer' ? 'secondary' : 'ghost'}
+                  aria-selected={creativeSource === 'computer'}
+                  role="tab"
+                  onClick={() => {
+                    setCreativeSource('computer');
+                    setSelectedDriveIds(new Set());
+                  }}
+                >
+                  <Laptop />
+                  This computer
+                </Button>
+              </div>
+
+              {creativeSource === 'drive' ? (
+                <div className="grid gap-3 rounded-lg border bg-muted/10 p-3" role="tabpanel">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={driveSearch}
+                        onChange={(event) => setDriveSearch(event.currentTarget.value)}
+                        className="pl-8"
+                        placeholder="Search creative names"
+                        aria-label="Search Google Drive creatives"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!filteredDriveFiles.length}
+                        onClick={() => setSelectedDriveIds((current) => {
+                          const next = new Set(current);
+                          filteredDriveFiles.forEach((file) => next.add(file.file_id));
+                          return next;
+                        })}
+                      >
+                        Select shown
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={!selectedDriveIds.size}
+                        onClick={() => setSelectedDriveIds(new Set())}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+
+                  {driveFilesQuery.isLoading ? (
+                    <div className="flex min-h-28 items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <LoaderCircle className="size-4 animate-spin" />
+                      Loading shared Drive creatives…
+                    </div>
+                  ) : driveFilesQuery.error ? (
+                    <Alert variant="destructive">
+                      <AlertCircle />
+                      <AlertTitle>Could not load Google Drive</AlertTitle>
+                      <AlertDescription>{errorMessage(driveFilesQuery.error)}</AlertDescription>
+                      <AlertAction>
+                        <Button type="button" size="xs" variant="outline" onClick={() => void driveFilesQuery.refetch()}>
+                          <RefreshCw />
+                          Retry
+                        </Button>
+                      </AlertAction>
+                    </Alert>
+                  ) : filteredDriveFiles.length ? (
+                    <div className="grid max-h-72 gap-1 overflow-y-auto pr-1" aria-label="Google Drive creative files">
+                      {filteredDriveFiles.map((file) => {
+                        const selected = selectedDriveIds.has(file.file_id);
+                        return (
+                          <div
+                            key={file.file_id}
+                            className={cn(
+                              'flex items-center gap-2 rounded-lg border bg-background transition-colors',
+                              selected && 'border-primary/50 bg-primary/5'
+                            )}
+                          >
+                            <button
+                              type="button"
+                              aria-pressed={selected}
+                              className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
+                              onClick={() => setSelectedDriveIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(file.file_id)) next.delete(file.file_id);
+                                else next.add(file.file_id);
+                                return next;
+                              })}
+                            >
+                              <span className={cn(
+                                'grid size-5 shrink-0 place-items-center rounded border',
+                                selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'
+                              )}>
+                                {selected ? <Check className="size-3.5" /> : null}
+                              </span>
+                              <FileImage className="size-4 shrink-0 text-muted-foreground" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium">{file.name}</span>
+                                <span className="block text-xs text-muted-foreground">
+                                  {file.size ? formatBytes(file.size) : 'Size unavailable'}
+                                  {file.modified_time ? ` · ${formatDriveDate(file.modified_time)}` : ''}
+                                </span>
+                              </span>
+                            </button>
+                            <a
+                              href={file.web_view_link}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={`Open ${file.name} in Google Drive`}
+                              className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'mr-1')}
+                            >
+                              <ExternalLink />
+                            </a>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="grid min-h-28 place-items-center rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+                      <div className="grid gap-1">
+                        <FolderOpen className="mx-auto size-5" />
+                        <p>{driveSearch ? 'No creatives match this search.' : 'No supported creatives were found in this Drive folder.'}</p>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    Select MP4, JPG, PNG, or WebP files. The service imports them directly and keeps their exact Drive links.
+                  </p>
+                </div>
+              ) : (
+                <div role="tabpanel" className="grid gap-2">
+                  <Input
+                    id="creative"
+                    multiple
+                    name="creative"
+                    type="file"
+                    accept="video/mp4,image/jpeg,image/png,image/webp"
+                    aria-describedby="creative-help"
+                    className="h-auto min-h-20 cursor-pointer border-dashed py-5 file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-2 hover:file:bg-accent"
+                    onChange={(event) => setSelectedFiles(Array.from(event.currentTarget.files ?? []))}
+                  />
+                  <p id="creative-help" className="text-xs leading-5 text-muted-foreground">
+                    MP4, JPG, PNG, or WebP · up to 200 MB each · batches start four at a time
+                  </p>
+                </div>
+              )}
             </div>
 
             <FormField label="Ad copy / platform captions" htmlFor="ad_copy">
@@ -571,20 +764,20 @@ function Home() {
             {submitError ? (
               <Alert variant="destructive">
                 <AlertCircle />
-                <AlertTitle>Upload blocked</AlertTitle>
+                <AlertTitle>Review blocked</AlertTitle>
                 <AlertDescription>{submitError}</AlertDescription>
               </Alert>
             ) : null}
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted-foreground">
-                {submissionHint(selectedFiles.length, adCopyLines.length)}
+                {submissionHint(creativeCount, adCopyLines.length)}
               </p>
               <Button type="submit" disabled={isSubmitting}>
                 <Upload data-icon="inline-start" />
                 {isSubmitting
                   ? 'Starting reviews…'
-                  : createButtonLabel(selectedFiles.length || adCopyLines.length)}
+                  : createButtonLabel(creativeCount || adCopyLines.length)}
               </Button>
             </div>
           </form>
@@ -595,7 +788,7 @@ function Home() {
           <CardHeader>
             <CardTitle className="text-xl">Batch progress</CardTitle>
             <CardDescription>
-              Four uploads and four reviews can run at once; the rest advance automatically.
+              Four jobs can start at once; Drive imports and local uploads advance automatically.
             </CardDescription>
             <CardAction>
               <div className="flex items-center gap-2">
@@ -1512,6 +1705,31 @@ function buildReviewForm(
   return form;
 }
 
+function buildDriveReviewInput(
+  source: FormData,
+  fileId: string,
+  sceneDetection: boolean,
+  batchId?: string,
+  batchItemId?: string
+) {
+  const value = (key: string) => {
+    const field = source.get(key);
+    return typeof field === 'string' ? field : '';
+  };
+  const frameInterval = Number(value('frame_interval_seconds'));
+  return {
+    file_id: fileId,
+    ad_copy: value('ad_copy'),
+    policy_text: value('policy_text'),
+    notes: value('notes'),
+    manual_transcript: value('manual_transcript'),
+    model: value('model'),
+    frame_interval_seconds: Number.isFinite(frameInterval) ? frameInterval : 1,
+    scene_detection: sceneDetection,
+    ...(batchId && batchItemId ? { batch_id: batchId, batch_item_id: batchItemId } : {}),
+  };
+}
+
 function loadOpenRouterModel() {
   if (typeof window === 'undefined') return DEFAULT_OPENROUTER_MODEL;
   return window.localStorage.getItem(OPENROUTER_MODEL_KEY)?.trim() || DEFAULT_OPENROUTER_MODEL;
@@ -1581,9 +1799,16 @@ function progressFor(item: BatchItem, status?: Status) {
 
 function phaseMessage(phase: UploadPhase, kind: BatchItem['kind']) {
   if (phase === 'uploading') return kind === 'ad_copy' ? 'Submitting' : 'Uploading';
+  if (phase === 'importing') return 'Starting Drive import';
   if (phase === 'queued') return 'Queued';
   if (phase === 'failed') return 'Failed';
   return kind === 'ad_copy' ? 'Pending submission' : 'Pending upload';
+}
+
+function formatDriveDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Modified date unavailable';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function formatStatus(status: string) {

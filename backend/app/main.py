@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, re, shutil, uuid
+import asyncio, json, os, re, shutil, uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
@@ -10,8 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
     BatchFailure,
     ComplianceReport,
+    CreateDriveReview,
     CreateReviewBatch,
+    DriveCreativeFile,
+    DriveCreativeList,
     JobRecord,
+    ReviewSource,
     ReviewSources,
     ReviewBatch,
     ReviewHistoryItem,
@@ -24,9 +28,12 @@ from .review_pipeline.storage import (
     get_status,
     job_dir,
     list_reviews,
+    now_ms,
+    set_review_source,
 )
 from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
 from .review_pipeline.media import detect_media_kind
+from .review_pipeline.drive import DriveLookupError, get_google_drive_client
 from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
 
@@ -136,6 +143,79 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
     rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name, file_size=size)
     return rec
+
+
+@app.get('/api/drive/files', response_model=DriveCreativeList)
+def drive_creatives():
+    try:
+        files = get_google_drive_client().list_creative_files()
+    except DriveLookupError as exc:
+        raise HTTPException(503, str(exc)) from None
+    return DriveCreativeList(files=[
+        DriveCreativeFile(
+            file_id=file.file_id,
+            name=file.name,
+            mime_type=file.mime_type,
+            size=file.size,
+            modified_time=file.modified_time,
+            web_view_link=file.web_view_link,
+        )
+        for file in files
+    ])
+
+
+@app.post('/api/drive/reviews', response_model=JobRecord)
+async def create_drive_review(payload: CreateDriveReview):
+    try:
+        drive_file = await asyncio.to_thread(get_google_drive_client().get_file, payload.file_id)
+    except DriveLookupError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+    file_name = Path(drive_file.name).name or 'drive-creative'
+    try:
+        media_kind = detect_media_kind(file_name, drive_file.mime_type)
+    except ValueError as exc:
+        raise HTTPException(415, str(exc)) from None
+    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '200')) * 1024 * 1024
+    if not drive_file.can_download:
+        raise HTTPException(403, 'This Google Drive file cannot be downloaded by the service account.')
+    if drive_file.size is not None and drive_file.size > max_bytes:
+        raise HTTPException(413, f'Max upload is {os.getenv("MAX_UPLOAD_MB", "200")} MB')
+
+    meta = ReviewRequestMeta(
+        ad_copy=payload.ad_copy.strip(),
+        policy_text=payload.policy_text,
+        notes=payload.notes,
+        manual_transcript=payload.manual_transcript,
+        model=payload.model or None,
+        frame_interval_seconds=payload.frame_interval_seconds,
+        scene_detection=payload.scene_detection,
+        batch_id=payload.batch_id or None,
+        batch_item_id=payload.batch_item_id or None,
+    )
+    job_id = uuid.uuid4().hex
+    jd = job_dir(job_id)
+    media_path = jd / file_name
+    (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
+    record = await enqueue_job(
+        job_id,
+        media_path,
+        media_kind,
+        meta,
+        file_name,
+        file_size=drive_file.size,
+        drive_file=drive_file,
+    )
+    set_review_source(job_id, ReviewSource(
+        kind='google_drive_file',
+        status='linked',
+        url=drive_file.web_view_link,
+        file_id=drive_file.file_id,
+        label='Open creative in Google Drive',
+        message=f'Selected “{file_name}” directly from the shared Drive folder.',
+        checked_at=now_ms(),
+    ))
+    return get_status(record.job_id)
 
 
 @app.post('/api/uploads')

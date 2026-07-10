@@ -28,6 +28,28 @@ export type ReviewSources = {
   sources: ReviewSource[];
 };
 
+export type DriveCreativeFile = {
+  file_id: string;
+  name: string;
+  mime_type: string;
+  size?: number | null;
+  modified_time?: string | null;
+  web_view_link: string;
+};
+
+export type CreateDriveReviewInput = {
+  file_id: string;
+  ad_copy: string;
+  policy_text: string;
+  notes: string;
+  manual_transcript: string;
+  model: string;
+  frame_interval_seconds: number;
+  scene_detection: boolean;
+  batch_id?: string;
+  batch_item_id?: string;
+};
+
 export type Finding = {
   severity: 'low' | 'medium' | 'high';
   source: 'audio' | 'onscreen_text' | 'visual' | 'ad_copy' | 'policy';
@@ -180,6 +202,19 @@ export async function createReview(
     request.onerror = () => reject(new Error('Network error while creating review'));
     request.onabort = () => reject(new Error('Review submission was cancelled'));
     request.send(form);
+  });
+}
+
+export async function listDriveCreatives(): Promise<DriveCreativeFile[]> {
+  const response = await requestJson<{ files: DriveCreativeFile[] }>('/api/drive/files');
+  return response.files;
+}
+
+export async function createDriveReview(input: CreateDriveReviewInput): Promise<Status> {
+  return requestJson<Status>('/api/drive/reviews', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
   });
 }
 

@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .drive import DriveFile, get_google_drive_client
 from .jobs import process_job
 from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
@@ -25,6 +26,7 @@ class QueuedReviewJob:
     media_path: Path | None
     media_kind: MediaKind
     meta: ReviewRequestMeta
+    drive_file: DriveFile | None = None
 
 
 _queue: asyncio.Queue[QueuedReviewJob] = asyncio.Queue()
@@ -62,6 +64,7 @@ async def enqueue_job(
     meta: ReviewRequestMeta,
     file_name: str,
     file_size: int | None = None,
+    drive_file: DriveFile | None = None,
 ):
     position = _queue.qsize() + 1
     message = 'Queued for processing'
@@ -79,8 +82,45 @@ async def enqueue_job(
         batch_id=meta.batch_id,
         batch_item_id=meta.batch_item_id,
     )
-    await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta))
+    await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta, drive_file))
     return record
+
+
+async def _download_drive_file(job: QueuedReviewJob) -> None:
+    if job.drive_file is None or job.media_path is None:
+        return
+    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '200')) * 1024 * 1024
+    last_progress = -1
+
+    def update_progress(downloaded: int, expected: int | None) -> None:
+        nonlocal last_progress
+        if expected and expected > 0:
+            progress = max(1, min(9, int((downloaded / expected) * 9)))
+        else:
+            progress = 5
+        if progress == last_progress:
+            return
+        last_progress = progress
+        set_status(
+            job.job_id,
+            JobStatus.downloading_from_drive,
+            progress,
+            f'Downloading from Google Drive ({progress * 100 // 9}%)',
+        )
+
+    set_status(
+        job.job_id,
+        JobStatus.downloading_from_drive,
+        1,
+        'Downloading from Google Drive',
+    )
+    await asyncio.to_thread(
+        get_google_drive_client().download_file,
+        job.drive_file,
+        job.media_path,
+        max_bytes=max_bytes,
+        progress_callback=update_progress,
+    )
 
 
 async def _process_queue(worker_index: int) -> None:
@@ -88,6 +128,7 @@ async def _process_queue(worker_index: int) -> None:
         job = await _queue.get()
         try:
             set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
+            await _download_drive_file(job)
             await process_job(job.job_id, job.media_path, job.media_kind, job.meta)
         except asyncio.CancelledError:
             raise
@@ -119,4 +160,7 @@ async def _process_queue(worker_index: int) -> None:
                     job.job_id,
                 )
         finally:
+            if job.drive_file is not None and job.media_path is not None:
+                job.media_path.unlink(missing_ok=True)
+                job.media_path.with_name(f'.{job.media_path.name}.drive-download').unlink(missing_ok=True)
             _queue.task_done()

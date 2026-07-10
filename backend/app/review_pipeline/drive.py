@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -29,6 +32,8 @@ class DriveFile:
     parents: tuple[str, ...]
     web_view_link: str
     size: int | None = None
+    modified_time: str | None = None
+    can_download: bool = True
 
 
 def escape_drive_query_value(value: str) -> str:
@@ -92,6 +97,21 @@ class GoogleDriveClient:
             return ()
         return tuple(parent for parent in parents if isinstance(parent, str))
 
+    def get_file(self, file_id: str, *, require_within_root: bool = True) -> DriveFile:
+        payload = self._get_json(
+            f'/files/{quote(file_id, safe="")}',
+            {
+                'fields': 'id,name,mimeType,parents,webViewLink,resourceKey,size,modifiedTime,capabilities(canDownload)',
+                'supportsAllDrives': 'true',
+            },
+        )
+        file = self._parse_file(payload)
+        if file is None:
+            raise DriveLookupError('Google Drive returned invalid file metadata.')
+        if require_within_root and not self._is_within_root(file):
+            raise DriveLookupError('The selected file is outside the configured Drive folder.')
+        return file
+
     def _is_within_root(self, file: DriveFile) -> bool:
         pending = list(file.parents)
         visited: set[str] = set()
@@ -135,6 +155,110 @@ class GoogleDriveClient:
                 return matches
             params['pageToken'] = page_token
 
+    def list_creative_files(self, *, max_files: int = 5000, max_folders: int = 1000) -> list[DriveFile]:
+        pending_folders = deque([self.root_folder_id])
+        visited_folders: set[str] = set()
+        creative_files: list[DriveFile] = []
+
+        while pending_folders:
+            folder_id = pending_folders.popleft()
+            if folder_id in visited_folders:
+                continue
+            visited_folders.add(folder_id)
+            if len(visited_folders) > max_folders:
+                raise DriveLookupError('The configured Drive folder has too many nested folders to browse.')
+
+            params = {
+                'corpora': 'user',
+                'fields': 'nextPageToken,files(id,name,mimeType,parents,webViewLink,resourceKey,size,modifiedTime,capabilities(canDownload))',
+                'includeItemsFromAllDrives': 'true',
+                'orderBy': 'folder,name_natural',
+                'pageSize': '1000',
+                'q': f"'{escape_drive_query_value(folder_id)}' in parents and trashed = false",
+                'spaces': 'drive',
+                'supportsAllDrives': 'true',
+            }
+            while True:
+                payload = self._get_json('/files', params)
+                files = payload.get('files')
+                if isinstance(files, list):
+                    for raw_file in files:
+                        parsed = self._parse_file(raw_file)
+                        if parsed is None:
+                            continue
+                        if parsed.mime_type == FOLDER_MIME_TYPE:
+                            pending_folders.append(parsed.file_id)
+                            continue
+                        if not parsed.can_download or not self._is_supported_creative(parsed):
+                            continue
+                        creative_files.append(parsed)
+                        if len(creative_files) > max_files:
+                            raise DriveLookupError('The configured Drive folder has too many creatives to browse.')
+                page_token = payload.get('nextPageToken')
+                if not isinstance(page_token, str) or not page_token:
+                    break
+                params['pageToken'] = page_token
+
+        return sorted(
+            creative_files,
+            key=lambda file: ((file.modified_time or ''), file.name.casefold()),
+            reverse=True,
+        )
+
+    def download_file(
+        self,
+        file: DriveFile,
+        destination: Path,
+        *,
+        max_bytes: int,
+        progress_callback: Callable[[int, int | None], None] | None = None,
+    ) -> int:
+        if not file.can_download:
+            raise DriveLookupError('This Google Drive file cannot be downloaded by the service account.')
+        if file.size is not None and file.size > max_bytes:
+            raise DriveLookupError(f'The Google Drive file exceeds the {max_bytes // (1024 * 1024)} MB limit.')
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f'.{destination.name}.drive-download')
+        downloaded = 0
+        try:
+            with httpx.stream(
+                'GET',
+                f'{DRIVE_API_BASE_URL}/files/{quote(file.file_id, safe="")}',
+                params={'alt': 'media', 'supportsAllDrives': 'true'},
+                headers={'authorization': self._authorization_header()},
+                timeout=httpx.Timeout(120.0, connect=20.0),
+                follow_redirects=True,
+            ) as response:
+                if not response.is_success:
+                    raise DriveLookupError(f'Google Drive download returned HTTP {response.status_code}.')
+                with temporary.open('wb') as output:
+                    for chunk in response.iter_bytes(1024 * 1024):
+                        downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise DriveLookupError(f'The Google Drive file exceeds the {max_bytes // (1024 * 1024)} MB limit.')
+                        output.write(chunk)
+                        if progress_callback:
+                            progress_callback(downloaded, file.size)
+            if downloaded <= 0:
+                raise DriveLookupError('The selected Google Drive file is empty.')
+            temporary.replace(destination)
+            return downloaded
+        except httpx.HTTPError as exc:
+            raise DriveLookupError('Google Drive could not download the selected file.') from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _is_supported_creative(file: DriveFile) -> bool:
+        from .media import detect_media_kind
+
+        try:
+            detect_media_kind(file.name, file.mime_type)
+        except ValueError:
+            return False
+        return True
+
     @staticmethod
     def _parse_file(raw_file: Any) -> DriveFile | None:
         if not isinstance(raw_file, dict):
@@ -157,6 +281,13 @@ class GoogleDriveClient:
             size = int(raw_size) if raw_size is not None else None
         except (TypeError, ValueError):
             size = None
+        modified_time = raw_file.get('modifiedTime')
+        if not isinstance(modified_time, str) or not modified_time:
+            modified_time = None
+        capabilities = raw_file.get('capabilities')
+        can_download = True
+        if isinstance(capabilities, dict) and capabilities.get('canDownload') is False:
+            can_download = False
         return DriveFile(
             file_id=file_id,
             name=name,
@@ -164,6 +295,8 @@ class GoogleDriveClient:
             parents=parent_ids,
             web_view_link=web_view_link,
             size=size,
+            modified_time=modified_time,
+            can_download=can_download,
         )
 
 

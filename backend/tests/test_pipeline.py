@@ -11,7 +11,7 @@ from app.review_pipeline import queue as review_queue
 from app.review_pipeline import telegram as review_telegram
 from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
-from app.review_pipeline.drive import DriveFile, GoogleDriveClient, escape_drive_query_value
+from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
@@ -200,6 +200,100 @@ def test_drive_search_keeps_only_files_inside_configured_root(monkeypatch):
     assert [match.file_id for match in matches] == ['inside']
     assert matches[0].size == 123
     assert calls[0][1]['q'] == "name = 'quinn\\'s ad.mp4' and trashed = false"
+
+def test_drive_browser_lists_supported_creatives_recursively(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+
+    def fake_get_json(path, params):
+        assert path == '/files'
+        if "'root-folder' in parents" in params['q']:
+            return {'files':[
+                {'id':'nested','name':'Nested','mimeType':'application/vnd.google-apps.folder','parents':['root-folder']},
+                {'id':'video','name':'latest.mp4','mimeType':'video/mp4','parents':['root-folder'],'size':'200','modifiedTime':'2026-07-10T12:00:00Z'},
+                {'id':'sheet','name':'Copy','mimeType':'application/vnd.google-apps.spreadsheet','parents':['root-folder']},
+            ]}
+        if "'nested' in parents" in params['q']:
+            return {'files':[
+                {'id':'image','name':'still.png','mimeType':'image/png','parents':['nested'],'size':'100','modifiedTime':'2026-07-09T12:00:00Z'},
+                {'id':'blocked','name':'blocked.jpg','mimeType':'image/jpeg','parents':['nested'],'capabilities':{'canDownload':False}},
+            ]}
+        raise AssertionError(params['q'])
+
+    monkeypatch.setattr(client, '_get_json', fake_get_json)
+    files=client.list_creative_files()
+
+    assert [file.file_id for file in files] == ['video', 'image']
+    assert files[0].size == 200
+    assert files[0].modified_time == '2026-07-10T12:00:00Z'
+
+def test_drive_get_file_rejects_files_outside_root(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+
+    def fake_get_json(path, params):
+        if path == '/files/outside':
+            return {'id':'outside','name':'outside.mp4','mimeType':'video/mp4','parents':['other-root']}
+        if path == '/files/other-root':
+            return {'id':'other-root','parents':[]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(client, '_get_json', fake_get_json)
+    with pytest.raises(DriveLookupError, match='outside the configured Drive folder'):
+        client.get_file('outside')
+
+@pytest.mark.anyio
+async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    selected=DriveFile(
+        'drive-file-id',
+        'selected creative.mp4',
+        'video/mp4',
+        ('root-folder',),
+        'https://drive.google.com/file/d/drive-file-id/view',
+        123,
+    )
+    enqueued={}
+
+    class FakeDrive:
+        def get_file(self, file_id):
+            assert file_id == 'drive-file-id'
+            return selected
+
+    async def fake_enqueue(job_id, media_path, media_kind, meta, file_name, file_size=None, drive_file=None):
+        enqueued.update({
+            'job_id':job_id,
+            'media_path':media_path,
+            'media_kind':media_kind,
+            'ad_copy':meta.ad_copy,
+            'file_name':file_name,
+            'file_size':file_size,
+            'drive_file':drive_file,
+        })
+        return set_status(job_id, JobStatus.queued, 0, 'Queued', file_name, file_size, has_ad_copy=meta.has_ad_copy)
+
+    monkeypatch.setattr('app.main.get_google_drive_client', lambda: FakeDrive())
+    monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response=await client.post('/api/drive/reviews', json={
+            'file_id':'drive-file-id',
+            'ad_copy':'Caption text',
+            'model':'example/model',
+            'frame_interval_seconds':1,
+        })
+
+    assert response.status_code == 200
+    body=response.json()
+    assert enqueued['drive_file'] == selected
+    assert enqueued['media_kind'] == 'video'
+    assert enqueued['ad_copy'] == 'Caption text'
+    assert enqueued['media_path'].name == 'selected creative.mp4'
+    assert body['source_file_id'] == 'drive-file-id'
+    assert body['source_url'] == selected.web_view_link
 
 class FakeDriveClient:
     def __init__(self, matches):
@@ -480,6 +574,45 @@ def test_queue_uses_bounded_parallel_workers(monkeypatch):
 
     monkeypatch.setenv('JOB_WORKER_CONCURRENCY', 'not-a-number')
     assert review_queue._worker_count() == 4
+
+@pytest.mark.anyio
+async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatch):
+    destination=tmp_path/'job'/'creative.mp4'
+    drive_file=DriveFile(
+        'drive-id',
+        'creative.mp4',
+        'video/mp4',
+        ('root',),
+        'https://drive.google.com/file/d/drive-id/view',
+        8,
+    )
+    statuses=[]
+
+    class FakeDrive:
+        def download_file(self, file, path, *, max_bytes, progress_callback):
+            assert file == drive_file
+            assert max_bytes == 200 * 1024 * 1024
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'creative')
+            progress_callback(8, 8)
+            return 8
+
+    monkeypatch.setattr(review_queue, 'get_google_drive_client', lambda: FakeDrive())
+    monkeypatch.setattr(review_queue, 'set_status', lambda *args, **kwargs: statuses.append(args))
+    monkeypatch.setenv('MAX_UPLOAD_MB', '200')
+    job=review_queue.QueuedReviewJob(
+        'job-id',
+        destination,
+        'video',
+        ReviewRequestMeta(),
+        drive_file,
+    )
+
+    await review_queue._download_drive_file(job)
+
+    assert destination.read_bytes() == b'creative'
+    assert statuses[0][1] == JobStatus.downloading_from_drive
+    assert statuses[-1][2] == 9
 
 @pytest.mark.anyio
 async def test_job_workers_process_four_jobs_in_parallel(monkeypatch):

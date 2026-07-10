@@ -16,7 +16,7 @@ def normalize_result_status(value):
     return LEGACY_RESULT_STATUSES.get(value, value)
 
 class JobStatus(str, Enum):
-    queued='queued'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
+    queued='queued'; downloading_from_drive='downloading_from_drive'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
 
 class Finding(BaseModel):
     severity: Literal['low','medium','high']
@@ -114,6 +114,29 @@ class ReviewRequestMeta(BaseModel):
     @property
     def has_batch(self) -> bool:
         return bool(self.batch_id and self.batch_item_id)
+
+class DriveCreativeFile(BaseModel):
+    file_id: str
+    name: str
+    mime_type: str
+    size: int | None = None
+    modified_time: str | None = None
+    web_view_link: str
+
+class DriveCreativeList(BaseModel):
+    files: list[DriveCreativeFile] = Field(default_factory=list)
+
+class CreateDriveReview(BaseModel):
+    file_id: str = Field(min_length=1, max_length=512)
+    ad_copy: str = ''
+    policy_text: str = ''
+    notes: str = ''
+    manual_transcript: str = ''
+    model: str | None = None
+    frame_interval_seconds: float = Field(default=1.0, ge=0.5, le=60)
+    scene_detection: bool = False
+    batch_id: str | None = None
+    batch_item_id: str | None = None
 
 class CreateBatchItem(BaseModel):
     item_id: str
