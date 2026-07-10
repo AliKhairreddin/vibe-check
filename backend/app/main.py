@@ -7,16 +7,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from .review_pipeline.models import ReviewRequestMeta, JobRecord, ComplianceReport, ReviewHistoryItem
-from .review_pipeline.storage import get_report as get_stored_report, get_status, job_dir, list_reviews
+from .review_pipeline.models import (
+    BatchFailure,
+    ComplianceReport,
+    CreateReviewBatch,
+    JobRecord,
+    ReviewBatch,
+    ReviewHistoryItem,
+    ReviewRequestMeta,
+)
+from .review_pipeline.storage import (
+    create_batch,
+    get_batch,
+    get_report as get_stored_report,
+    get_status,
+    job_dir,
+    list_reviews,
+)
 from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
 from .review_pipeline.media import detect_media_kind
+from .review_pipeline.telegram import finish_batch_item_and_notify
 
 COPY_LABEL_MAX_LENGTH = 72
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
 UPLOAD_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 UPLOAD_METADATA_FILE = 'upload.json'
 UPLOAD_CHUNKS_DIR = 'upload_chunks'
+BATCH_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 
 
 def copy_review_file_name(ad_copy: str) -> str:
@@ -56,6 +73,8 @@ def review_meta(
     model: str,
     frame_interval_seconds: float,
     scene_detection: bool,
+    batch_id: str,
+    batch_item_id: str,
 ) -> ReviewRequestMeta:
     return ReviewRequestMeta(
         ad_copy=ad_copy.strip(),
@@ -65,6 +84,8 @@ def review_meta(
         model=model or None,
         frame_interval_seconds=frame_interval_seconds,
         scene_detection=scene_detection,
+        batch_id=batch_id or None,
+        batch_item_id=batch_item_id or None,
     )
 
 @asynccontextmanager
@@ -86,9 +107,9 @@ async def optional_password_gate(request: Request, call_next):
     return await call_next(request)
 
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False)):
+async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form('')):
     upload=creative or video
-    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection)
+    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id)
     if upload is None:
         if not meta.has_ad_copy:
             raise HTTPException(400, 'Choose a creative file or enter ad copy to review.')
@@ -201,6 +222,8 @@ async def complete_chunked_upload(
     model: str = Form(''),
     frame_interval_seconds: float = Form(1.0),
     scene_detection: bool = Form(False),
+    batch_id: str = Form(''),
+    batch_item_id: str = Form(''),
 ):
     upload_dir, metadata = read_upload_metadata(upload_id)
     if metadata.get('completed') or (upload_dir / 'status.json').exists():
@@ -213,7 +236,7 @@ async def complete_chunked_upload(
     if sum(path.stat().st_size for path in chunk_paths) != int(metadata['size']):
         raise HTTPException(409, 'Upload size does not match; restart this upload.')
 
-    meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection)
+    meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id)
     media_path = upload_dir / str(metadata['file_name'])
     enqueued = False
     try:
@@ -232,6 +255,41 @@ async def complete_chunked_upload(
         if not enqueued:
             media_path.unlink(missing_ok=True)
         raise
+
+@app.post('/api/batches', response_model=ReviewBatch)
+def create_review_batch(payload:CreateReviewBatch):
+    if not BATCH_ID_PATTERN.fullmatch(payload.batch_id):
+        raise HTTPException(400, 'Invalid batch id')
+    if len(payload.items) < 2:
+        raise HTTPException(400, 'A batch must contain at least two items.')
+    if len({item.item_id for item in payload.items}) != len(payload.items):
+        raise HTTPException(400, 'Batch item ids must be unique.')
+    if any(not BATCH_ID_PATTERN.fullmatch(item.item_id) for item in payload.items):
+        raise HTTPException(400, 'Invalid batch item id')
+    return create_batch(payload.batch_id, payload.items)
+
+@app.get('/api/batches/{batch_id}', response_model=ReviewBatch)
+def review_batch(batch_id:str):
+    if not BATCH_ID_PATTERN.fullmatch(batch_id):
+        raise HTTPException(404, 'Review batch not found')
+    try:
+        return get_batch(batch_id)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Review batch not found') from None
+
+@app.post('/api/batches/{batch_id}/items/{item_id}/failed', response_model=ReviewBatch)
+def fail_batch_upload(batch_id:str, item_id:str, payload:BatchFailure):
+    if not BATCH_ID_PATTERN.fullmatch(batch_id) or not BATCH_ID_PATTERN.fullmatch(item_id):
+        raise HTTPException(404, 'Review batch item not found')
+    try:
+        return finish_batch_item_and_notify(
+            batch_id,
+            item_id,
+            status='upload_failed',
+            message=payload.message,
+        )
+    except (FileNotFoundError, KeyError):
+        raise HTTPException(404, 'Review batch item not found') from None
 
 @app.get('/api/reviews', response_model=list[ReviewHistoryItem])
 def review_history(limit:int=50):

@@ -73,13 +73,17 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
+  createReviewBatch,
   createReview,
   type Finding,
+  getBatch,
   getReport,
   getStatus,
   listReviews,
+  reportBatchUploadFailure,
   type OverallStatus,
   type ResultStatus,
+  type ReviewBatch,
   type ReviewHistoryItem,
   type Status,
 } from '@/lib/api';
@@ -94,6 +98,8 @@ type BatchItem = {
   size: number;
   uploadProgress: number;
   phase: UploadPhase;
+  batchId?: string;
+  mediaKind: 'video' | 'image' | 'copy_only';
   jobId?: string;
   error?: string;
 };
@@ -158,9 +164,13 @@ function loadActiveBatch(): BatchItem[] {
       if (typeof item.jobId !== 'string' || !item.jobId) return [];
       const kind = item.kind === 'ad_copy' ? 'ad_copy' : 'creative';
       return [{
-        id: item.jobId,
+        id: typeof item.id === 'string' && item.id ? item.id : item.jobId,
+        batchId: typeof item.batchId === 'string' ? item.batchId : undefined,
         fileName: typeof item.fileName === 'string' && item.fileName ? item.fileName : item.jobId,
         kind,
+        mediaKind: item.mediaKind === 'video' || item.mediaKind === 'image'
+          ? item.mediaKind
+          : kind === 'ad_copy' ? 'copy_only' : 'video',
         size: typeof item.size === 'number' ? item.size : 0,
         uploadProgress: 100,
         phase: 'queued' as const,
@@ -320,6 +330,7 @@ function Home() {
   ).length;
   const completeCount = rows.filter(({ status }) => status?.report_ready).length;
   const pendingCount = rows.length - completeCount - failedCount;
+  const activeBatchId = batchItems.find((item) => item.batchId)?.batchId;
 
   function updateBatchItem(id: string, patch: Partial<BatchItem>) {
     setBatchItems((current) =>
@@ -343,20 +354,26 @@ function Home() {
 
     const sharedFields = new FormData(form);
     sharedFields.set('model', loadOpenRouterModel());
-    const batchStamp = Date.now();
+    const batchId = (copyOnly ? adCopyLines.length : files.length) > 1 ? randomId() : undefined;
     const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
-          id: `copy-${batchStamp}-${index}`,
+          id: randomId(),
+          batchId,
           fileName: adCopyItemName(copy, index),
           kind: 'ad_copy' as const,
+          mediaKind: 'copy_only' as const,
           size: new Blob([copy]).size,
           uploadProgress: 0,
           phase: 'pending' as const,
         }))
       : files.map((file, index) => ({
-          id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+          id: randomId(),
+          batchId,
           fileName: file.name,
           kind: 'creative' as const,
+          mediaKind: file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4')
+            ? 'video' as const
+            : 'image' as const,
           size: file.size,
           uploadProgress: 0,
           phase: 'pending' as const,
@@ -366,6 +383,16 @@ function Home() {
     setIsSubmitting(true);
 
     try {
+      if (batchId) {
+        await createReviewBatch({
+          batch_id: batchId,
+          items: nextItems.map((item) => ({
+            item_id: item.id,
+            file_name: item.fileName,
+            media_kind: item.mediaKind,
+          })),
+        });
+      }
       await runWithConcurrency(nextItems, UPLOAD_CONCURRENCY, async (item, index) => {
         const copyLine = copyOnly ? adCopyLines[index] : undefined;
         const file = copyOnly ? null : files[index] ?? null;
@@ -373,7 +400,14 @@ function Home() {
 
         try {
           const status = await createReview(
-            buildReviewForm(sharedFields, file, sceneDetection, copyLine),
+            buildReviewForm(
+              sharedFields,
+              file,
+              sceneDetection,
+              copyLine,
+              batchId,
+              item.id
+            ),
             (progress) => updateBatchItem(item.id, { uploadProgress: progress })
           );
           updateBatchItem(item.id, {
@@ -383,13 +417,32 @@ function Home() {
           });
           queryClient.setQueryData(['status', status.job_id], status);
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           updateBatchItem(item.id, {
             phase: 'failed',
-            error: error instanceof Error ? error.message : String(error),
+            error: message,
             uploadProgress: 100,
           });
+          if (batchId) {
+            try {
+              await reportBatchUploadFailure(batchId, item.id, message);
+            } catch (batchError) {
+              setSubmitError(
+                `A failed upload could not be recorded in the batch: ${errorMessage(batchError)}`
+              );
+            }
+          }
         }
       });
+    } catch (error) {
+      const message = errorMessage(error);
+      setSubmitError(message);
+      setBatchItems((current) => current.map((item) => ({
+        ...item,
+        error: message,
+        phase: 'failed',
+        uploadProgress: 100,
+      })));
     } finally {
       setIsSubmitting(false);
       void queryClient.invalidateQueries({ queryKey: ['reviews', 'history'] });
@@ -543,6 +596,15 @@ function Home() {
             </CardDescription>
             <CardAction>
               <div className="flex items-center gap-2">
+                {activeBatchId ? (
+                  <Link
+                    to="/batches/$batchId"
+                    params={{ batchId: activeBatchId }}
+                    className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                  >
+                    Batch results
+                  </Link>
+                ) : null}
                 {rows.length ? (
                   <Button
                     type="button"
@@ -1105,6 +1167,102 @@ function ReportPage() {
   );
 }
 
+function BatchPage() {
+  const { batchId } = useParams({ from: '/batches/$batchId' });
+  const query = useQuery({
+    queryKey: ['batch', batchId],
+    queryFn: () => getBatch(batchId),
+    refetchInterval: (current: { state: { data?: ReviewBatch } }) => {
+      const batch = current.state.data;
+      return batch?.items.every((item) => isTerminalBatchStatus(item.status)) ? false : 1500;
+    },
+  });
+
+  if (query.isLoading) return <Skeleton className="h-72" />;
+  if (!query.data) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle />
+        <AlertTitle>Batch unavailable</AlertTitle>
+        <AlertDescription>
+          {query.error ? errorMessage(query.error) : 'Batch not found.'}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const completeCount = query.data.items.filter((item) => item.status === 'complete').length;
+  const failedCount = query.data.items.filter((item) => isFailedBatchStatus(item.status)).length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle as="h1" className="text-xl">
+          Batch uploaded {formatDate(query.data.created_at)}
+        </CardTitle>
+        <CardDescription>
+          {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
+        </CardDescription>
+        <CardAction>
+          <Link to="/" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            Back to workspace
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Type</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Result</TableHead>
+                <TableHead className="text-right">Report</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {query.data.items.map((item) => (
+                <TableRow key={item.item_id}>
+                  <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
+                  <TableCell className="min-w-64 max-w-md">
+                    <span className="block truncate font-medium">{item.file_name}</span>
+                    {isFailedBatchStatus(item.status) && item.message ? (
+                      <span className="block text-xs text-destructive">{item.message}</span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell><StatusBadge status={item.status} /></TableCell>
+                  <TableCell>
+                    {item.result ? <StatusBadge status={item.result} /> : (
+                      <span className="text-sm text-muted-foreground">
+                        {isFailedBatchStatus(item.status) ? 'No result' : 'Not ready'}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {item.status === 'complete' && item.job_id ? (
+                      <Link
+                        to="/reviews/$jobId/report"
+                        params={{ jobId: item.job_id }}
+                        className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                      >
+                        <FileJson data-icon="inline-start" />
+                        Open report
+                      </Link>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SettingsPage() {
   const [model, setModel] = useState(loadOpenRouterModel);
   const [saved, setSaved] = useState(false);
@@ -1168,7 +1326,7 @@ function SettingsPage() {
 function StatusBadge({ status }: { status: string }) {
   const result = normalizeResultStatus(status);
   if (result) return <ResultBadge status={result} />;
-  if (status === 'failed') {
+  if (isFailedBatchStatus(status)) {
     return <Badge variant="destructive">{formatStatus(status)}</Badge>;
   }
   if (status === 'complete') {
@@ -1210,7 +1368,9 @@ function buildReviewForm(
   source: FormData,
   creative: File | null,
   sceneDetection: boolean,
-  adCopyOverride?: string
+  adCopyOverride?: string,
+  batchId?: string,
+  batchItemId?: string
 ) {
   const form = new FormData();
   if (creative) form.append('creative', creative);
@@ -1232,6 +1392,10 @@ function buildReviewForm(
   }
 
   if (sceneDetection) form.append('scene_detection', 'true');
+  if (batchId && batchItemId) {
+    form.append('batch_id', batchId);
+    form.append('batch_item_id', batchItemId);
+  }
   return form;
 }
 
@@ -1358,6 +1522,28 @@ function formatDateTime(value?: number | null) {
   }).format(new Date(value));
 }
 
+function formatDate(value: number) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'long' }).format(new Date(value));
+}
+
+function randomId() {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
+function isFailedBatchStatus(status: string) {
+  return status === 'failed' || status === 'upload_failed';
+}
+
+function isTerminalBatchStatus(status: string) {
+  return status === 'complete' || isFailedBatchStatus(status);
+}
+
+function batchTypeLabel(mediaKind: 'video' | 'image' | 'copy_only') {
+  if (mediaKind === 'video') return 'Creative Vid';
+  if (mediaKind === 'image') return 'Creative Image';
+  return 'Ad copy';
+}
+
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
@@ -1373,6 +1559,11 @@ const reportRoute = createRoute({
   path: '/reviews/$jobId/report',
   component: ReportPage,
 });
+const batchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/batches/$batchId',
+  component: BatchPage,
+});
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -1381,6 +1572,7 @@ const settingsRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
+    batchRoute,
     progressRoute,
     reportRoute,
     settingsRoute,

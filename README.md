@@ -125,6 +125,9 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 ## API
 
 - `POST /api/reviews`: create a job with one MP4, JPG, PNG, or WebP creative, optional platform caption/body ad copy, optional additional policy text, notes, optional manual transcript override, model, frame interval, scene toggle. If no creative file is submitted, `ad_copy` is required and the job reviews copy only.
+- `POST /api/batches`: register a multi-item batch before its individual review uploads begin.
+- `GET /api/batches/{batch_id}`: batch progress, terminal results, failures, and individual job links.
+- `POST /api/batches/{batch_id}/items/{item_id}/failed`: mark an upload failure as terminal so it cannot block the batch notification.
 
 Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
 - `GET /api/reviews`: recent review history with filename, upload date, status, progress, and final result when available.
@@ -135,7 +138,7 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Result verdicts use a four-level scale: `green` (ready to run), `yellow` (minor fixes), `orange` (human review required), and `red` (do not publish without material changes). Multi-creative uploads and multi-line copy-only submissions are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Result verdicts use a four-level scale: `green` (ready to run), `yellow` (minor fixes), `orange` (human review required), and `red` (do not publish without material changes). Multi-creative uploads and multi-line copy-only submissions are registered as durable batches before uploads begin. Batch Telegram notifications wait for every item to complete or fail, then send one summary with a link to the batch report page and its individual report buttons. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 

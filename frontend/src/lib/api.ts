@@ -7,6 +7,8 @@ export type Status = {
   report_ready: boolean;
   has_creative?: boolean;
   has_ad_copy?: boolean;
+  batch_id?: string | null;
+  batch_item_id?: string | null;
   created_at?: number | null;
   updated_at?: number | null;
 };
@@ -48,6 +50,30 @@ export type ReviewHistoryItem = Status & {
   overall_status?: Report['overall_status'] | null;
   creative_result?: Report['overall_status'] | null;
   ad_copy_result?: Report['overall_status'] | null;
+};
+
+export type ReviewBatchItem = {
+  item_id: string;
+  file_name: string;
+  media_kind: 'video' | 'image' | 'copy_only';
+  status: string;
+  job_id?: string | null;
+  result?: OverallStatus | null;
+  message: string;
+};
+
+export type ReviewBatch = {
+  batch_id: string;
+  created_at: number;
+  updated_at: number;
+  expected_count: number;
+  items: ReviewBatchItem[];
+  notification_status: string;
+};
+
+export type CreateReviewBatchInput = {
+  batch_id: string;
+  items: Array<Pick<ReviewBatchItem, 'item_id' | 'file_name' | 'media_kind'>>;
 };
 
 type ChunkedUpload = {
@@ -218,6 +244,53 @@ export async function getStatus(id: string): Promise<Status> {
 
 export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
   return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
+}
+
+export async function createReviewBatch(input: CreateReviewBatchInput): Promise<ReviewBatch> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await requestJson<ReviewBatch>('/api/batches', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise((resolve) => window.setTimeout(resolve, attempt * 500));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Could not create review batch');
+}
+
+export async function getBatch(id: string): Promise<ReviewBatch> {
+  return requestJson<ReviewBatch>(`/api/batches/${id}`);
+}
+
+export async function reportBatchUploadFailure(
+  batchId: string,
+  itemId: string,
+  message: string
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await requestJson<ReviewBatch>(`/api/batches/${batchId}/items/${itemId}/failed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise((resolve) => window.setTimeout(resolve, attempt * 500));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Could not record batch upload failure');
 }
 
 export async function getReport(id: string): Promise<Report> {

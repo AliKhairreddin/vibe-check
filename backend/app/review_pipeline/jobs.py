@@ -1,10 +1,10 @@
 from __future__ import annotations
-import shutil, anyio
+import logging, shutil, anyio
 from pathlib import Path
 from .media import MediaKind, image_metadata, prepare_image_frame
 from .models import JobStatus, ReviewRequestMeta
 from .storage import job_dir, set_report, set_status, write_json
-from .telegram import send_review_message
+from .telegram import finish_batch_item_and_notify, send_review_message
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_policy_context
@@ -13,6 +13,7 @@ from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
+logger = logging.getLogger(__name__)
 
 def build_review_evidence(
     media_kind: MediaKind,
@@ -99,9 +100,33 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         report_json=report.model_dump(mode='json')
         set_report(job_id, report_json)
         rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
-        send_review_message(rec, report_json, meta.ad_copy, media_kind)
+        if meta.has_batch:
+            try:
+                finish_batch_item_and_notify(
+                    meta.batch_id or '',
+                    meta.batch_item_id or '',
+                    status='complete',
+                    job_id=job_id,
+                    result=report.overall_status,
+                    message='Complete',
+                )
+            except Exception:
+                logger.exception('Batch completion notification failed for job %s', job_id)
+        else:
+            send_review_message(rec, report_json, meta.ad_copy, media_kind)
     except Exception as e:
         set_status(job_id, JobStatus.failed, 100, str(e))
+        if meta.has_batch:
+            try:
+                finish_batch_item_and_notify(
+                    meta.batch_id or '',
+                    meta.batch_item_id or '',
+                    status='failed',
+                    job_id=job_id,
+                    message=str(e),
+                )
+            except Exception:
+                logger.exception('Batch failure notification failed for job %s', job_id)
     finally:
         for path in (media_path, audio_path):
             if path is None:

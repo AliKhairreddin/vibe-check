@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as batches from "../batches.js";
 import type * as reviews from "../reviews.js";
 
 import type {
@@ -17,6 +18,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  batches: typeof batches;
   reviews: typeof reviews;
 }>;
 

@@ -11,6 +11,7 @@ from .jobs import process_job
 from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
 from .storage import set_status
+from .telegram import finish_batch_item_and_notify
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ async def enqueue_job(
         file_name,
         has_ad_copy=meta.has_ad_copy,
         has_creative=media_kind != 'copy_only',
+        batch_id=meta.batch_id,
+        batch_item_id=meta.batch_item_id,
     )
     await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta))
     return record
@@ -99,6 +102,14 @@ async def _process_queue(worker_index: int) -> None:
                     100,
                     f'Queue processing failed: {type(exc).__name__}',
                 )
+                if job.meta.has_batch:
+                    finish_batch_item_and_notify(
+                        job.meta.batch_id or '',
+                        job.meta.batch_item_id or '',
+                        status='failed',
+                        job_id=job.job_id,
+                        message=f'Queue processing failed: {type(exc).__name__}',
+                    )
             except Exception:
                 logger.exception(
                     'Queue worker %s could not mark job %s as failed',

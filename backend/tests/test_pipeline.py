@@ -8,15 +8,16 @@ import pytest
 
 from app.main import app, copy_review_file_name
 from app.review_pipeline import queue as review_queue
-from app.review_pipeline.models import ComplianceReport, JobRecord, JobStatus, ReviewRequestMeta
+from app.review_pipeline import telegram as review_telegram
+from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import set_status, get_status, set_report, get_report, list_reviews
-from app.review_pipeline.telegram import build_review_message, send_review_message
+from app.review_pipeline.storage import create_batch, get_batch, set_status, get_status, set_report, get_report, list_reviews
+from app.review_pipeline.telegram import build_batch_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
 from PIL import Image
@@ -542,6 +543,113 @@ def test_telegram_message_labels_image_creatives(monkeypatch):
     assert '<b>Type:</b> Creative Image' in message
     assert 'static-ad.png' in message
     assert '🟠 Orange — Review required' in message
+
+def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    sent=[]
+    monkeypatch.setattr(review_telegram, 'send_batch_message', lambda batch: sent.append(batch) or True)
+
+    create_batch('batch1', [
+        CreateBatchItem(item_id='item1', file_name='creative-one.mp4', media_kind='video'),
+        CreateBatchItem(item_id='item2', file_name='creative-two.png', media_kind='image'),
+        CreateBatchItem(item_id='item3', file_name='Ad copy 1: Save today.', media_kind='copy_only'),
+    ])
+
+    finish_batch_item_and_notify('batch1', 'item1', status='complete', job_id='job1', result='red', message='Complete')
+    finish_batch_item_and_notify('batch1', 'item2', status='upload_failed', message='Network upload failed')
+    assert sent == []
+
+    finish_batch_item_and_notify('batch1', 'item3', status='complete', job_id='job3', result='green', message='Complete')
+    assert len(sent) == 1
+    assert get_batch('batch1').notification_status == 'sent'
+
+    finish_batch_item_and_notify('batch1', 'item3', status='complete', job_id='job3', result='green', message='Complete')
+    assert len(sent) == 1
+
+    message=build_batch_message(sent[0])
+    assert '<b>Batch Uploaded ' in message
+    assert '<b>Type:</b> Creative Vid' in message
+    assert '<b>Type:</b> Creative Image' in message
+    assert '<b>Type:</b> Ad copy' in message
+    assert 'creative-one.mp4' in message
+    assert '🔴 Red — Do not publish' in message
+    assert '⚫ Failed — Review did not complete' in message
+    assert 'Network upload failed' in message
+    assert '🟢 Green — Ready to run' in message
+    assert message.count('/batches/batch1') == 1
+    assert message.count('<b>Report Link:</b>') == 1
+
+def test_batched_jobs_suppress_individual_messages_until_last_job(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    individual_messages=[]
+    batch_messages=[]
+    monkeypatch.setattr('app.review_pipeline.jobs.send_review_message', lambda *args: individual_messages.append(args))
+    monkeypatch.setattr(review_telegram, 'send_batch_message', lambda batch: batch_messages.append(batch) or True)
+    create_batch('batch2', [
+        CreateBatchItem(item_id='item1', file_name='Ad copy 1', media_kind='copy_only'),
+        CreateBatchItem(item_id='item2', file_name='Ad copy 2', media_kind='copy_only'),
+    ])
+    metas=[
+        ReviewRequestMeta(ad_copy='First copy', batch_id='batch2', batch_item_id='item1'),
+        ReviewRequestMeta(ad_copy='Second copy', batch_id='batch2', batch_item_id='item2'),
+    ]
+    for index, meta in enumerate(metas, start=1):
+        set_status(
+            f'job{index}',
+            JobStatus.queued,
+            0,
+            'Queued',
+            f'Ad copy {index}',
+            has_ad_copy=True,
+            has_creative=False,
+            batch_id=meta.batch_id,
+            batch_item_id=meta.batch_item_id,
+        )
+
+    asyncio.run(process_job('job1', None, 'copy_only', metas[0]))
+    assert individual_messages == []
+    assert batch_messages == []
+
+    asyncio.run(process_job('job2', None, 'copy_only', metas[1]))
+    assert individual_messages == []
+    assert len(batch_messages) == 1
+    assert [item.status for item in batch_messages[0].items] == ['complete', 'complete']
+
+@pytest.mark.anyio
+async def test_batch_api_registers_pending_uploads_before_reviews_start(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    batch_id='a' * 32
+    item_ids=['b' * 32, 'c' * 32]
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        created=await client.post('/api/batches', json={
+            'batch_id':batch_id,
+            'items':[
+                {'item_id':item_ids[0], 'file_name':'one.mp4', 'media_kind':'video'},
+                {'item_id':item_ids[1], 'file_name':'two.mp4', 'media_kind':'video'},
+            ],
+        })
+        failed=await client.post(
+            f'/api/batches/{batch_id}/items/{item_ids[0]}/failed',
+            json={'message':'Upload connection lost'},
+        )
+        fetched=await client.get(f'/api/batches/{batch_id}')
+
+    assert created.status_code == 200
+    assert [item['status'] for item in created.json()['items']] == ['pending', 'pending']
+    assert failed.status_code == 200
+    assert [item['status'] for item in failed.json()['items']] == ['upload_failed', 'pending']
+    assert fetched.status_code == 200
+    assert fetched.json()['expected_count'] == 2
 
 def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     token='secret-token-that-must-not-be-logged'

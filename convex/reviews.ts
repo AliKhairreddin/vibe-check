@@ -2,6 +2,8 @@ import { mutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 
 const statusArgs = {
+  batchId: v.optional(v.string()),
+  batchItemId: v.optional(v.string()),
   secret: v.string(),
   fileName: v.optional(v.string()),
   hasAdCopy: v.optional(v.boolean()),
@@ -90,6 +92,8 @@ function adCopyResult(report: unknown, hasAdCopy: boolean) {
 }
 
 function publicReview(review: {
+  batchId?: string;
+  batchItemId?: string;
   createdAt: number;
   fileName: string;
   hasAdCopy?: boolean;
@@ -106,6 +110,8 @@ function publicReview(review: {
   const hasCreative = review.hasCreative ?? true;
   return {
     ad_copy_result: adCopyResult(review.report, hasAdCopy),
+    batch_id: review.batchId ?? null,
+    batch_item_id: review.batchItemId ?? null,
     created_at: review.createdAt,
     creative_result: creativeResult(review.report, hasCreative),
     file_name: review.fileName,
@@ -132,6 +138,8 @@ export const upsertStatus = mutationGeneric({
       .unique();
 
     const value = {
+      batchId: args.batchId ?? existing?.batchId,
+      batchItemId: args.batchItemId ?? existing?.batchItemId,
       fileName: args.fileName ?? existing?.fileName ?? "",
       hasAdCopy: args.hasAdCopy ?? existing?.hasAdCopy ?? true,
       hasCreative: args.hasCreative ?? existing?.hasCreative ?? true,

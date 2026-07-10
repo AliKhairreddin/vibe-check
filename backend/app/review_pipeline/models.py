@@ -47,6 +47,8 @@ class JobRecord(BaseModel):
     report_ready: bool = False
     has_creative: bool = True
     has_ad_copy: bool = True
+    batch_id: str | None = None
+    batch_item_id: str | None = None
     created_at: int | None = None
     updated_at: int | None = None
 
@@ -63,7 +65,39 @@ class ReviewRequestMeta(BaseModel):
     model: str | None = None
     frame_interval_seconds: float = 1.0
     scene_detection: bool = False
+    batch_id: str | None = None
+    batch_item_id: str | None = None
 
     @property
     def has_ad_copy(self) -> bool:
         return bool(self.ad_copy.strip())
+
+    @property
+    def has_batch(self) -> bool:
+        return bool(self.batch_id and self.batch_item_id)
+
+class CreateBatchItem(BaseModel):
+    item_id: str
+    file_name: str
+    media_kind: Literal['video','image','copy_only']
+
+class CreateReviewBatch(BaseModel):
+    batch_id: str
+    items: list[CreateBatchItem]
+
+class BatchFailure(BaseModel):
+    message: str = 'Upload failed before the review could start.'
+
+class ReviewBatchItem(CreateBatchItem):
+    status: str = 'pending'
+    job_id: str | None = None
+    result: ResultStatus | None = None
+    message: str = ''
+
+class ReviewBatch(BaseModel):
+    batch_id: str
+    created_at: int
+    updated_at: int
+    expected_count: int
+    items: list[ReviewBatchItem]
+    notification_status: str = 'pending'

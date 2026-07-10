@@ -4,12 +4,13 @@ import html
 import logging
 import os
 import textwrap
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from .media import MediaKind
-from .models import JobRecord
+from .models import JobRecord, ReviewBatch
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ LEGACY_RESULT_STATUSES = {
 }
 WRAP_WIDTH = 34
 MAX_NAME_CHARS = 140
+MAX_BATCH_MESSAGE_CHARS = 3900
 
 
 def telegram_enabled() -> bool:
@@ -38,6 +40,11 @@ def telegram_enabled() -> bool:
 def build_report_url(job_id: str) -> str:
     base_url = os.getenv('APP_PUBLIC_URL', '').strip().rstrip('/')
     return f'{base_url}/reviews/{job_id}/report' if base_url else ''
+
+
+def build_batch_url(batch_id: str) -> str:
+    base_url = os.getenv('APP_PUBLIC_URL', '').strip().rstrip('/')
+    return f'{base_url}/batches/{batch_id}' if base_url else ''
 
 
 def build_review_message(
@@ -75,6 +82,86 @@ def send_review_message(
     ad_copy_text: str = '',
     media_kind: MediaKind | None = None,
 ) -> bool:
+    return _send_telegram_message(
+        build_review_message(record, report, ad_copy_text, media_kind),
+        f'job_id={record.job_id}',
+    )
+
+
+def build_batch_message(batch: ReviewBatch) -> str:
+    title_date = datetime.fromtimestamp(
+        batch.created_at / 1000,
+        tz=timezone.utc,
+    ).strftime('%B %d').replace(' 0', ' ')
+    lines = [f'<b>Batch Uploaded {html.escape(title_date)}</b>']
+    report_url = build_batch_url(batch.batch_id)
+    footer = []
+    if report_url:
+        footer = [
+            '',
+            '<b>Report Link:</b>',
+            f'<a href="{html.escape(report_url, quote=True)}">Open batch reports</a>',
+        ]
+
+    for index, item in enumerate(batch.items):
+        result = _format_status(item.result) if item.status == 'complete' else '⚫ Failed — Review did not complete'
+        section = [
+            '',
+            f'<b>Type:</b> {html.escape(_batch_type_label(item.media_kind))}',
+            '<b>Name:</b>',
+            html.escape(_wrap_text(item.file_name, max_chars=MAX_NAME_CHARS)),
+            '<b>Result:</b>',
+            html.escape(result),
+        ]
+        if item.status != 'complete' and item.message:
+            section.extend([
+                '<b>Failure:</b>',
+                html.escape(_wrap_text(item.message, max_chars=MAX_NAME_CHARS)),
+            ])
+        remaining = len(batch.items) - index
+        if len('\n'.join([*lines, *section, *footer])) > MAX_BATCH_MESSAGE_CHARS:
+            lines.extend(['', f'<i>{remaining} more item(s) are listed on the batch report page.</i>'])
+            break
+        lines.extend(section)
+
+    lines.extend(footer)
+    return '\n'.join(lines)
+
+
+def send_batch_message(batch: ReviewBatch) -> bool:
+    return _send_telegram_message(
+        build_batch_message(batch),
+        f'batch_id={batch.batch_id}',
+    )
+
+
+def finish_batch_item_and_notify(
+    batch_id: str,
+    item_id: str,
+    *,
+    status: str,
+    job_id: str | None = None,
+    result: str | None = None,
+    message: str = '',
+) -> ReviewBatch:
+    from .storage import finish_batch_item, mark_batch_notification
+
+    batch, should_notify = finish_batch_item(
+        batch_id,
+        item_id,
+        status=status,
+        job_id=job_id,
+        result=result,
+        message=message,
+    )
+    if should_notify:
+        success = send_batch_message(batch)
+        mark_batch_notification(batch_id, success)
+        batch.notification_status = 'sent' if success else 'failed'
+    return batch
+
+
+def _send_telegram_message(text: str, log_context: str) -> bool:
     token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
     if not token or not chat_id:
@@ -82,7 +169,7 @@ def send_review_message(
 
     payload: dict[str, Any] = {
         'chat_id': chat_id,
-        'text': build_review_message(record, report, ad_copy_text, media_kind),
+        'text': text,
         'parse_mode': 'HTML',
         'disable_web_page_preview': True,
     }
@@ -103,8 +190,8 @@ def send_review_message(
         response = getattr(exc, 'response', None)
         status_code = getattr(response, 'status_code', None)
         logger.error(
-            'Telegram notification failed job_id=%s error_type=%s http_status=%s',
-            record.job_id,
+            'Telegram notification failed %s error_type=%s http_status=%s',
+            log_context,
             type(exc).__name__,
             status_code if status_code is not None else 'unavailable',
         )
@@ -232,4 +319,14 @@ def _creative_type_label(media_kind: MediaKind | None) -> str:
         return 'Creative Vid'
     if media_kind == 'image':
         return 'Creative Image'
+    return 'Creative'
+
+
+def _batch_type_label(media_kind: str) -> str:
+    if media_kind == 'video':
+        return 'Creative Vid'
+    if media_kind == 'image':
+        return 'Creative Image'
+    if media_kind == 'copy_only':
+        return 'Ad copy'
     return 'Creative'
