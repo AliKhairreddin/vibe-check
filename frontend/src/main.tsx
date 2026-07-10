@@ -29,6 +29,7 @@ import {
   FileJson,
   Moon,
   RefreshCw,
+  Search,
   Settings,
   SlidersHorizontal,
   Sun,
@@ -800,6 +801,29 @@ function HistoryCard({
   onRetry: () => void;
   reviews: ReviewHistoryItem[];
 }) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const filteredReviews = useMemo(() => {
+    if (!normalizedSearch) return reviews;
+
+    return reviews.filter((review) =>
+      [
+        review.file_name,
+        review.job_id,
+        review.status,
+        formatStatus(review.status),
+        review.overall_status,
+        review.overall_status ? formatStatus(review.overall_status) : null,
+        review.creative_result,
+        review.creative_result ? formatStatus(review.creative_result) : null,
+        review.ad_copy_result,
+        review.ad_copy_result ? formatStatus(review.ad_copy_result) : null,
+        formatDateTime(review.created_at),
+      ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch))
+    );
+  }, [normalizedSearch, reviews]);
+  const isSearching = normalizedSearch.length > 0;
+
   return (
     <Card>
       <CardHeader>
@@ -810,10 +834,42 @@ function HistoryCard({
           be published.
         </CardDescription>
         <CardAction>
-          <Badge variant="outline">{reviews.length} recent</Badge>
+          <Badge variant="outline">
+            {isSearching
+              ? `${filteredReviews.length} of ${reviews.length}`
+              : `${reviews.length} recent`}
+          </Badge>
         </CardAction>
       </CardHeader>
       <CardContent>
+        {!error && !isLoading && reviews.length ? (
+          <div className="mb-4 flex items-center gap-2">
+            <div className="relative w-full max-w-md">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search reviews"
+                aria-label="Search review history"
+                className="pl-8"
+              />
+            </div>
+            {isSearching ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setSearchQuery('')}
+              >
+                Clear
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         {error ? (
           <Alert variant="destructive">
             <AlertCircle />
@@ -831,7 +887,7 @@ function HistoryCard({
             <Skeleton className="h-10" />
             <Skeleton className="h-24" />
           </div>
-        ) : reviews.length ? (
+        ) : filteredReviews.length ? (
           <div className="max-h-[42rem] overflow-auto">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
@@ -845,7 +901,7 @@ function HistoryCard({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {reviews.map((review) => (
+                {filteredReviews.map((review) => (
                   <TableRow key={review.job_id}>
                     <TableCell className="min-w-48 max-w-80">
                       <span className="block truncate font-medium">
@@ -906,6 +962,15 @@ function HistoryCard({
                 ))}
               </TableBody>
             </Table>
+          </div>
+        ) : reviews.length ? (
+          <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+            <div className="grid max-w-sm gap-1">
+              <p className="text-sm font-medium">No matching reviews</p>
+              <p className="text-sm text-muted-foreground">
+                Try a creative name, job ID, status, result, or upload date.
+              </p>
+            </div>
           </div>
         ) : (
           <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
