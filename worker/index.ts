@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v4";
+const BACKEND_INSTANCE = "primary-v5";
 type OptionalSecrets = Env & {
   APP_PASSWORD?: string;
   APP_PUBLIC_URL?: string;
