@@ -255,6 +255,62 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     assert report is not None
     assert 'No creative was submitted' in report['limitations'][-1]
 
+def test_queue_uses_bounded_parallel_workers(monkeypatch):
+    monkeypatch.delenv('JOB_WORKER_CONCURRENCY', raising=False)
+    assert review_queue._worker_count() == 4
+
+    monkeypatch.setenv('JOB_WORKER_CONCURRENCY', '6')
+    assert review_queue._worker_count() == 6
+
+    monkeypatch.setenv('JOB_WORKER_CONCURRENCY', '100')
+    assert review_queue._worker_count() == 8
+
+    monkeypatch.setenv('JOB_WORKER_CONCURRENCY', 'not-a-number')
+    assert review_queue._worker_count() == 4
+
+@pytest.mark.anyio
+async def test_job_workers_process_four_jobs_in_parallel(monkeypatch):
+    queue=asyncio.Queue()
+    workers=[]
+    all_started=asyncio.Event()
+    release=asyncio.Event()
+    started=[]
+
+    monkeypatch.setattr(review_queue, '_queue', queue)
+    monkeypatch.setattr(review_queue, '_workers', workers)
+    monkeypatch.setenv('JOB_WORKER_CONCURRENCY', '4')
+    monkeypatch.setattr(review_queue, 'set_status', lambda *args, **kwargs: None)
+
+    async def fake_process_job(job_id, media_path, media_kind, meta):
+        started.append(job_id)
+        if len(started) == 4:
+            all_started.set()
+        await release.wait()
+
+    monkeypatch.setattr(review_queue, 'process_job', fake_process_job)
+
+    for index in range(5):
+        await queue.put(
+            review_queue.QueuedReviewJob(
+                f'job-{index}',
+                None,
+                'copy_only',
+                ReviewRequestMeta(ad_copy=f'Copy {index}'),
+            )
+        )
+
+    await review_queue.start_job_workers()
+    try:
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        assert len(started) == 4
+        assert queue.qsize() == 1
+        release.set()
+        await asyncio.wait_for(queue.join(), timeout=1)
+    finally:
+        await review_queue.stop_job_workers()
+
+    assert started == [f'job-{index}' for index in range(5)]
+
 @pytest.mark.anyio
 async def test_process_queue_continues_after_start_status_failure(monkeypatch):
     queue=asyncio.Queue()

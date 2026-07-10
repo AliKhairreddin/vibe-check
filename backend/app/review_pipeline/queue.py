@@ -14,6 +14,9 @@ from .storage import set_status
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_WORKER_CONCURRENCY = 4
+MAX_WORKER_CONCURRENCY = 8
+
 
 @dataclass(frozen=True)
 class QueuedReviewJob:
@@ -29,9 +32,10 @@ _workers: list[asyncio.Task[None]] = []
 
 def _worker_count() -> int:
     try:
-        return max(1, int(os.getenv('JOB_WORKER_CONCURRENCY', '1')))
+        configured = int(os.getenv('JOB_WORKER_CONCURRENCY', str(DEFAULT_WORKER_CONCURRENCY)))
     except ValueError:
-        return 1
+        configured = DEFAULT_WORKER_CONCURRENCY
+    return max(1, min(configured, MAX_WORKER_CONCURRENCY))
 
 
 async def start_job_workers() -> None:

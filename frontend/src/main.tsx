@@ -100,6 +100,7 @@ type BatchItem = {
 const queryClient = new QueryClient();
 const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v2';
 const AD_COPY_PREVIEW_LENGTH = 56;
+const UPLOAD_CONCURRENCY = 4;
 const SOURCE_LABELS: Record<Finding['source'], string> = {
   ad_copy: 'Ad Copy',
   audio: 'Audio Transcript',
@@ -252,11 +253,13 @@ function Home() {
     },
   });
 
+  const submittedItems = batchItems.filter(
+    (item): item is BatchItem & { jobId: string } => Boolean(item.jobId)
+  );
   const statusQueries = useQueries({
-    queries: batchItems.map((item) => ({
+    queries: submittedItems.map((item) => ({
       queryKey: ['status', item.jobId],
-      queryFn: () => getStatus(item.jobId as string),
-      enabled: Boolean(item.jobId),
+      queryFn: () => getStatus(item.jobId),
       refetchInterval: (query: { state: { data?: Status } }) => {
         const status = query.state.data;
         return status?.report_ready || status?.status === 'failed' ? false : 1500;
@@ -264,12 +267,18 @@ function Home() {
     })),
   });
 
-  const rows = batchItems.map((item, index) => ({
-    item,
-    status: statusQueries[index]?.data,
-    queryError: statusQueries[index]?.error,
-    retry: statusQueries[index]?.refetch,
-  }));
+  const queryByItemId = new Map(
+    submittedItems.map((item, index) => [item.id, statusQueries[index]] as const)
+  );
+  const rows = batchItems.map((item) => {
+    const query = queryByItemId.get(item.id);
+    return {
+      item,
+      status: query?.data,
+      queryError: query?.error,
+      retry: query?.refetch,
+    };
+  });
 
   const overallProgress = useMemo(() => {
     if (!rows.length) return 0;
@@ -279,6 +288,8 @@ function Home() {
   const failedCount = rows.filter(
     ({ item, status }) => Boolean(item.error) || status?.status === 'failed'
   ).length;
+  const completeCount = rows.filter(({ status }) => status?.report_ready).length;
+  const pendingCount = rows.length - completeCount - failedCount;
 
   function updateBatchItem(id: string, patch: Partial<BatchItem>) {
     setBatchItems((current) =>
@@ -302,7 +313,7 @@ function Home() {
 
     const sharedFields = new FormData(form);
     const batchStamp = Date.now();
-    const nextItems = copyOnly
+    const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
           id: `copy-${batchStamp}-${index}`,
           fileName: adCopyItemName(copy, index),
@@ -323,38 +334,40 @@ function Home() {
     setBatchItems(nextItems);
     setIsSubmitting(true);
 
-    for (const [index, item] of nextItems.entries()) {
-      const copyLine = copyOnly ? adCopyLines[index] : undefined;
-      const file = copyOnly ? null : files[index] ?? null;
-      updateBatchItem(item.id, { phase: 'uploading' });
+    try {
+      await runWithConcurrency(nextItems, UPLOAD_CONCURRENCY, async (item, index) => {
+        const copyLine = copyOnly ? adCopyLines[index] : undefined;
+        const file = copyOnly ? null : files[index] ?? null;
+        updateBatchItem(item.id, { phase: 'uploading' });
 
-      try {
-        const status = await createReview(
-          buildReviewForm(sharedFields, file, sceneDetection, copyLine),
-          (progress) => updateBatchItem(item.id, { uploadProgress: progress })
-        );
-        updateBatchItem(item.id, {
-          jobId: status.job_id,
-          phase: 'queued',
-          uploadProgress: 100,
-        });
-        queryClient.setQueryData(['status', status.job_id], status);
-        queryClient.invalidateQueries({ queryKey: ['reviews', 'history'] });
-      } catch (error) {
-        updateBatchItem(item.id, {
-          phase: 'failed',
-          error: error instanceof Error ? error.message : String(error),
-          uploadProgress: 100,
-        });
-      }
+        try {
+          const status = await createReview(
+            buildReviewForm(sharedFields, file, sceneDetection, copyLine),
+            (progress) => updateBatchItem(item.id, { uploadProgress: progress })
+          );
+          updateBatchItem(item.id, {
+            jobId: status.job_id,
+            phase: 'queued',
+            uploadProgress: 100,
+          });
+          queryClient.setQueryData(['status', status.job_id], status);
+        } catch (error) {
+          updateBatchItem(item.id, {
+            phase: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+            uploadProgress: 100,
+          });
+        }
+      });
+    } finally {
+      setIsSubmitting(false);
+      void queryClient.invalidateQueries({ queryKey: ['reviews', 'history'] });
     }
-
-    setIsSubmitting(false);
   }
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
         <Card>
         <CardHeader>
           <CardTitle as="h1" className="text-xl">Review workspace</CardTitle>
@@ -377,11 +390,15 @@ function Home() {
                 name="creative"
                 type="file"
                 accept="video/mp4,image/jpeg,image/png,image/webp"
-                className="h-auto min-h-20 cursor-pointer border-dashed py-5"
+                aria-describedby="creative-help"
+                className="h-auto min-h-20 cursor-pointer border-dashed py-5 file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-2 hover:file:bg-accent"
                 onChange={(event) => {
                   setSelectedFiles(Array.from(event.currentTarget.files ?? []));
                 }}
               />
+              <p id="creative-help" className="text-xs leading-5 text-muted-foreground">
+                MP4, JPG, PNG, or WebP · up to 200 MB each · batches start four at a time
+              </p>
             </div>
 
             <FormField label="Ad copy / platform captions" htmlFor="ad_copy">
@@ -484,7 +501,9 @@ function Home() {
               </p>
               <Button type="submit" disabled={isSubmitting}>
                 <Upload data-icon="inline-start" />
-                {isSubmitting ? 'Creating jobs' : 'Create review'}
+                {isSubmitting
+                  ? 'Starting reviews…'
+                  : createButtonLabel(selectedFiles.length || adCopyLines.length)}
               </Button>
             </div>
           </form>
@@ -495,7 +514,7 @@ function Home() {
           <CardHeader>
             <CardTitle className="text-xl">Batch progress</CardTitle>
             <CardDescription>
-              Submission progress first, then backend review progress for each job.
+              Four uploads and four reviews can run at once; the rest advance automatically.
             </CardDescription>
             <CardAction>
               <div className="flex items-center gap-2">
@@ -504,56 +523,63 @@ function Home() {
                     type="button"
                     variant="ghost"
                     size="sm"
+                    disabled={isSubmitting}
                     onClick={() => setBatchItems([])}
                   >
                     Clear
                   </Button>
                 ) : null}
-                <Badge
-                  variant={
-                    failedCount ? 'destructive' : overallProgress === 100 && rows.length
-                      ? 'secondary'
-                      : 'outline'
-                  }
-                >
-                  {failedCount
-                    ? `${failedCount} failed`
-                    : overallProgress === 100 && rows.length
-                      ? 'Complete'
-                      : `${overallProgress}%`}
-                </Badge>
+                {rows.length ? (
+                  <Badge
+                    variant={
+                      failedCount ? 'destructive' : overallProgress === 100
+                        ? 'secondary'
+                        : 'outline'
+                    }
+                  >
+                    {failedCount
+                      ? `${failedCount} failed`
+                      : overallProgress === 100
+                        ? 'Complete'
+                        : `${overallProgress}%`}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">4 at a time</Badge>
+                )}
               </div>
             </CardAction>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <Progress value={overallProgress}>
-              <ProgressLabel>
-                {failedCount ? `Overall · ${failedCount} failed` : 'Overall'}
-              </ProgressLabel>
-              <ProgressValue />
-            </Progress>
-            {failedCount ? (
-              <Alert variant="destructive">
-                <AlertCircle />
-                <AlertTitle>Some jobs did not complete</AlertTitle>
-                <AlertDescription>
-                  Review the failed job messages below, then adjust the input and resubmit.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            <Separator />
             {rows.length ? (
-              <div className="grid gap-3">
-                {rows.map(({ item, queryError, retry, status }) => (
-                  <BatchRow
-                    key={item.id}
-                    item={item}
-                    status={status}
-                    queryError={queryError}
-                    onRetry={retry ? () => void retry() : undefined}
-                  />
-                ))}
-              </div>
+              <>
+                <Progress value={overallProgress}>
+                  <ProgressLabel>
+                    {completeCount} complete · {pendingCount} in progress
+                  </ProgressLabel>
+                  <ProgressValue />
+                </Progress>
+                {failedCount ? (
+                  <Alert variant="destructive">
+                    <AlertCircle />
+                    <AlertTitle>Some jobs did not complete</AlertTitle>
+                    <AlertDescription>
+                      Review the failed job messages below, then adjust the input and resubmit.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <Separator />
+                <div className="grid max-h-[38rem] gap-3 overflow-y-auto pr-1">
+                  {rows.map(({ item, queryError, retry, status }) => (
+                    <BatchRow
+                      key={item.id}
+                      item={item}
+                      status={status}
+                      queryError={queryError}
+                      onRetry={retry ? () => void retry() : undefined}
+                    />
+                  ))}
+                </div>
+              </>
             ) : (
               <EmptyBatchState />
             )}
@@ -597,7 +623,7 @@ function EmptyBatchState() {
         </div>
         <p className="text-sm font-medium">No active batch</p>
         <p className="text-sm text-muted-foreground">
-          Start a review to watch each job move through the queue.
+          Start a review to watch up to four jobs process side by side.
         </p>
       </div>
     </div>
@@ -695,7 +721,7 @@ function HistoryCard({
           Previous reviews stay here with split creative and copy results.
         </CardDescription>
         <CardAction>
-          <Badge variant="outline">{reviews.length} saved</Badge>
+          <Badge variant="outline">{reviews.length} recent</Badge>
         </CardAction>
       </CardHeader>
       <CardContent>
@@ -717,9 +743,9 @@ function HistoryCard({
             <Skeleton className="h-24" />
           </div>
         ) : reviews.length ? (
-          <div className="overflow-x-auto">
+          <div className="max-h-[42rem] overflow-auto">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead>Creative</TableHead>
                   <TableHead>Uploaded</TableHead>
@@ -1045,8 +1071,8 @@ function SettingsPage() {
             <CheckCircle2 />
             <AlertTitle>Processing model</AlertTitle>
             <AlertDescription>
-              Multi-creative uploads create separate jobs. The backend queue processes one
-              job at a time by default and reports per-job progress back to the UI.
+              Multi-creative uploads create separate jobs. Uploads and backend reviews run
+              four at a time by default, with per-job progress reported back to the UI.
             </AlertDescription>
           </Alert>
         </CardContent>
@@ -1108,6 +1134,25 @@ function buildReviewForm(
   return form;
 }
 
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<void>
+) {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await task(items[index], index);
+      }
+    })
+  );
+}
+
 function splitAdCopyLines(value: string) {
   return value
     .split(/\r?\n/)
@@ -1131,10 +1176,15 @@ function selectionBadgeLabel(creativeCount: number, copyLineCount: number) {
   return '0 selected';
 }
 
+function createButtonLabel(jobCount: number) {
+  if (!jobCount) return 'Create review';
+  return `Create ${jobCount} review${jobCount === 1 ? '' : 's'}`;
+}
+
 function submissionHint(creativeCount: number, copyLineCount: number) {
-  if (creativeCount > 1) return `${creativeCount} creatives will be queued as separate jobs.`;
+  if (creativeCount > 1) return `${creativeCount} creatives will start four at a time.`;
   if (creativeCount === 1) return 'Each creative becomes one review job.';
-  if (copyLineCount > 1) return `${copyLineCount} ad copy lines will be queued as separate jobs.`;
+  if (copyLineCount > 1) return `${copyLineCount} ad copy lines will start four at a time.`;
   if (copyLineCount === 1) return 'This ad copy line becomes one review job.';
   return 'Select a creative or enter ad copy to create a review job.';
 }

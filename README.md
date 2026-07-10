@@ -33,8 +33,9 @@ pnpm --dir frontend dev
 
 Open the Vite dev URL and upload one or more MP4, JPG, PNG, or WebP creatives with optional ad copy and policy text, or paste standalone ad copy without a creative. Ad copy means the submitted platform caption/body text, separate from audio transcript and on-creative OCR text.
 The UI creates one review job per selected creative and shows upload progress first,
-then backend queue and processing progress for each job. With no creative selected,
-each non-empty ad copy line becomes its own review job.
+then backend queue and processing progress for each job. Upload admission and backend
+processing both run in bounded parallel pools (four jobs at a time by default). With no
+creative selected, each non-empty ad copy line becomes its own review job.
 
 ## Cloudflare Deployment
 
@@ -117,6 +118,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 - `TELEGRAM_MESSAGE_THREAD_ID`: optional Telegram topic/thread id when posting into a forum topic.
 - `MAX_UPLOAD_MB`: upload limit, default `200`.
 - `JOB_DATA_DIR`: scratch job artifact directory inside the container, default `/tmp/vibe-check/jobs` in Cloudflare.
+- `JOB_WORKER_CONCURRENCY`: number of review jobs processed in parallel, default `4` and capped at `8` to protect a single container from accidental overload.
 
 ## API
 

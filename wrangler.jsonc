@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "vibe-check",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-07-05",
+  "compatibility_date": "2026-07-09",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./frontend/dist",
@@ -50,6 +50,7 @@
     "APP_PUBLIC_URL": "https://vibe-check.thatcanadian.dev",
     "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
+    "JOB_WORKER_CONCURRENCY": "4",
     "MAX_UPLOAD_MB": "200",
     "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash",
     "OPENROUTER_VISION_ENABLED": "true",
