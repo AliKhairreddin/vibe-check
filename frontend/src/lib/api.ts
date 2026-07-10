@@ -48,6 +48,15 @@ export type ReviewHistoryItem = Status & {
   ad_copy_result?: Report['overall_status'] | null;
 };
 
+type ChunkedUpload = {
+  upload_id: string;
+  chunk_size: number;
+  chunk_count: number;
+};
+
+const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
+const MAX_CHUNK_ATTEMPTS = 3;
+
 function apiErrorMessage(body: string, status: number): string {
   const fallback = `Request failed with status ${status}`;
   const trimmed = body.trim();
@@ -92,6 +101,11 @@ export async function createReview(
   form: FormData,
   onUploadProgress?: (progress: number) => void
 ): Promise<Status> {
+  const creative = form.get('creative');
+  if (onUploadProgress && creative instanceof File && creative.size > CHUNKED_UPLOAD_THRESHOLD) {
+    return createChunkedReview(form, creative, onUploadProgress);
+  }
+
   if (!onUploadProgress) {
     return requestJson<Status>('/api/reviews', { method: 'POST', body: form });
   }
@@ -124,6 +138,76 @@ export async function createReview(
     request.onabort = () => reject(new Error('Review submission was cancelled'));
     request.send(form);
   });
+}
+
+async function createChunkedReview(
+  form: FormData,
+  creative: File,
+  onUploadProgress: (progress: number) => void
+): Promise<Status> {
+  const upload = await requestJson<ChunkedUpload>('/api/uploads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      file_name: creative.name,
+      content_type: creative.type,
+      size: creative.size,
+    }),
+  });
+
+  onUploadProgress(0);
+  for (let index = 0; index < upload.chunk_count; index += 1) {
+    const start = index * upload.chunk_size;
+    const end = Math.min(start + upload.chunk_size, creative.size);
+    await sendChunkWithRetry(upload.upload_id, index, creative.slice(start, end));
+    onUploadProgress(Math.round((end / creative.size) * 100));
+  }
+
+  const completionForm = new FormData();
+  for (const [key, value] of form.entries()) {
+    if (key !== 'creative' && typeof value === 'string') completionForm.append(key, value);
+  }
+  try {
+    return await requestJson<Status>(`/api/uploads/${upload.upload_id}/complete`, {
+      method: 'POST',
+      body: completionForm,
+    });
+  } catch (completionError) {
+    try {
+      return await getStatus(upload.upload_id);
+    } catch {
+      throw completionError;
+    }
+  }
+}
+
+async function sendChunkWithRetry(uploadId: string, index: number, chunk: Blob) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt += 1) {
+    let response: Response | undefined;
+    try {
+      response = await fetch(`/api/uploads/${uploadId}/chunks/${index}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: chunk,
+      });
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (response) {
+      const body = await response.text();
+      if (response.ok) return;
+      const error = new Error(apiErrorMessage(body, response.status));
+      if (response.status < 500 && response.status !== 408 && response.status !== 429) throw error;
+      lastError = error;
+    }
+
+    if (attempt < MAX_CHUNK_ATTEMPTS) {
+      await new Promise((resolve) => window.setTimeout(resolve, attempt * 500));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Upload chunk failed');
 }
 
 export async function getStatus(id: string): Promise<Status> {

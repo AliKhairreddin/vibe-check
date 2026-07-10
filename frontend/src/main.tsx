@@ -99,6 +99,8 @@ type BatchItem = {
 
 const queryClient = new QueryClient();
 const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v2';
+const OPENROUTER_MODEL_KEY = 'vibe-check-openrouter-model';
+const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-flash';
 const AD_COPY_PREVIEW_LENGTH = 56;
 const UPLOAD_CONCURRENCY = 4;
 const SOURCE_LABELS: Record<Finding['source'], string> = {
@@ -312,6 +314,7 @@ function Home() {
     }
 
     const sharedFields = new FormData(form);
+    sharedFields.set('model', loadOpenRouterModel());
     const batchStamp = Date.now();
     const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
@@ -424,7 +427,7 @@ function Home() {
                 <SlidersHorizontal className="size-4 text-muted-foreground" />
                 Advanced review options
                 <span className="ml-auto hidden text-xs font-normal text-muted-foreground group-open:hidden sm:inline">
-                  Policy, transcript, notes, model, and sampling
+                  Policy, transcript, notes, and sampling
                 </span>
               </summary>
               <div className="grid gap-4 border-t px-3 py-4">
@@ -451,13 +454,7 @@ function Home() {
                 </FormField>
 
                 <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
-                  <FormField label="OpenRouter model" htmlFor="model">
-                    <Input
-                      id="model"
-                      name="model"
-                      placeholder="deepseek/deepseek-v4-flash"
-                    />
-                  </FormField>
+                  <div className="hidden md:block" aria-hidden="true" />
                   <FormField label="Frame interval" htmlFor="frame_interval_seconds">
                     <Input
                       id="frame_interval_seconds"
@@ -1053,6 +1050,17 @@ function ReportPage() {
 }
 
 function SettingsPage() {
+  const [model, setModel] = useState(loadOpenRouterModel);
+  const [saved, setSaved] = useState(false);
+
+  function saveSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextModel = model.trim() || DEFAULT_OPENROUTER_MODEL;
+    window.localStorage.setItem(OPENROUTER_MODEL_KEY, nextModel);
+    setModel(nextModel);
+    setSaved(true);
+  }
+
   return (
     <div className="mx-auto grid max-w-3xl gap-4">
       <Card>
@@ -1060,7 +1068,27 @@ function SettingsPage() {
           <CardTitle as="h1" className="text-xl">Settings</CardTitle>
           <CardDescription>Runtime configuration for deployed reviews.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 text-sm leading-6 text-muted-foreground">
+        <CardContent className="grid gap-5 text-sm leading-6 text-muted-foreground">
+          <form className="grid gap-3" onSubmit={saveSettings}>
+            <FormField label="OpenRouter model" htmlFor="settings-model">
+              <Input
+                id="settings-model"
+                value={model}
+                placeholder={DEFAULT_OPENROUTER_MODEL}
+                onChange={(event) => {
+                  setModel(event.currentTarget.value);
+                  setSaved(false);
+                }}
+              />
+            </FormField>
+            <div className="flex items-center gap-3">
+              <Button type="submit">Save model</Button>
+              <span className="text-xs text-muted-foreground" aria-live="polite">
+                {saved ? 'Saved for future reviews on this browser.' : 'Used for every new review.'}
+              </span>
+            </div>
+          </form>
+          <Separator />
           <p>
             Configure OPENROUTER_API_KEY and CONVEX_HTTP_SECRET as Cloudflare Worker
             secrets. The Convex URL is non-secret Worker config, and creatives stay in
@@ -1069,7 +1097,7 @@ function SettingsPage() {
           </p>
           <Alert>
             <CheckCircle2 />
-            <AlertTitle>Processing model</AlertTitle>
+            <AlertTitle>Parallel processing</AlertTitle>
             <AlertDescription>
               Multi-creative uploads create separate jobs. Uploads and backend reviews run
               four at a time by default, with per-job progress reported back to the UI.
@@ -1132,6 +1160,11 @@ function buildReviewForm(
 
   if (sceneDetection) form.append('scene_detection', 'true');
   return form;
+}
+
+function loadOpenRouterModel() {
+  if (typeof window === 'undefined') return DEFAULT_OPENROUTER_MODEL;
+  return window.localStorage.getItem(OPENROUTER_MODEL_KEY)?.trim() || DEFAULT_OPENROUTER_MODEL;
 }
 
 async function runWithConcurrency<T>(

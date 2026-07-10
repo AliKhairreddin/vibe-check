@@ -12,7 +12,7 @@ from .ocr import run_ocr
 from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 
-INTERMEDIATE_FILES=('request.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
+INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 
 def build_review_evidence(
     media_kind: MediaKind,
@@ -115,4 +115,5 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 (jd/name).unlink(missing_ok=True)
             except OSError:
                 pass
+        shutil.rmtree(jd/'upload_chunks', ignore_errors=True)
         shutil.rmtree(jd/'frames', ignore_errors=True)

@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.main import copy_review_file_name
+from app.main import app, copy_review_file_name
 from app.review_pipeline import queue as review_queue
 from app.review_pipeline.models import ComplianceReport, JobRecord, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
@@ -79,6 +79,60 @@ def test_copy_review_file_name_uses_copy_preview():
     label=copy_review_file_name('  Save money now with a very long claim that should still make a compact history label for reviewers.  ')
     assert label.startswith('Ad copy: Save money now')
     assert len(label) <= 72
+
+
+@pytest.mark.anyio
+async def test_chunked_upload_reassembles_and_enqueues_large_creative(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.setattr('app.main.UPLOAD_CHUNK_SIZE', 5)
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    creative = b'fake-mp4-payload'
+    enqueued = {}
+
+    async def fake_enqueue(job_id, media_path, media_kind, meta, file_name):
+        enqueued.update({
+            'job_id': job_id,
+            'payload': media_path.read_bytes(),
+            'media_kind': media_kind,
+            'model': meta.model,
+            'file_name': file_name,
+        })
+        return JobRecord(job_id=job_id, file_name=file_name, has_ad_copy=meta.has_ad_copy)
+
+    monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        started = await client.post('/api/uploads', json={
+            'file_name': 'creative.mp4',
+            'content_type': 'video/mp4',
+            'size': len(creative),
+        })
+        assert started.status_code == 200
+        upload = started.json()
+        assert upload['chunk_count'] == 4
+        for index in range(upload['chunk_count']):
+            start = index * upload['chunk_size']
+            chunk = await client.put(
+                f"/api/uploads/{upload['upload_id']}/chunks/{index}",
+                content=creative[start:start + upload['chunk_size']],
+                headers={'content-type': 'application/octet-stream'},
+            )
+            assert chunk.status_code == 200
+        completed = await client.post(
+            f"/api/uploads/{upload['upload_id']}/complete",
+            data={'ad_copy': 'Caption', 'model': 'example/model'},
+        )
+
+    assert completed.status_code == 200
+    assert enqueued == {
+        'job_id': upload['upload_id'],
+        'payload': creative,
+        'media_kind': 'video',
+        'model': 'example/model',
+        'file_name': 'creative.mp4',
+    }
 
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'

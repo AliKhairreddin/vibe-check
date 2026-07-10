@@ -33,7 +33,9 @@ pnpm --dir frontend dev
 
 Open the Vite dev URL and upload one or more MP4, JPG, PNG, or WebP creatives with optional ad copy and policy text, or paste standalone ad copy without a creative. Ad copy means the submitted platform caption/body text, separate from audio transcript and on-creative OCR text.
 The UI creates one review job per selected creative and shows upload progress first,
-then backend queue and processing progress for each job. Upload admission and backend
+then backend queue and processing progress for each job. Creatives larger than 8 MB are
+sent as retryable 8 MB chunks so files up to the configured 200 MB application limit do
+not exceed Cloudflare's plan-level per-request body limit. Upload admission and backend
 processing both run in bounded parallel pools (four jobs at a time by default). With no
 creative selected, each non-empty ad copy line becomes its own review job.
 
