@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import {
   QueryClient,
   QueryClientProvider,
+  useInfiniteQuery,
   useQueries,
   useQuery,
 } from '@tanstack/react-query';
@@ -89,6 +90,7 @@ import {
   getReviewSources,
   getStatus,
   listDriveCreatives,
+  listReviewHistoryPage,
   listReviews,
   reportBatchUploadFailure,
   type OverallStatus,
@@ -986,13 +988,21 @@ function BatchRow({
 }
 
 function HistoryCard({
+  allHistory = false,
   error,
+  hasMore = false,
+  isFetchingMore = false,
   isLoading,
+  onLoadMore,
   onRetry,
   reviews,
 }: {
+  allHistory?: boolean;
   error: Error | null;
+  hasMore?: boolean;
+  isFetchingMore?: boolean;
   isLoading: boolean;
+  onLoadMore?: () => void;
   onRetry: () => void;
   reviews: ReviewHistoryItem[];
 }) {
@@ -1022,18 +1032,32 @@ function HistoryCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xl">Review history</CardTitle>
+        <CardTitle as={allHistory ? 'h1' : 'h2'} className="text-xl">
+          {allHistory ? 'All review history' : 'Review history'}
+        </CardTitle>
         <CardDescription>
-          Previous reviews stay here with split creative and copy results. Green is
-          ready, yellow needs minor fixes, orange requires review, and red should not
-          be published.
+          {allHistory
+            ? 'Browse every saved review, loading older records as needed.'
+            : 'Your 50 most recent reviews, with split creative and copy results.'}
         </CardDescription>
         <CardAction>
-          <Badge variant="outline">
-            {isSearching
-              ? `${filteredReviews.length} of ${reviews.length}`
-              : `${reviews.length} recent`}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">
+              {isSearching
+                ? `${filteredReviews.length} of ${reviews.length}`
+                : allHistory
+                  ? `${reviews.length}${hasMore ? '+' : ''} loaded`
+                  : `${reviews.length} recent`}
+            </Badge>
+            {!allHistory ? (
+              <Link
+                to="/history"
+                className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+              >
+                View all
+              </Link>
+            ) : null}
+          </div>
         </CardAction>
       </CardHeader>
       <CardContent>
@@ -1083,7 +1107,7 @@ function HistoryCard({
             <Skeleton className="h-24" />
           </div>
         ) : filteredReviews.length ? (
-          <div className="max-h-[42rem] overflow-auto">
+          <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
@@ -1174,8 +1198,44 @@ function HistoryCard({
             </p>
           </div>
         )}
+        {allHistory && hasMore && !error ? (
+          <div className="mt-4 flex justify-center border-t pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onLoadMore}
+              disabled={isFetchingMore}
+            >
+              {isFetchingMore ? <LoaderCircle className="animate-spin" /> : null}
+              {isFetchingMore ? 'Loading older reviews' : 'Load older reviews'}
+            </Button>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+function AllHistoryPage() {
+  const query = useInfiniteQuery({
+    queryKey: ['reviews', 'all-history'],
+    queryFn: ({ pageParam }) => listReviewHistoryPage(pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
+  });
+  const reviews = query.data?.pages.flatMap((page) => page.reviews) ?? [];
+
+  return (
+    <HistoryCard
+      allHistory
+      error={query.error}
+      hasMore={query.hasNextPage}
+      isFetchingMore={query.isFetchingNextPage}
+      isLoading={query.isLoading}
+      onLoadMore={() => void query.fetchNextPage()}
+      onRetry={() => void query.refetch()}
+      reviews={reviews}
+    />
   );
 }
 
@@ -1892,6 +1952,11 @@ const progressRoute = createRoute({
   path: '/reviews/$jobId',
   component: ProgressPage,
 });
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/history',
+  component: AllHistoryPage,
+});
 const reportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reviews/$jobId/report',
@@ -1910,6 +1975,7 @@ const settingsRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
+    historyRoute,
     batchRoute,
     progressRoute,
     reportRoute,

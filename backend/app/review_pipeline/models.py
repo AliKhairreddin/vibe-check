@@ -96,6 +96,11 @@ class ReviewHistoryItem(JobRecord):
     creative_result: ResultStatus | None = None
     ad_copy_result: ResultStatus | None = None
 
+class ReviewHistoryPage(BaseModel):
+    reviews: list[ReviewHistoryItem] = Field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
 class ReviewRequestMeta(BaseModel):
     ad_copy: str = ''
     policy_text: str = ''

@@ -89,6 +89,12 @@ export type ReviewHistoryItem = Status & {
   ad_copy_result?: Report['overall_status'] | null;
 };
 
+export type ReviewHistoryPage = {
+  reviews: ReviewHistoryItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
 export type ReviewBatchItem = {
   item_id: string;
   file_name: string;
@@ -294,6 +300,15 @@ export async function getStatus(id: string): Promise<Status> {
 
 export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
   return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
+}
+
+export async function listReviewHistoryPage(
+  cursor: string | null = null,
+  limit = 50
+): Promise<ReviewHistoryPage> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set('cursor', cursor);
+  return requestJson<ReviewHistoryPage>(`/api/reviews/history?${params}`);
 }
 
 export async function createReviewBatch(input: CreateReviewBatchInput): Promise<ReviewBatch> {

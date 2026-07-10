@@ -14,6 +14,7 @@ from .models import (
     ReviewBatch,
     ReviewBatchItem,
     ReviewHistoryItem,
+    ReviewHistoryPage,
     ReviewSource,
 )
 
@@ -346,12 +347,7 @@ def _ad_copy_result(report:dict[str, Any]|None, has_ad_copy:bool)->str|None:
         return None
     return _source_result_status(report, 'ad_copy') or _split_result(report, lambda source: source == 'ad_copy')
 
-def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
-    limit=max(1, min(limit, 100))
-    remote=_convex_call('query', 'reviews:listRecent', {'limit': limit})
-    if remote is not None:
-        return [ReviewHistoryItem.model_validate(item) for item in remote]
-
+def _local_reviews()->list[ReviewHistoryItem]:
     if not JOB_DATA_DIR.exists():
         return []
 
@@ -373,4 +369,38 @@ def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
         items.append(ReviewHistoryItem(**data))
 
     items.sort(key=lambda item: item.created_at or 0, reverse=True)
-    return items[:limit]
+    return items
+
+def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
+    limit=max(1, min(limit, 100))
+    remote=_convex_call('query', 'reviews:listRecent', {'limit': limit})
+    if remote is not None:
+        return [ReviewHistoryItem.model_validate(item) for item in remote]
+    return _local_reviews()[:limit]
+
+def list_reviews_page(limit:int=50, cursor:str|None=None)->ReviewHistoryPage:
+    limit=max(1, min(limit, 100))
+    remote=_convex_call('query', 'reviews:listPage', {
+        'paginationOpts': {'numItems':limit, 'cursor':cursor},
+    })
+    if remote is not None:
+        return ReviewHistoryPage(
+            reviews=[ReviewHistoryItem.model_validate(item) for item in remote['page']],
+            next_cursor=None if remote['isDone'] else remote['continueCursor'],
+            has_more=not remote['isDone'],
+        )
+
+    items=_local_reviews()
+
+    try:
+        offset=max(0, int(cursor or '0'))
+    except ValueError:
+        offset=0
+    page=items[offset:offset + limit]
+    next_offset=offset + len(page)
+    has_more=next_offset < len(items)
+    return ReviewHistoryPage(
+        reviews=page,
+        next_cursor=str(next_offset) if has_more else None,
+        has_more=has_more,
+    )

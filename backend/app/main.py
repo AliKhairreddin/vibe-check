@@ -19,6 +19,7 @@ from .review_pipeline.models import (
     ReviewSources,
     ReviewBatch,
     ReviewHistoryItem,
+    ReviewHistoryPage,
     ReviewRequestMeta,
 )
 from .review_pipeline.storage import (
@@ -28,6 +29,7 @@ from .review_pipeline.storage import (
     get_status,
     job_dir,
     list_reviews,
+    list_reviews_page,
     now_ms,
     set_review_source,
 )
@@ -383,6 +385,10 @@ def fail_batch_upload(batch_id:str, item_id:str, payload:BatchFailure):
 @app.get('/api/reviews', response_model=list[ReviewHistoryItem])
 def review_history(limit:int=50):
     return list_reviews(limit)
+
+@app.get('/api/reviews/history', response_model=ReviewHistoryPage)
+def full_review_history(limit:int=50, cursor:str|None=None):
+    return list_reviews_page(limit, cursor)
 
 @app.get('/api/reviews/{job_id}', response_model=JobRecord)
 def review_status(job_id:str):

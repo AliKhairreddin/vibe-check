@@ -17,7 +17,7 @@ from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import create_batch, get_batch, set_status, get_status, set_report, get_report, list_reviews
+from app.review_pipeline.storage import create_batch, get_batch, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page
 from app.review_pipeline.source_links import resolve_review_sources
 from app.review_pipeline.telegram import build_batch_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
@@ -470,6 +470,40 @@ def test_review_history_lists_local_jobs(tmp_path, monkeypatch):
     assert history[0].file_name=='creative.mp4'
     assert history[0].overall_status=='green'
     assert history[0].created_at is not None
+
+def test_review_history_pages_through_all_local_jobs(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    for index in range(5):
+        set_status(f'j{index}', JobStatus.queued, 0, 'Queued', f'creative-{index}.mp4')
+
+    first=list_reviews_page(limit=2)
+    second=list_reviews_page(limit=2, cursor=first.next_cursor)
+    third=list_reviews_page(limit=2, cursor=second.next_cursor)
+
+    assert len(first.reviews)==2 and first.has_more
+    assert len(second.reviews)==2 and second.has_more
+    assert len(third.reviews)==1 and not third.has_more
+    assert len({item.job_id for page in (first, second, third) for item in page.reviews})==5
+
+@pytest.mark.anyio
+async def test_full_history_api_returns_cursor_page(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    for index in range(3):
+        set_status(f'j{index}', JobStatus.queued, 0, 'Queued', f'creative-{index}.mp4')
+
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response=await client.get('/api/reviews/history?limit=2')
+
+    assert response.status_code == 200
+    assert len(response.json()['reviews']) == 2
+    assert response.json()['has_more']
+    assert response.json()['next_cursor'] == '2'
 
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

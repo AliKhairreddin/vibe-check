@@ -134,6 +134,7 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 
 Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
 - `GET /api/reviews`: recent review history with filename, upload date, status, progress, and final result when available.
+- `GET /api/reviews/history`: cursor-paginated review history for browsing every saved review.
 - `GET /api/reviews/{job_id}`: status and progress.
 - `GET /api/reviews/{job_id}/report`: structured report JSON.
 - `GET /api/reviews/{job_id}/source`: resolved Drive creative and/or shared ad-copy spreadsheet links. Exact-name matches are constrained to the configured Drive folder; missing and ambiguous matches return a safe non-linked state.

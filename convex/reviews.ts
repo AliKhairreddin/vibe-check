@@ -1,4 +1,4 @@
-import { mutationGeneric, queryGeneric } from "convex/server";
+import { mutationGeneric, paginationOptsValidator, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 
 const statusArgs = {
@@ -277,5 +277,24 @@ export const listRecent = queryGeneric({
       .order("desc")
       .take(limit);
     return reviews.map(publicReview);
+  },
+});
+
+export const listPage = queryGeneric({
+  args: {
+    secret: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const result = await ctx.db
+      .query("reviews")
+      .withIndex("by_created_at")
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map(publicReview),
+    };
   },
 });
