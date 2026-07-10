@@ -61,6 +61,7 @@ async def enqueue_job(
     media_kind: MediaKind,
     meta: ReviewRequestMeta,
     file_name: str,
+    file_size: int | None = None,
 ):
     position = _queue.qsize() + 1
     message = 'Queued for processing'
@@ -72,6 +73,7 @@ async def enqueue_job(
         0,
         message,
         file_name,
+        file_size,
         has_ad_copy=meta.has_ad_copy,
         has_creative=media_kind != 'copy_only',
         batch_id=meta.batch_id,

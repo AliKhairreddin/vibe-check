@@ -25,6 +25,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Download,
+  ExternalLink,
   FileImage,
   FileJson,
   Moon,
@@ -79,6 +80,7 @@ import {
   type Finding,
   getBatch,
   getReport,
+  getReviewSources,
   getStatus,
   listReviews,
   reportBatchUploadFailure,
@@ -1046,6 +1048,11 @@ function ProgressPage() {
 function ReportPage() {
   const { jobId } = useParams({ from: '/reviews/$jobId/report' });
   const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId) });
+  const sourceQuery = useQuery({
+    queryKey: ['source', jobId],
+    queryFn: () => getReviewSources(jobId),
+    enabled: Boolean(query.data),
+  });
   const column = createColumnHelper<Finding>();
   const table = useReactTable({
     data: query.data?.findings ?? [],
@@ -1109,6 +1116,12 @@ function ReportPage() {
     label: string;
     result: NonNullable<typeof item.result>;
   } => Boolean(item.result));
+  const linkedSources = sourceQuery.data?.sources.filter(
+    (source) => source.status === 'linked' && source.url
+  ) ?? [];
+  const unresolvedSources = sourceQuery.data?.sources.filter(
+    (source) => source.status !== 'linked'
+  ) ?? [];
 
   return (
     <div className="grid gap-4">
@@ -1142,13 +1155,48 @@ function ReportPage() {
               ))}
             </div>
           ) : null}
-          <a
-            className={cn(buttonVariants({ variant: 'outline' }), 'w-fit')}
-            href={`/api/reviews/${jobId}/report.json`}
-          >
-            <Download data-icon="inline-start" />
-            Download JSON
-          </a>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              className={cn(buttonVariants({ variant: 'outline' }), 'w-fit')}
+              href={`/api/reviews/${jobId}/report.json`}
+            >
+              <Download data-icon="inline-start" />
+              Download JSON
+            </a>
+            {linkedSources.map((source) => (
+              <a
+                key={`${source.kind}-${source.url}`}
+                className={cn(buttonVariants({ variant: 'default' }), 'w-fit')}
+                href={source.url ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink data-icon="inline-start" />
+                {source.label}
+              </a>
+            ))}
+            {sourceQuery.isLoading ? <Badge variant="outline">Locating source…</Badge> : null}
+          </div>
+          {unresolvedSources.length || sourceQuery.error ? (
+            <div className="flex flex-col items-start gap-2 rounded-lg border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="grid gap-1 text-sm text-muted-foreground">
+                {unresolvedSources.map((source) => (
+                  <p key={`${source.label}-${source.status}`}>{source.message}</p>
+                ))}
+                {sourceQuery.error ? <p>{errorMessage(sourceQuery.error)}</p> : null}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={sourceQuery.isFetching}
+                onClick={() => void sourceQuery.refetch()}
+              >
+                <RefreshCw />
+                Retry
+              </Button>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

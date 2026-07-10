@@ -14,6 +14,7 @@ from .models import (
     ReviewBatch,
     ReviewBatchItem,
     ReviewHistoryItem,
+    ReviewSource,
 )
 
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
@@ -70,18 +71,22 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
 
-def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None)->JobRecord:
+def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None)->JobRecord:
     current_file_name=file_name
+    current_file_size=file_size
     current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
     current_has_creative=True if has_creative is None else has_creative
     current_batch_id=batch_id
     current_batch_item_id=batch_item_id
+    source_values:dict[str, Any]={}
     local_path=job_dir(job_id)/'status.json'
     created_at=now_ms()
     if local_path.exists():
         current=JobRecord.model_validate(read_json(local_path))
         if not current_file_name:
             current_file_name=current.file_name
+        if current_file_size is None:
+            current_file_size=current.file_size
         if has_ad_copy is None:
             current_has_ad_copy=current.has_ad_copy
         if has_creative is None:
@@ -90,9 +95,17 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
             current_batch_id=current.batch_id
         if current_batch_item_id is None:
             current_batch_item_id=current.batch_item_id
+        source_values={
+            'source_kind':current.source_kind,
+            'source_status':current.source_status,
+            'source_url':current.source_url,
+            'source_file_id':current.source_file_id,
+            'source_message':current.source_message,
+            'source_checked_at':current.source_checked_at,
+        }
         created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,created_at=created_at,updated_at=now_ms())
+    rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,created_at=created_at,updated_at=now_ms(),**source_values)
     write_json(local_path, rec.model_dump(mode='json'))
     review_args = {
         'fileName': rec.file_name,
@@ -108,6 +121,8 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         review_args['batchId'] = rec.batch_id
     if rec.batch_item_id:
         review_args['batchItemId'] = rec.batch_item_id
+    if rec.file_size is not None:
+        review_args['fileSize'] = rec.file_size
     _convex_call('mutation', 'reviews:upsertStatus', review_args)
     if rec.batch_id and rec.batch_item_id:
         update_batch_item(
@@ -118,6 +133,32 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
             message=rec.message,
         )
     return rec
+
+def set_review_source(job_id:str, source:ReviewSource)->None:
+    local_path=JOB_DATA_DIR/job_id/'status.json'
+    if local_path.exists():
+        current=JobRecord.model_validate(read_json(local_path))
+        current.source_kind=source.kind
+        current.source_status=source.status
+        current.source_url=source.url
+        current.source_file_id=source.file_id
+        current.source_message=source.message
+        current.source_checked_at=source.checked_at
+        current.updated_at=now_ms()
+        write_json(local_path, current.model_dump(mode='json'))
+    args:dict[str, Any]={
+        'jobId':job_id,
+        'status':source.status,
+        'message':source.message,
+        'checkedAt':source.checked_at,
+    }
+    if source.kind:
+        args['kind']=source.kind
+    if source.url:
+        args['url']=source.url
+    if source.file_id:
+        args['fileId']=source.file_id
+    _convex_call('mutation', 'reviews:setSource', args)
 
 def get_status(job_id:str)->JobRecord:
     remote=_convex_call('query', 'reviews:getStatus', {'jobId': job_id})

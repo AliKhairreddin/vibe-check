@@ -15,7 +15,7 @@ Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives, or sta
 - Static frontend routes are served from `frontend/dist` via Workers Static Assets.
 - `/api/*` routes are forwarded to a Cloudflare Container running the FastAPI backend.
 - Uploaded creatives, extracted audio, sampled frames, prepared image frames, OCR artifacts, and visual observation artifacts stay in temporary container scratch space only.
-- Convex stores the uploaded filename, job status/progress, and final compliance report JSON.
+- Convex stores the uploaded filename and size, job status/progress, resolved source link metadata, and final compliance report JSON.
 
 R2 is not required for this MVP because uploaded creatives and frame artifacts are intentionally not durable.
 
@@ -113,6 +113,9 @@ If the custom domain cannot be created by Wrangler, add it in the Cloudflare das
 - `CONVEX_DEPLOYMENT`: Convex deployment selector for CLI commands, currently `prod:energetic-partridge-813`.
 - `CONVEX_URL`: Convex deployment URL ending in `.convex.cloud`. This is non-secret config in `wrangler.jsonc`.
 - `CONVEX_HTTP_SECRET`: shared secret used by the container when writing to Convex. Store the same value in Convex env vars and Cloudflare Worker secrets.
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`: complete Google service-account credential JSON used for read-only Drive lookup. Store it only as a Cloudflare Worker secret.
+- `GOOGLE_DRIVE_FOLDER_ID`: root Drive folder used to constrain creative filename matches.
+- `GOOGLE_AD_COPY_SHEET_URL`: shared Google Sheet opened from copy-only review reports.
 - `APP_PASSWORD`: optional simple API password gate for deployed MVP.
 - `APP_PUBLIC_URL`: public app URL used when Telegram notifications link to completed reports.
 - `TELEGRAM_BOT_TOKEN`: optional bot token for completed-review Telegram alerts. Store as a Cloudflare Worker secret.
@@ -133,12 +136,13 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 - `GET /api/reviews`: recent review history with filename, upload date, status, progress, and final result when available.
 - `GET /api/reviews/{job_id}`: status and progress.
 - `GET /api/reviews/{job_id}/report`: structured report JSON.
+- `GET /api/reviews/{job_id}/source`: resolved Drive creative and/or shared ad-copy spreadsheet links. Exact-name matches are constrained to the configured Drive folder; missing and ambiguous matches return a safe non-linked state.
 - `GET /api/reviews/{job_id}/report.json`: downloadable report.
 - `GET /api/reviews/{job_id}/frames/{filename}`: frame thumbnail.
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Result verdicts use a four-level scale: `green` (ready to run), `yellow` (minor fixes), `orange` (human review required), and `red` (do not publish without material changes). Multi-creative uploads and multi-line copy-only submissions are registered as durable batches before uploads begin. Batch Telegram notifications wait for every item to complete or fail, then send one summary with a link to the batch report page and its individual report buttons. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, resolved source metadata, and final report JSON. Creative source links are resolved lazily from an exact filename search within the configured Drive folder, with uploaded size used to disambiguate duplicate names for new reviews. A unique match is cached; missing or ambiguous matches never guess and can be retried later. Copy-only reports link to the configured shared spreadsheet. Reports include separate creative and ad-copy source results when the LLM returns them. Result verdicts use a four-level scale: `green` (ready to run), `yellow` (minor fixes), `orange` (human review required), and `red` (do not publish without material changes). Multi-creative uploads and multi-line copy-only submissions are registered as durable batches before uploads begin. Batch Telegram notifications wait for every item to complete or fail, then send one summary with a link to the batch report page and its individual report buttons. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 

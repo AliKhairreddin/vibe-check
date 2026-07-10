@@ -11,12 +11,14 @@ from app.review_pipeline import queue as review_queue
 from app.review_pipeline import telegram as review_telegram
 from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
+from app.review_pipeline.drive import DriveFile, GoogleDriveClient, escape_drive_query_value
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, get_batch, set_status, get_status, set_report, get_report, list_reviews
+from app.review_pipeline.source_links import resolve_review_sources
 from app.review_pipeline.telegram import build_batch_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
@@ -93,13 +95,14 @@ async def test_chunked_upload_reassembles_and_enqueues_large_creative(tmp_path, 
     creative = b'fake-mp4-payload'
     enqueued = {}
 
-    async def fake_enqueue(job_id, media_path, media_kind, meta, file_name):
+    async def fake_enqueue(job_id, media_path, media_kind, meta, file_name, file_size=None):
         enqueued.update({
             'job_id': job_id,
             'payload': media_path.read_bytes(),
             'media_kind': media_kind,
             'model': meta.model,
             'file_name': file_name,
+            'file_size': file_size,
         })
         return JobRecord(job_id=job_id, file_name=file_name, has_ad_copy=meta.has_ad_copy)
 
@@ -134,7 +137,122 @@ async def test_chunked_upload_reassembles_and_enqueues_large_creative(tmp_path, 
         'media_kind': 'video',
         'model': 'example/model',
         'file_name': 'creative.mp4',
+        'file_size': len(creative),
     }
+
+def test_drive_query_escaping_handles_apostrophes_and_backslashes():
+    assert escape_drive_query_value("quinn's paper\\essay.mp4") == "quinn\\'s paper\\\\essay.mp4"
+
+def test_drive_search_keeps_only_files_inside_configured_root(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+    calls=[]
+
+    def fake_get_json(path, params):
+        calls.append((path, params.copy()))
+        if path == '/files':
+            return {'files':[
+                {
+                    'id':'inside',
+                    'name':"quinn's ad.mp4",
+                    'mimeType':'video/mp4',
+                    'parents':['nested-folder'],
+                    'webViewLink':'https://drive.google.com/file/d/inside/view',
+                    'size':'123',
+                },
+                {
+                    'id':'outside',
+                    'name':"quinn's ad.mp4",
+                    'mimeType':'video/mp4',
+                    'parents':['other-folder'],
+                    'webViewLink':'https://drive.google.com/file/d/outside/view',
+                },
+            ]}
+        if path == '/files/nested-folder':
+            return {'id':'nested-folder','parents':['root-folder']}
+        if path == '/files/other-folder':
+            return {'id':'other-folder','parents':['different-root']}
+        if path == '/files/different-root':
+            return {'id':'different-root','parents':[]}
+        raise AssertionError(f'Unexpected Drive request: {path}')
+
+    monkeypatch.setattr(client, '_get_json', fake_get_json)
+    matches=client.find_files_by_exact_name("quinn's ad.mp4")
+
+    assert [match.file_id for match in matches] == ['inside']
+    assert matches[0].size == 123
+    assert calls[0][1]['q'] == "name = 'quinn\\'s ad.mp4' and trashed = false"
+
+class FakeDriveClient:
+    def __init__(self, matches):
+        self.matches=matches
+        self.queries=[]
+
+    def find_files_by_exact_name(self, file_name):
+        self.queries.append(file_name)
+        return self.matches
+
+def test_copy_only_source_links_to_shared_spreadsheet(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.setenv('GOOGLE_AD_COPY_SHEET_URL', 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
+    set_status('copy1', JobStatus.complete, 100, 'Complete', 'Ad copy: Save today.', has_creative=False)
+
+    source=resolve_review_sources('copy1').sources[0]
+
+    assert source.status == 'linked'
+    assert source.kind == 'google_sheet'
+    assert source.url == 'https://docs.google.com/spreadsheets/d/sheet-id/edit'
+
+def test_creative_source_uses_size_to_disambiguate_same_name(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('creative1', JobStatus.complete, 100, 'Complete', 'creative.mp4', file_size=200, has_ad_copy=False)
+    drive=FakeDriveClient([
+        DriveFile('first','creative.mp4','video/mp4',('root',),'https://drive.google.com/first',100),
+        DriveFile('second','creative.mp4','video/mp4',('root',),'https://drive.google.com/second',200),
+    ])
+
+    source=resolve_review_sources('creative1', drive).sources[0]
+
+    assert source.status == 'linked'
+    assert source.file_id == 'second'
+    assert source.url == 'https://drive.google.com/second'
+    assert drive.queries == ['creative.mp4']
+
+def test_creative_source_reports_missing_and_ambiguous_matches(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('missing', JobStatus.complete, 100, 'Complete', 'missing.mp4', has_ad_copy=False)
+    set_status('ambiguous', JobStatus.complete, 100, 'Complete', 'duplicate.mp4', has_ad_copy=False)
+
+    missing=resolve_review_sources('missing', FakeDriveClient([])).sources[0]
+    ambiguous=resolve_review_sources('ambiguous', FakeDriveClient([
+        DriveFile('one','duplicate.mp4','video/mp4',('root',),'https://drive.google.com/one'),
+        DriveFile('two','duplicate.mp4','video/mp4',('root',),'https://drive.google.com/two'),
+    ])).sources[0]
+
+    assert missing.status == 'not_found'
+    assert missing.url is None
+    assert ambiguous.status == 'ambiguous'
+    assert ambiguous.url is None
+
+def test_creative_with_ad_copy_returns_drive_and_spreadsheet_links(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.setenv('GOOGLE_AD_COPY_SHEET_URL', 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
+    set_status('mixed', JobStatus.complete, 100, 'Complete', 'mixed.mp4', has_ad_copy=True)
+
+    resolved=resolve_review_sources('mixed', FakeDriveClient([
+        DriveFile('creative','mixed.mp4','video/mp4',('root',),'https://drive.google.com/creative'),
+    ])).sources
+
+    assert [source.kind for source in resolved] == ['google_drive_file', 'google_sheet']
+    assert [source.status for source in resolved] == ['linked', 'linked']
 
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'

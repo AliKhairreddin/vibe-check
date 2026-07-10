@@ -6,6 +6,7 @@ const statusArgs = {
   batchItemId: v.optional(v.string()),
   secret: v.string(),
   fileName: v.optional(v.string()),
+  fileSize: v.optional(v.number()),
   hasAdCopy: v.optional(v.boolean()),
   hasCreative: v.optional(v.boolean()),
   jobId: v.string(),
@@ -96,6 +97,7 @@ function publicReview(review: {
   batchItemId?: string;
   createdAt: number;
   fileName: string;
+  fileSize?: number;
   hasAdCopy?: boolean;
   hasCreative?: boolean;
   jobId: string;
@@ -104,6 +106,12 @@ function publicReview(review: {
   report?: unknown;
   reportReady: boolean;
   status: string;
+  sourceCheckedAt?: number;
+  sourceFileId?: string;
+  sourceKind?: string;
+  sourceMessage?: string;
+  sourceStatus?: string;
+  sourceUrl?: string;
   updatedAt: number;
 }) {
   const hasAdCopy = review.hasAdCopy ?? true;
@@ -115,6 +123,7 @@ function publicReview(review: {
     created_at: review.createdAt,
     creative_result: creativeResult(review.report, hasCreative),
     file_name: review.fileName,
+    file_size: review.fileSize ?? null,
     has_ad_copy: hasAdCopy,
     has_creative: hasCreative,
     job_id: review.jobId,
@@ -123,6 +132,12 @@ function publicReview(review: {
     progress: review.progress,
     report_ready: review.reportReady,
     status: review.status,
+    source_checked_at: review.sourceCheckedAt ?? null,
+    source_file_id: review.sourceFileId ?? null,
+    source_kind: review.sourceKind ?? null,
+    source_message: review.sourceMessage ?? "",
+    source_status: review.sourceStatus ?? null,
+    source_url: review.sourceUrl ?? null,
     updated_at: review.updatedAt,
   };
 }
@@ -141,6 +156,7 @@ export const upsertStatus = mutationGeneric({
       batchId: args.batchId ?? existing?.batchId,
       batchItemId: args.batchItemId ?? existing?.batchItemId,
       fileName: args.fileName ?? existing?.fileName ?? "",
+      fileSize: args.fileSize ?? existing?.fileSize,
       hasAdCopy: args.hasAdCopy ?? existing?.hasAdCopy ?? true,
       hasCreative: args.hasCreative ?? existing?.hasCreative ?? true,
       jobId: args.jobId,
@@ -179,6 +195,38 @@ export const setReport = mutationGeneric({
     await ctx.db.patch(existing._id, {
       report: args.report,
       reportReady: true,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const setSource = mutationGeneric({
+  args: {
+    secret: v.string(),
+    jobId: v.string(),
+    checkedAt: v.number(),
+    fileId: v.optional(v.string()),
+    kind: v.optional(v.string()),
+    message: v.string(),
+    status: v.string(),
+    url: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const existing = await ctx.db
+      .query("reviews")
+      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+      .unique();
+    if (!existing) {
+      throw new Error("Review job not found");
+    }
+    await ctx.db.patch(existing._id, {
+      sourceCheckedAt: args.checkedAt,
+      sourceFileId: args.fileId,
+      sourceKind: args.kind,
+      sourceMessage: args.message,
+      sourceStatus: args.status,
+      sourceUrl: args.url,
       updatedAt: Date.now(),
     });
   },

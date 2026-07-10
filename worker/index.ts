@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v3";
+const BACKEND_INSTANCE = "primary-v4";
 type OptionalSecrets = Env & {
   APP_PASSWORD?: string;
   APP_PUBLIC_URL?: string;
@@ -23,6 +23,9 @@ export class ReviewBackend extends Container<Env> {
       APP_PUBLIC_URL: optionalSecrets.APP_PUBLIC_URL ?? "",
       CONVEX_HTTP_SECRET: env.CONVEX_HTTP_SECRET,
       CONVEX_URL: env.CONVEX_URL,
+      GOOGLE_AD_COPY_SHEET_URL: env.GOOGLE_AD_COPY_SHEET_URL,
+      GOOGLE_DRIVE_FOLDER_ID: env.GOOGLE_DRIVE_FOLDER_ID,
+      GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON: env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON,
       JOB_DATA_DIR: env.JOB_DATA_DIR,
       JOB_WORKER_CONCURRENCY: env.JOB_WORKER_CONCURRENCY,
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB,

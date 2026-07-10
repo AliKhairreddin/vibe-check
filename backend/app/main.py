@@ -12,6 +12,7 @@ from .review_pipeline.models import (
     ComplianceReport,
     CreateReviewBatch,
     JobRecord,
+    ReviewSources,
     ReviewBatch,
     ReviewHistoryItem,
     ReviewRequestMeta,
@@ -26,6 +27,7 @@ from .review_pipeline.storage import (
 )
 from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
 from .review_pipeline.media import detect_media_kind
+from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
 
 COPY_LABEL_MAX_LENGTH = 72
@@ -132,7 +134,7 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
             if size > max_mb*1024*1024: raise HTTPException(413, f'Max upload is {max_mb} MB')
             f.write(chunk)
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
-    rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name)
+    rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name, file_size=size)
     return rec
 
 
@@ -245,7 +247,14 @@ async def complete_chunked_upload(
                 with chunk_path.open('rb') as chunk:
                     shutil.copyfileobj(chunk, output)
         (upload_dir / 'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
-        record = await enqueue_job(upload_id, media_path, metadata['media_kind'], meta, metadata['file_name'])
+        record = await enqueue_job(
+            upload_id,
+            media_path,
+            metadata['media_kind'],
+            meta,
+            metadata['file_name'],
+            file_size=metadata['size'],
+        )
         enqueued = True
         metadata['completed'] = True
         (upload_dir / UPLOAD_METADATA_FILE).write_text(json.dumps(metadata), encoding='utf-8')
@@ -307,6 +316,13 @@ def get_report(job_id:str):
     report=get_stored_report(job_id)
     if report is None: raise HTTPException(404,'Report not ready')
     return report
+
+@app.get('/api/reviews/{job_id}/source', response_model=ReviewSources)
+def review_source(job_id:str):
+    try:
+        return resolve_review_sources(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404,'Review job not found') from None
 
 @app.get('/api/reviews/{job_id}/report.json')
 def download_report(job_id:str):

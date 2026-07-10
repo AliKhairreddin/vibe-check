@@ -7,6 +7,7 @@ export default defineSchema({
     batchItemId: v.optional(v.string()),
     createdAt: v.number(),
     fileName: v.string(),
+    fileSize: v.optional(v.number()),
     hasAdCopy: v.optional(v.boolean()),
     hasCreative: v.optional(v.boolean()),
     jobId: v.string(),
@@ -15,6 +16,12 @@ export default defineSchema({
     report: v.optional(v.any()),
     reportReady: v.boolean(),
     status: v.string(),
+    sourceCheckedAt: v.optional(v.number()),
+    sourceFileId: v.optional(v.string()),
+    sourceKind: v.optional(v.string()),
+    sourceMessage: v.optional(v.string()),
+    sourceStatus: v.optional(v.string()),
+    sourceUrl: v.optional(v.string()),
     updatedAt: v.number(),
   })
     .index("by_job_id", ["jobId"])

@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ResultStatus = Literal['green','yellow','orange','red']
+ReviewSourceKind = Literal['google_drive_file','google_sheet']
+ReviewSourceStatus = Literal['linked','not_found','ambiguous','unavailable']
 
 class JobStatus(str, Enum):
     queued='queued'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
@@ -41,6 +43,7 @@ class ComplianceReport(BaseModel):
 class JobRecord(BaseModel):
     job_id: str
     file_name: str = ''
+    file_size: int | None = None
     status: JobStatus = JobStatus.queued
     progress: int = 0
     message: str = ''
@@ -49,8 +52,26 @@ class JobRecord(BaseModel):
     has_ad_copy: bool = True
     batch_id: str | None = None
     batch_item_id: str | None = None
+    source_kind: ReviewSourceKind | None = None
+    source_status: ReviewSourceStatus | None = None
+    source_url: str | None = None
+    source_file_id: str | None = None
+    source_message: str = ''
+    source_checked_at: int | None = None
     created_at: int | None = None
     updated_at: int | None = None
+
+class ReviewSource(BaseModel):
+    kind: ReviewSourceKind | None = None
+    status: ReviewSourceStatus
+    url: str | None = None
+    file_id: str | None = None
+    label: str
+    message: str
+    checked_at: int
+
+class ReviewSources(BaseModel):
+    sources: list[ReviewSource] = Field(default_factory=list)
 
 class ReviewHistoryItem(JobRecord):
     overall_status: ResultStatus | None = None

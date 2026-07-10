@@ -1,6 +1,7 @@
 export type Status = {
   job_id: string;
   file_name: string;
+  file_size?: number | null;
   status: string;
   progress: number;
   message: string;
@@ -11,6 +12,20 @@ export type Status = {
   batch_item_id?: string | null;
   created_at?: number | null;
   updated_at?: number | null;
+};
+
+export type ReviewSource = {
+  kind?: 'google_drive_file' | 'google_sheet' | null;
+  status: 'linked' | 'not_found' | 'ambiguous' | 'unavailable';
+  url?: string | null;
+  file_id?: string | null;
+  label: string;
+  message: string;
+  checked_at: number;
+};
+
+export type ReviewSources = {
+  sources: ReviewSource[];
 };
 
 export type Finding = {
@@ -295,4 +310,8 @@ export async function reportBatchUploadFailure(
 
 export async function getReport(id: string): Promise<Report> {
   return requestJson<Report>(`/api/reviews/${id}/report`);
+}
+
+export async function getReviewSources(id: string): Promise<ReviewSources> {
+  return requestJson<ReviewSources>(`/api/reviews/${id}/source`);
 }
