@@ -34,6 +34,24 @@ def test_report_schema_validation(result):
     r=ComplianceReport.model_validate({'overall_status':result,'summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
     assert r.overall_status==result
 
+def test_report_schema_normalizes_legacy_stored_results():
+    report=ComplianceReport.model_validate({
+        'overall_status':'likely_violation',
+        'summary':'legacy report',
+        'source_results':{
+            'creative':{'status':'needs_review','summary':'Review creative.'},
+            'ad_copy':{'status':'pass','summary':'Copy is clear.'},
+        },
+        'findings':[],
+        'safe_rewrite':{'ad_copy':'','onscreen_text':[]},
+        'limitations':[],
+    })
+    assert report.overall_status == 'red'
+    assert report.source_results.creative is not None
+    assert report.source_results.creative.status == 'orange'
+    assert report.source_results.ad_copy is not None
+    assert report.source_results.ad_copy.status == 'green'
+
 def test_review_request_meta_tracks_optional_ad_copy():
     assert not ReviewRequestMeta().has_ad_copy
     assert not ReviewRequestMeta(ad_copy='   ').has_ad_copy

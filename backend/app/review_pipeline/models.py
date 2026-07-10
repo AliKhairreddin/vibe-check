@@ -1,11 +1,19 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 ResultStatus = Literal['green','yellow','orange','red']
 ReviewSourceKind = Literal['google_drive_file','google_sheet']
 ReviewSourceStatus = Literal['linked','not_found','ambiguous','unavailable']
+LEGACY_RESULT_STATUSES = {
+    'pass': 'green',
+    'needs_review': 'orange',
+    'likely_violation': 'red',
+}
+
+def normalize_result_status(value):
+    return LEGACY_RESULT_STATUSES.get(value, value)
 
 class JobStatus(str, Enum):
     queued='queued'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
@@ -28,6 +36,11 @@ class SourceResult(BaseModel):
     status: ResultStatus
     summary: str = ''
 
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_legacy_status(cls, value):
+        return normalize_result_status(value)
+
 class SourceResults(BaseModel):
     creative: SourceResult | None = None
     ad_copy: SourceResult | None = None
@@ -39,6 +52,11 @@ class ComplianceReport(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     safe_rewrite: SafeRewrite = Field(default_factory=SafeRewrite)
     limitations: list[str] = Field(default_factory=list)
+
+    @field_validator('overall_status', mode='before')
+    @classmethod
+    def normalize_legacy_status(cls, value):
+        return normalize_result_status(value)
 
 class JobRecord(BaseModel):
     job_id: str
