@@ -79,6 +79,7 @@ import {
   getStatus,
   listReviews,
   type OverallStatus,
+  type ResultStatus,
   type ReviewHistoryItem,
   type Status,
 } from '@/lib/api';
@@ -114,9 +115,36 @@ const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | '
   analyzing_visuals: 'Analyzing Visuals',
   complete: 'Complete',
   failed: 'Failed',
-  likely_violation: 'Likely Violation',
-  needs_review: 'Needs Review',
-  pass: 'Pass',
+  green: 'Green',
+  yellow: 'Yellow',
+  orange: 'Orange',
+  red: 'Red',
+};
+const RESULT_META: Record<OverallStatus, {
+  description: string;
+  badgeClass: string;
+  dotClass: string;
+}> = {
+  green: {
+    description: 'Ready to run — no policy issue identified.',
+    badgeClass: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
+    dotClass: 'bg-emerald-500',
+  },
+  yellow: {
+    description: 'Minor fixes — low-risk edits are recommended.',
+    badgeClass: 'border-yellow-600/30 bg-yellow-400/20 text-yellow-800 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-200',
+    dotClass: 'bg-yellow-400',
+  },
+  orange: {
+    description: 'Review required — resolve meaningful risk or uncertainty before publishing.',
+    badgeClass: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
+    dotClass: 'bg-orange-500',
+  },
+  red: {
+    description: 'Do not publish — a likely violation needs material changes.',
+    badgeClass: 'border-red-600/30 bg-red-500/15 text-red-700 dark:border-red-400/30 dark:bg-red-400/15 dark:text-red-300',
+    dotClass: 'bg-red-500',
+  },
 };
 
 function loadActiveBatch(): BatchItem[] {
@@ -715,7 +743,9 @@ function HistoryCard({
       <CardHeader>
         <CardTitle className="text-xl">Review history</CardTitle>
         <CardDescription>
-          Previous reviews stay here with split creative and copy results.
+          Previous reviews stay here with split creative and copy results. Green is
+          ready, yellow needs minor fixes, orange requires review, and red should not
+          be published.
         </CardDescription>
         <CardAction>
           <Badge variant="outline">{reviews.length} recent</Badge>
@@ -945,6 +975,14 @@ function ReportPage() {
     );
   }
 
+  const sourceResults = [
+    { label: 'Creative', result: query.data.source_results?.creative },
+    { label: 'Ad copy', result: query.data.source_results?.ad_copy },
+  ].filter((item): item is {
+    label: string;
+    result: NonNullable<typeof item.result>;
+  } => Boolean(item.result));
+
   return (
     <div className="grid gap-4">
       <Card>
@@ -959,6 +997,24 @@ function ReportPage() {
           <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
             {query.data.summary}
           </p>
+          <p className="text-sm font-medium">
+            {resultDescription(query.data.overall_status)}
+          </p>
+          {sourceResults.length ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {sourceResults.map(({ label, result }) => (
+                <div key={label} className="grid gap-2 rounded-lg border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium">{label}</span>
+                    <StatusBadge status={result.status} />
+                  </div>
+                  {result.summary ? (
+                    <p className="text-sm leading-6 text-muted-foreground">{result.summary}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
           <a
             className={cn(buttonVariants({ variant: 'outline' }), 'w-fit')}
             href={`/api/reviews/${jobId}/report.json`}
@@ -1110,13 +1166,30 @@ function SettingsPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  if (status === 'failed' || status === 'likely_violation') {
+  const result = normalizeResultStatus(status);
+  if (result) return <ResultBadge status={result} />;
+  if (status === 'failed') {
     return <Badge variant="destructive">{formatStatus(status)}</Badge>;
   }
-  if (status === 'complete' || status === 'pass') {
+  if (status === 'complete') {
     return <Badge variant="secondary">{formatStatus(status)}</Badge>;
   }
   return <Badge variant="outline">{formatStatus(status)}</Badge>;
+}
+
+function ResultBadge({ status }: { status: OverallStatus }) {
+  const meta = RESULT_META[status];
+  return (
+    <Badge
+      variant="outline"
+      className={meta.badgeClass}
+      title={meta.description}
+      aria-label={`${formatStatus(status)}: ${meta.description}`}
+    >
+      <span aria-hidden="true" className={cn('size-1.5 rounded-full', meta.dotClass)} />
+      {formatStatus(status)}
+    </Badge>
+  );
 }
 
 function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
@@ -1241,6 +1314,24 @@ function formatStatus(status: string) {
   return status
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeResultStatus(status: string): OverallStatus | null {
+  const normalized: Record<ResultStatus, OverallStatus> = {
+    green: 'green',
+    yellow: 'yellow',
+    orange: 'orange',
+    red: 'red',
+    pass: 'green',
+    needs_review: 'orange',
+    likely_violation: 'red',
+  };
+  return normalized[status as ResultStatus] ?? null;
+}
+
+function resultDescription(status: string) {
+  const result = normalizeResultStatus(status);
+  return result ? RESULT_META[result].description : '';
 }
 
 function errorMessage(error: unknown) {

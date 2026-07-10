@@ -23,11 +23,17 @@ function requireSecret(secret: string) {
 function overallStatus(report: unknown) {
   if (!report || typeof report !== "object") return null;
   const status = (report as { overall_status?: unknown }).overall_status;
-  return status === "pass" ||
-    status === "needs_review" ||
-    status === "likely_violation"
-    ? status
-    : null;
+  return normalizeResultStatus(status);
+}
+
+function normalizeResultStatus(status: unknown) {
+  if (status === "green" || status === "yellow" || status === "orange" || status === "red") {
+    return status;
+  }
+  if (status === "pass") return "green";
+  if (status === "needs_review") return "orange";
+  if (status === "likely_violation") return "red";
+  return null;
 }
 
 function findingSource(finding: unknown) {
@@ -43,11 +49,7 @@ function sourceResultStatus(report: unknown, key: "creative" | "ad_copy") {
   const result = (sourceResults as Record<string, unknown>)[key];
   if (!result || typeof result !== "object") return null;
   const status = (result as { status?: unknown }).status;
-  return status === "pass" ||
-    status === "needs_review" ||
-    status === "likely_violation"
-    ? status
-    : null;
+  return normalizeResultStatus(status);
 }
 
 function splitResult(
@@ -62,15 +64,19 @@ function splitResult(
   }
 
   const relevant = findings.filter((finding) => sourceMatches(findingSource(finding)));
-  if (!relevant.length) return status ? "pass" : null;
-  return relevant.some(
+  if (!relevant.length) return status ? "green" : null;
+  if (relevant.some(
     (finding) =>
       finding &&
       typeof finding === "object" &&
       (finding as { severity?: unknown }).severity === "high"
-  )
-    ? "likely_violation"
-    : "needs_review";
+  )) return "red";
+  return relevant.some(
+    (finding) =>
+      finding &&
+      typeof finding === "object" &&
+      (finding as { severity?: unknown }).severity === "medium"
+  ) ? "orange" : "yellow";
 }
 
 function creativeResult(report: unknown, hasCreative: boolean) {

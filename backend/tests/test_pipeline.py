@@ -26,9 +26,10 @@ from PIL import Image
 def anyio_backend():
     return 'asyncio'
 
-def test_report_schema_validation():
-    r=ComplianceReport.model_validate({'overall_status':'pass','summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
-    assert r.overall_status=='pass'
+@pytest.mark.parametrize('result', ['green', 'yellow', 'orange', 'red'])
+def test_report_schema_validation(result):
+    r=ComplianceReport.model_validate({'overall_status':result,'summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
+    assert r.overall_status==result
 
 def test_review_request_meta_tracks_optional_ad_copy():
     assert not ReviewRequestMeta().has_ad_copy
@@ -136,7 +137,7 @@ async def test_chunked_upload_reassembles_and_enqueues_large_creative(tmp_path, 
 
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
-    assert parse_report_json(text).overall_status=='needs_review'
+    assert parse_report_json(text).overall_status=='orange'
 
 def test_openrouter_report_without_verdict_or_findings_fails_closed():
     report=parse_report_json(json.dumps({
@@ -144,16 +145,16 @@ def test_openrouter_report_without_verdict_or_findings_fails_closed():
         'findings':[],
         'limitations':{'unexpected':'shape'},
     }))
-    assert report.overall_status=='needs_review'
+    assert report.overall_status=='orange'
     assert any('did not include a recognized explicit compliance verdict' in item for item in report.limitations)
 
-def test_openrouter_report_preserves_explicit_pass_without_findings():
+def test_openrouter_report_maps_legacy_pass_to_green_without_findings():
     report=parse_report_json(json.dumps({
         'overall_status':'pass',
         'summary':'No policy issues were identified.',
         'findings':[],
     }))
-    assert report.overall_status=='pass'
+    assert report.overall_status=='green'
     assert not any('did not include a recognized explicit compliance verdict' in item for item in report.limitations)
 
 def test_openrouter_report_normalizes_policy_compliance_wrapper():
@@ -171,7 +172,7 @@ def test_openrouter_report_normalizes_policy_compliance_wrapper():
         }
     })
     report=parse_report_json(text)
-    assert report.overall_status=='likely_violation'
+    assert report.overall_status=='red'
     assert report.summary=='Mentions a savings claim without a required disclaimer.'
     assert report.findings[0].source=='ad_copy'
     assert report.findings[0].severity=='high'
@@ -189,9 +190,9 @@ def test_openrouter_report_normalizes_source_results():
     })
     report=parse_report_json(text)
     assert report.source_results.creative is not None
-    assert report.source_results.creative.status == 'pass'
+    assert report.source_results.creative.status == 'green'
     assert report.source_results.ad_copy is not None
-    assert report.source_results.ad_copy.status == 'needs_review'
+    assert report.source_results.ad_copy.status == 'orange'
     assert report.source_results.ad_copy.summary == 'Caption claim needs substantiation.'
 
 def test_openrouter_report_normalizes_review_list_wrapper():
@@ -204,7 +205,7 @@ def test_openrouter_report_normalizes_review_list_wrapper():
         }]
     })
     report=parse_report_json(text)
-    assert report.overall_status=='likely_violation'
+    assert report.overall_status=='red'
     assert report.summary=='The ad includes a call prompt without consent language.'
     assert report.findings[0].policy_reason=='TCPA'
 
@@ -236,7 +237,7 @@ def test_review_history_lists_local_jobs(tmp_path, monkeypatch):
     history=list_reviews()
     assert len(history)==1
     assert history[0].file_name=='creative.mp4'
-    assert history[0].overall_status=='pass'
+    assert history[0].overall_status=='green'
     assert history[0].created_at is not None
 
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
@@ -245,7 +246,7 @@ def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatc
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
     set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.mp4', has_ad_copy=True)
     set_report('j1', {
-        'overall_status':'likely_violation',
+        'overall_status':'red',
         'summary':'mixed issues',
         'findings':[
             {
@@ -269,8 +270,8 @@ def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatc
     set_status('j1', JobStatus.complete, 100, 'Complete')
     history=list_reviews()
     assert history[0].has_ad_copy
-    assert history[0].creative_result=='likely_violation'
-    assert history[0].ad_copy_result=='needs_review'
+    assert history[0].creative_result=='red'
+    assert history[0].ad_copy_result=='orange'
 
 def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -292,8 +293,29 @@ def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch
     set_status('j1', JobStatus.complete, 100, 'Complete')
     history=list_reviews()
     assert not history[0].has_ad_copy
-    assert history[0].creative_result=='needs_review'
+    assert history[0].creative_result=='orange'
     assert history[0].ad_copy_result is None
+
+def test_review_history_maps_low_severity_findings_to_yellow(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.png', has_ad_copy=False)
+    set_report('j1', {
+        'overall_status':'yellow',
+        'summary':'minor edit recommended',
+        'findings':[{
+            'severity':'low',
+            'source':'onscreen_text',
+            'evidence':'Small readability issue',
+            'policy_reason':'Disclosure should be easier to read',
+            'suggested_fix':'Increase the disclosure size.',
+            'confidence':'high',
+        }],
+    })
+    set_status('j1', JobStatus.complete, 100, 'Complete')
+    history=list_reviews()
+    assert history[0].creative_result=='yellow'
 
 def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -405,18 +427,18 @@ def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
     set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.mp4', has_ad_copy=True)
     set_report('j1', {
-        'overall_status':'likely_violation',
+        'overall_status':'red',
         'summary':'overall mixed result',
         'source_results':{
-            'creative':{'status':'pass','summary':'Creative is clear.'},
-            'ad_copy':{'status':'needs_review','summary':'Caption needs substantiation.'},
+            'creative':{'status':'green','summary':'Creative is clear.'},
+            'ad_copy':{'status':'orange','summary':'Caption needs substantiation.'},
         },
         'findings':[],
     })
     set_status('j1', JobStatus.complete, 100, 'Complete')
     history=list_reviews()
-    assert history[0].creative_result=='pass'
-    assert history[0].ad_copy_result=='needs_review'
+    assert history[0].creative_result=='green'
+    assert history[0].ad_copy_result=='orange'
 
 def test_telegram_message_includes_minimal_split_results_and_report_links(monkeypatch):
     monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
@@ -432,15 +454,15 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
         created_at=1783450800000,
     )
     message=build_review_message(record, {
-        'overall_status':'needs_review',
+        'overall_status':'red',
         'summary':'overall mixed result',
         'source_results':{
             'creative':{
-                'status':'pass',
+                'status':'green',
                 'summary':'Creative surfaces are clear and do not contain restricted visual claims.',
             },
             'ad_copy':{
-                'status':'likely_violation',
+                'status':'red',
                 'summary':'Caption includes a guaranteed savings claim that needs support.',
             },
         },
@@ -457,6 +479,8 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
     assert '<b>Type:</b> Ad copy' in message
     assert '<b>Name:</b>' in message
     assert '<b>Result:</b>' in message
+    assert '🟢 Green — Ready to run' in message
+    assert '🔴 Red — Do not publish' in message
     assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
     assert '<b>Findings</b>' not in message
@@ -492,6 +516,7 @@ def test_telegram_message_omits_missing_source_sections(monkeypatch):
     assert '<b>Type:</b> Ad copy' in message
     assert '<b>Name:</b>' in message
     assert '<b>Result:</b>' in message
+    assert '🟢 Green — Ready to run' in message
     assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
 
@@ -508,14 +533,15 @@ def test_telegram_message_labels_image_creatives(monkeypatch):
         has_creative=True,
     )
     message=build_review_message(record, {
-        'overall_status':'needs_review',
+        'overall_status':'orange',
         'source_results':{
-            'creative':{'status':'needs_review','summary':'Image needs review.'},
+            'creative':{'status':'orange','summary':'Image needs review.'},
         },
         'findings':[],
     }, media_kind='image')
     assert '<b>Type:</b> Creative Image' in message
     assert 'static-ad.png' in message
+    assert '🟠 Orange — Review required' in message
 
 def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     token='secret-token-that-must-not-be-logged'

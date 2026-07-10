@@ -135,7 +135,7 @@ Saved default guidelines live in `backend/app/review_pipeline/guidelines/general
 
 ## Job Records
 
-Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Multi-creative uploads and multi-line copy-only submissions are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
+Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, and final report JSON. Reports include separate creative and ad-copy source results when the LLM returns them. Result verdicts use a four-level scale: `green` (ready to run), `yellow` (minor fixes), `orange` (human review required), and `red` (do not publish without material changes). Multi-creative uploads and multi-line copy-only submissions are represented as multiple jobs in the UI. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
 
 ## Cost-Saving Notes
 

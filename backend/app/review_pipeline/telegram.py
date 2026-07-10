@@ -16,11 +16,17 @@ logger = logging.getLogger(__name__)
 STATUS_LABELS = {
     'complete': 'Complete',
     'failed': 'Failed',
-    'likely_violation': 'Likely Violation',
-    'needs_review': 'Needs Review',
-    'pass': 'Pass',
+    'green': '🟢 Green — Ready to run',
+    'yellow': '🟡 Yellow — Minor fixes',
+    'orange': '🟠 Orange — Review required',
+    'red': '🔴 Red — Do not publish',
 }
-RESULT_STATUSES = {'pass', 'needs_review', 'likely_violation'}
+RESULT_STATUSES = {'green', 'yellow', 'orange', 'red'}
+LEGACY_RESULT_STATUSES = {
+    'pass': 'green',
+    'needs_review': 'orange',
+    'likely_violation': 'red',
+}
 WRAP_WIDTH = 34
 MAX_NAME_CHARS = 140
 
@@ -160,7 +166,8 @@ def _source_result(report: dict[str, Any], key: str) -> dict[str, str] | None:
         result = source_results.get(key)
         if isinstance(result, dict):
             status = result.get('status')
-            if status in RESULT_STATUSES:
+            status = _normalize_result_status(status)
+            if status:
                 return {
                     'status': status,
                     'summary': str(result.get('summary') or ''),
@@ -184,19 +191,28 @@ def _split_result(report: dict[str, Any], source_matches) -> str | None:
         if isinstance(finding, dict) and source_matches(str(finding.get('source') or ''))
     ]
     if not relevant:
-        return 'pass' if status in RESULT_STATUSES else None
+        return 'green' if status in RESULT_STATUSES else None
     if any(finding.get('severity') == 'high' for finding in relevant):
-        return 'likely_violation'
-    return 'needs_review'
+        return 'red'
+    if any(finding.get('severity') == 'medium' for finding in relevant):
+        return 'orange'
+    return 'yellow'
 
 
 def _overall_status(report: dict[str, Any]) -> str | None:
     status = report.get('overall_status')
-    return status if status in RESULT_STATUSES else None
+    return _normalize_result_status(status)
+
+
+def _normalize_result_status(status: Any) -> str | None:
+    if status in RESULT_STATUSES:
+        return status
+    return LEGACY_RESULT_STATUSES.get(status)
 
 
 def _format_status(status: Any) -> str:
-    value = str(status or '').strip()
+    raw_value = str(status or '').strip()
+    value = _normalize_result_status(raw_value) or raw_value
     if value in STATUS_LABELS:
         return STATUS_LABELS[value]
     return value.replace('_', ' ').title() if value else 'Not returned'

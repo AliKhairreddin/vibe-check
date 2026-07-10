@@ -3,6 +3,8 @@ from enum import Enum
 from typing import Literal
 from pydantic import BaseModel, Field
 
+ResultStatus = Literal['green','yellow','orange','red']
+
 class JobStatus(str, Enum):
     queued='queued'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
 
@@ -21,7 +23,7 @@ class SafeRewrite(BaseModel):
     onscreen_text: list[str] = Field(default_factory=list)
 
 class SourceResult(BaseModel):
-    status: Literal['pass','needs_review','likely_violation']
+    status: ResultStatus
     summary: str = ''
 
 class SourceResults(BaseModel):
@@ -29,7 +31,7 @@ class SourceResults(BaseModel):
     ad_copy: SourceResult | None = None
 
 class ComplianceReport(BaseModel):
-    overall_status: Literal['pass','needs_review','likely_violation']
+    overall_status: ResultStatus
     summary: str
     source_results: SourceResults = Field(default_factory=SourceResults)
     findings: list[Finding] = Field(default_factory=list)
@@ -49,9 +51,9 @@ class JobRecord(BaseModel):
     updated_at: int | None = None
 
 class ReviewHistoryItem(JobRecord):
-    overall_status: Literal['pass','needs_review','likely_violation'] | None = None
-    creative_result: Literal['pass','needs_review','likely_violation'] | None = None
-    ad_copy_result: Literal['pass','needs_review','likely_violation'] | None = None
+    overall_status: ResultStatus | None = None
+    creative_result: ResultStatus | None = None
+    ad_copy_result: ResultStatus | None = None
 
 class ReviewRequestMeta(BaseModel):
     ad_copy: str = ''

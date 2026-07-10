@@ -7,35 +7,44 @@ from .models import ComplianceReport
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 
 STATUS_ALIASES = {
-    'approved': 'pass',
-    'clear': 'pass',
-    'compliant': 'pass',
-    'ok': 'pass',
-    'pass': 'pass',
-    'passed': 'pass',
-    'safe': 'pass',
-    'uncertain': 'needs_review',
-    'manual_review': 'needs_review',
-    'needs human review': 'needs_review',
-    'needs_human_review': 'needs_review',
-    'needs review': 'needs_review',
-    'needs_review': 'needs_review',
-    'possible_issue': 'needs_review',
-    'possible issue': 'needs_review',
-    'review': 'needs_review',
-    'fail': 'likely_violation',
-    'failed': 'likely_violation',
-    'high_risk': 'likely_violation',
-    'high risk': 'likely_violation',
-    'likely violation': 'likely_violation',
-    'likely_violation': 'likely_violation',
-    'non compliant': 'likely_violation',
-    'non-compliant': 'likely_violation',
-    'non_compliant': 'likely_violation',
-    'not compliant': 'likely_violation',
-    'rejected': 'likely_violation',
-    'violation': 'likely_violation',
-    'violates': 'likely_violation',
+    'green': 'green',
+    'approved': 'green',
+    'clear': 'green',
+    'compliant': 'green',
+    'ok': 'green',
+    'pass': 'green',
+    'passed': 'green',
+    'safe': 'green',
+    'yellow': 'yellow',
+    'caution': 'yellow',
+    'low risk': 'yellow',
+    'low_risk': 'yellow',
+    'minor issue': 'yellow',
+    'minor_issue': 'yellow',
+    'orange': 'orange',
+    'uncertain': 'orange',
+    'manual_review': 'orange',
+    'needs human review': 'orange',
+    'needs_human_review': 'orange',
+    'needs review': 'orange',
+    'needs_review': 'orange',
+    'possible_issue': 'orange',
+    'possible issue': 'orange',
+    'review': 'orange',
+    'red': 'red',
+    'fail': 'red',
+    'failed': 'red',
+    'high_risk': 'red',
+    'high risk': 'red',
+    'likely violation': 'red',
+    'likely_violation': 'red',
+    'non compliant': 'red',
+    'non-compliant': 'red',
+    'non_compliant': 'red',
+    'not compliant': 'red',
+    'rejected': 'red',
+    'violation': 'red',
+    'violates': 'red',
 }
 
 SOURCE_ALIASES = {
@@ -99,7 +108,7 @@ STATUS_KEYS = (
 
 MISSING_VERDICT_LIMITATION = (
     'The model response did not include a recognized explicit compliance verdict '
-    'or any findings; the result was set to needs_review for human review.'
+    'or any findings; the result was set to orange for human review.'
 )
 
 
@@ -119,7 +128,7 @@ def _clean_token(value: Any) -> str:
 
 def _status_from_value(value: Any) -> str | None:
     if isinstance(value, bool):
-        return 'pass' if value else 'likely_violation'
+        return 'green' if value else 'red'
     if value is None:
         return None
 
@@ -130,11 +139,13 @@ def _status_from_value(value: Any) -> str | None:
     if underscored in STATUS_ALIASES:
         return STATUS_ALIASES[underscored]
     if 'non compliant' in cleaned or 'not compliant' in cleaned or 'violation' in cleaned:
-        return 'likely_violation'
+        return 'red'
     if 'review' in cleaned or 'uncertain' in cleaned or 'possible' in cleaned:
-        return 'needs_review'
+        return 'orange'
+    if 'minor' in cleaned or 'low risk' in cleaned or 'caution' in cleaned:
+        return 'yellow'
     if 'compliant' in cleaned or 'pass' in cleaned or 'approved' in cleaned:
-        return 'pass'
+        return 'green'
     return None
 
 
@@ -197,7 +208,7 @@ def _severity(value: Any, status: str | None = None) -> str:
         return 'high'
     if cleaned in {'medium', 'moderate'}:
         return 'medium'
-    if status == 'likely_violation':
+    if status == 'red':
         return 'high'
     return 'medium'
 
@@ -394,10 +405,12 @@ def _explicit_status(data: dict[str, Any]) -> str | None:
 
 def _infer_status(findings: list[dict[str, Any]]) -> str:
     if any(finding.get('severity') == 'high' for finding in findings):
-        return 'likely_violation'
+        return 'red'
+    if any(finding.get('severity') == 'medium' for finding in findings):
+        return 'orange'
     if findings:
-        return 'needs_review'
-    return 'needs_review'
+        return 'yellow'
+    return 'orange'
 
 
 def _normalize_report(data: Any) -> dict[str, Any]:
@@ -417,7 +430,7 @@ def _normalize_report(data: Any) -> dict[str, Any]:
         or _summary_from_value(report.get('overall_summary'))
         or _summary_from_value(data.get('summary'))
         or _summary_from_value(findings)
-        or ('No policy issues were identified.' if status == 'pass' else 'Potential policy issue identified; human review is recommended.')
+        or ('No policy issues were identified.' if status == 'green' else 'Potential policy issue identified; human review is recommended.')
     )
 
     limitations = report.get('limitations') or report.get('limitations_notes') or []
@@ -450,7 +463,7 @@ def parse_report_json(text:str)->ComplianceReport:
 async def review_with_openrouter(evidence:dict, model:str|None=None)->ComplianceReport:
     key=os.getenv('OPENROUTER_API_KEY')
     if not key:
-        return ComplianceReport(overall_status='needs_review', summary='OpenRouter API key is not configured; generated placeholder report.', limitations=['Set OPENROUTER_API_KEY to enable LLM compliance review.'])
+        return ComplianceReport(overall_status='orange', summary='OpenRouter API key is not configured; generated placeholder report.', limitations=['Set OPENROUTER_API_KEY to enable LLM compliance review.'])
     payload={'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'), 'messages':[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':build_user_prompt(evidence)}], 'response_format': {'type':'json_object'}, 'temperature': 0}
     async with httpx.AsyncClient(timeout=120) as client:
         r=await client.post('https://openrouter.ai/api/v1/chat/completions', headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}, json=payload)

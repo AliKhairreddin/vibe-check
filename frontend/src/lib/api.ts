@@ -22,18 +22,20 @@ export type Finding = {
   confidence: 'low' | 'medium' | 'high';
 };
 
-export type OverallStatus = 'pass' | 'needs_review' | 'likely_violation';
+export type OverallStatus = 'green' | 'yellow' | 'orange' | 'red';
+export type LegacyOverallStatus = 'pass' | 'needs_review' | 'likely_violation';
+export type ResultStatus = OverallStatus | LegacyOverallStatus;
 
 export type Report = {
-  overall_status: OverallStatus;
+  overall_status: ResultStatus;
   summary: string;
   source_results?: {
     creative?: {
-      status: OverallStatus;
+      status: ResultStatus;
       summary: string;
     } | null;
     ad_copy?: {
-      status: OverallStatus;
+      status: ResultStatus;
       summary: string;
     } | null;
   };

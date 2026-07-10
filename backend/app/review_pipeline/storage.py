@@ -12,7 +12,17 @@ from .models import JobRecord, JobStatus, ReviewHistoryItem
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
 CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
 CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
-RESULT_STATUSES = {'pass','needs_review','likely_violation'}
+RESULT_STATUSES = {'green','yellow','orange','red'}
+LEGACY_RESULT_STATUSES = {
+    'pass': 'green',
+    'needs_review': 'orange',
+    'likely_violation': 'red',
+}
+
+def _normalize_result_status(status:Any)->str|None:
+    if status in RESULT_STATUSES:
+        return status
+    return LEGACY_RESULT_STATUSES.get(status)
 
 def job_dir(job_id:str)->Path:
     p=JOB_DATA_DIR/job_id; p.mkdir(parents=True, exist_ok=True); return p
@@ -103,7 +113,7 @@ def get_report(job_id:str)->dict[str, Any]|None:
 
 def _overall_status(report:dict[str, Any]|None)->str|None:
     status=report.get('overall_status') if isinstance(report, dict) else None
-    return status if status in {'pass','needs_review','likely_violation'} else None
+    return _normalize_result_status(status)
 
 def _finding_source(finding:Any)->str:
     if not isinstance(finding, dict):
@@ -121,7 +131,7 @@ def _source_result_status(report:dict[str, Any]|None, key:str)->str|None:
     if not isinstance(result, dict):
         return None
     status=result.get('status')
-    return status if status in RESULT_STATUSES else None
+    return _normalize_result_status(status)
 
 def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
     status=_overall_status(report)
@@ -137,10 +147,12 @@ def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
         if source_matches(_finding_source(finding))
     ]
     if not relevant:
-        return 'pass' if status in RESULT_STATUSES else None
+        return 'green' if status in RESULT_STATUSES else None
     if any(isinstance(finding, dict) and finding.get('severity') == 'high' for finding in relevant):
-        return 'likely_violation'
-    return 'needs_review'
+        return 'red'
+    if any(isinstance(finding, dict) and finding.get('severity') == 'medium' for finding in relevant):
+        return 'orange'
+    return 'yellow'
 
 def _creative_result(report:dict[str, Any]|None, has_creative:bool=True)->str|None:
     if not has_creative:
