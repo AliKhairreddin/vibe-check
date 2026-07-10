@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,8 @@ from .jobs import process_job
 from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
 from .storage import set_status
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -77,5 +80,26 @@ async def _process_queue(worker_index: int) -> None:
         try:
             set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
             await process_job(job.job_id, job.media_path, job.media_kind, job.meta)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                'Queue worker %s failed while processing job %s',
+                worker_index + 1,
+                job.job_id,
+            )
+            try:
+                set_status(
+                    job.job_id,
+                    JobStatus.failed,
+                    100,
+                    f'Queue processing failed: {type(exc).__name__}',
+                )
+            except Exception:
+                logger.exception(
+                    'Queue worker %s could not mark job %s as failed',
+                    worker_index + 1,
+                    job.job_id,
+                )
         finally:
             _queue.task_done()

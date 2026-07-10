@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import os
 import textwrap
 from typing import Any
@@ -9,6 +10,8 @@ import httpx
 
 from .media import MediaKind
 from .models import JobRecord
+
+logger = logging.getLogger(__name__)
 
 STATUS_LABELS = {
     'complete': 'Complete',
@@ -91,7 +94,14 @@ def send_review_message(
             response.raise_for_status()
         return True
     except Exception as exc:
-        print(f'Telegram notification failed for job {record.job_id}: {exc}', flush=True)
+        response = getattr(exc, 'response', None)
+        status_code = getattr(response, 'status_code', None)
+        logger.error(
+            'Telegram notification failed job_id=%s error_type=%s http_status=%s',
+            record.job_id,
+            type(exc).__name__,
+            status_code if status_code is not None else 'unavailable',
+        )
         return False
 
 

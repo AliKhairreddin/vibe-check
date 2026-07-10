@@ -97,6 +97,11 @@ STATUS_KEYS = (
     'verdict',
 )
 
+MISSING_VERDICT_LIMITATION = (
+    'The model response did not include a recognized explicit compliance verdict '
+    'or any findings; the result was set to needs_review for human review.'
+)
+
 
 def _load_json(text: str) -> Any:
     try:
@@ -367,24 +372,32 @@ def _collect_findings(data: Any, default_status: str | None = None) -> list[dict
     return findings
 
 
-def _infer_status(data: dict[str, Any], findings: list[dict[str, Any]]) -> str:
+def _explicit_status(data: dict[str, Any]) -> str | None:
+    report = _nested_report(data)
+    status = _status_from_value(report.get('overall_status'))
+    if status:
+        return status
+
     for key in STATUS_KEYS:
         status = _status_from_value(data.get(key))
         if status:
             return status
 
-    nested = _nested_report(data)
-    if nested is not data:
+    if report is not data:
         for key in STATUS_KEYS:
-            status = _status_from_value(nested.get(key))
+            status = _status_from_value(report.get(key))
             if status:
                 return status
 
+    return None
+
+
+def _infer_status(findings: list[dict[str, Any]]) -> str:
     if any(finding.get('severity') == 'high' for finding in findings):
         return 'likely_violation'
     if findings:
         return 'needs_review'
-    return 'pass'
+    return 'needs_review'
 
 
 def _normalize_report(data: Any) -> dict[str, Any]:
@@ -397,7 +410,8 @@ def _normalize_report(data: Any) -> dict[str, Any]:
     if not findings and nested is not data:
         findings = _collect_findings(data)
 
-    status = _status_from_value(report.get('overall_status')) or _infer_status(data, findings)
+    explicit_status = _explicit_status(data)
+    status = explicit_status or _infer_status(findings)
     summary = (
         _summary_from_value(report.get('summary'))
         or _summary_from_value(report.get('overall_summary'))
@@ -409,6 +423,10 @@ def _normalize_report(data: Any) -> dict[str, Any]:
     limitations = report.get('limitations') or report.get('limitations_notes') or []
     if isinstance(limitations, str):
         limitations = [limitations]
+    elif not isinstance(limitations, list):
+        limitations = []
+    if explicit_status is None and not findings and MISSING_VERDICT_LIMITATION not in limitations:
+        limitations.append(MISSING_VERDICT_LIMITATION)
 
     source_results = _source_results(report)
     if not source_results and nested is not data:

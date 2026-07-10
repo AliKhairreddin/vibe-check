@@ -48,14 +48,52 @@ export type ReviewHistoryItem = Status & {
   ad_copy_result?: Report['overall_status'] | null;
 };
 
+function apiErrorMessage(body: string, status: number): string {
+  const fallback = `Request failed with status ${status}`;
+  const trimmed = body.trim();
+  if (!trimmed) return fallback;
+
+  try {
+    const payload = JSON.parse(trimmed) as { detail?: unknown };
+    const detail = payload.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail.trim();
+    if (Array.isArray(detail)) {
+      const messages = detail.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const message = (item as { msg?: unknown }).msg;
+        return typeof message === 'string' && message.trim() ? [message.trim()] : [];
+      });
+      if (messages.length) return messages.join(' ');
+    }
+  } catch {
+    // The API can also return a short plain-text error from an upstream proxy.
+  }
+
+  if (!trimmed.startsWith('<')) return trimmed.slice(0, 300);
+  return fallback;
+}
+
+function parseJson<T>(body: string): T {
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error('The server returned an invalid response. Please try again.');
+  }
+}
+
+async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, init);
+  const body = await response.text();
+  if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
+  return parseJson<T>(body);
+}
+
 export async function createReview(
   form: FormData,
   onUploadProgress?: (progress: number) => void
 ): Promise<Status> {
   if (!onUploadProgress) {
-    const response = await fetch('/api/reviews', { method: 'POST', body: form });
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
+    return requestJson<Status>('/api/reviews', { method: 'POST', body: form });
   }
 
   return new Promise((resolve, reject) => {
@@ -70,32 +108,32 @@ export async function createReview(
 
     request.onload = () => {
       if (request.status >= 200 && request.status < 300) {
-        onUploadProgress(100);
-        resolve(JSON.parse(request.responseText) as Status);
+        try {
+          const status = parseJson<Status>(request.responseText);
+          onUploadProgress(100);
+          resolve(status);
+        } catch (error) {
+          reject(error);
+        }
         return;
       }
-      reject(new Error(request.responseText || `Upload failed with ${request.status}`));
+      reject(new Error(apiErrorMessage(request.responseText, request.status)));
     };
 
     request.onerror = () => reject(new Error('Network error while creating review'));
+    request.onabort = () => reject(new Error('Review submission was cancelled'));
     request.send(form);
   });
 }
 
 export async function getStatus(id: string): Promise<Status> {
-  const response = await fetch(`/api/reviews/${id}`);
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return requestJson<Status>(`/api/reviews/${id}`);
 }
 
 export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
-  const response = await fetch(`/api/reviews?limit=${limit}`);
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
 }
 
 export async function getReport(id: string): Promise<Report> {
-  const response = await fetch(`/api/reviews/${id}/report`);
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  return requestJson<Report>(`/api/reviews/${id}/report`);
 }

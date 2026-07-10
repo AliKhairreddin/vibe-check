@@ -1,7 +1,13 @@
 import json
 import asyncio
+import logging
 from pathlib import Path
+
+import httpx
+import pytest
+
 from app.main import copy_review_file_name
+from app.review_pipeline import queue as review_queue
 from app.review_pipeline.models import ComplianceReport, JobRecord, JobStatus, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
@@ -10,10 +16,15 @@ from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import set_status, get_status, set_report, get_report, list_reviews
-from app.review_pipeline.telegram import build_review_message
+from app.review_pipeline.telegram import build_review_message, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
 from PIL import Image
+
+
+@pytest.fixture
+def anyio_backend():
+    return 'asyncio'
 
 def test_report_schema_validation():
     r=ComplianceReport.model_validate({'overall_status':'pass','summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
@@ -72,6 +83,24 @@ def test_copy_review_file_name_uses_copy_preview():
 def test_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
     assert parse_report_json(text).overall_status=='needs_review'
+
+def test_openrouter_report_without_verdict_or_findings_fails_closed():
+    report=parse_report_json(json.dumps({
+        'summary':'The response omitted a verdict.',
+        'findings':[],
+        'limitations':{'unexpected':'shape'},
+    }))
+    assert report.overall_status=='needs_review'
+    assert any('did not include a recognized explicit compliance verdict' in item for item in report.limitations)
+
+def test_openrouter_report_preserves_explicit_pass_without_findings():
+    report=parse_report_json(json.dumps({
+        'overall_status':'pass',
+        'summary':'No policy issues were identified.',
+        'findings':[],
+    }))
+    assert report.overall_status=='pass'
+    assert not any('did not include a recognized explicit compliance verdict' in item for item in report.limitations)
 
 def test_openrouter_report_normalizes_policy_compliance_wrapper():
     text=json.dumps({
@@ -226,6 +255,40 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     assert report is not None
     assert 'No creative was submitted' in report['limitations'][-1]
 
+@pytest.mark.anyio
+async def test_process_queue_continues_after_start_status_failure(monkeypatch):
+    queue=asyncio.Queue()
+    monkeypatch.setattr(review_queue, '_queue', queue)
+
+    status_calls=[]
+    processed=[]
+
+    def fake_set_status(job_id, status, progress, message=''):
+        status_calls.append((job_id, status, progress, message))
+        if job_id == 'first' and status == JobStatus.queued:
+            raise RuntimeError('status backend unavailable')
+        return None
+
+    async def fake_process_job(job_id, media_path, media_kind, meta):
+        processed.append(job_id)
+
+    monkeypatch.setattr(review_queue, 'set_status', fake_set_status)
+    monkeypatch.setattr(review_queue, 'process_job', fake_process_job)
+
+    await queue.put(review_queue.QueuedReviewJob('first', None, 'copy_only', ReviewRequestMeta(ad_copy='First')))
+    await queue.put(review_queue.QueuedReviewJob('second', None, 'copy_only', ReviewRequestMeta(ad_copy='Second')))
+
+    worker=asyncio.create_task(review_queue._process_queue(0))
+    try:
+        await asyncio.wait_for(queue.join(), timeout=1)
+    finally:
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+
+    assert processed == ['second']
+    assert ('first', JobStatus.failed, 100, 'Queue processing failed: RuntimeError') in status_calls
+
 def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
@@ -343,6 +406,41 @@ def test_telegram_message_labels_image_creatives(monkeypatch):
     }, media_kind='image')
     assert '<b>Type:</b> Creative Image' in message
     assert 'static-ad.png' in message
+
+def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
+    token='secret-token-that-must-not-be-logged'
+    monkeypatch.setenv('TELEGRAM_BOT_TOKEN', token)
+    monkeypatch.setenv('TELEGRAM_CHAT_ID', '12345')
+    record=JobRecord(job_id='telegram-failure', status=JobStatus.complete)
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout=timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, url, json):
+            request=httpx.Request('POST', url)
+            response=httpx.Response(502, request=request)
+            raise httpx.HTTPStatusError(
+                f'Bad gateway from {url}',
+                request=request,
+                response=response,
+            )
+
+    monkeypatch.setattr('app.review_pipeline.telegram.httpx.Client', FakeClient)
+    caplog.set_level(logging.ERROR, logger='app.review_pipeline.telegram')
+
+    assert not send_review_message(record, {'overall_status':'pass', 'findings':[]})
+    assert 'job_id=telegram-failure' in caplog.text
+    assert 'error_type=HTTPStatusError' in caplog.text
+    assert 'http_status=502' in caplog.text
+    assert token not in caplog.text
+    assert f'https://api.telegram.org/bot{token}/sendMessage' not in caplog.text
 
 def test_ffmpeg_command_construction():
     assert ffprobe_command(Path('ad.mp4'))[0]=='ffprobe'

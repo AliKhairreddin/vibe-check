@@ -28,12 +28,14 @@ import {
   FileImage,
   FileJson,
   Moon,
+  RefreshCw,
   Settings,
+  SlidersHorizontal,
   Sun,
   Upload,
 } from 'lucide-react';
 import './index.css';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -190,7 +192,7 @@ function AppShell() {
                   {theme === 'dark' ? <Sun /> : <Moon />}
                 </TooltipTrigger>
                 <TooltipContent>
-                  {theme === 'dark' ? 'Light mode' : 'Black mode'}
+                  {theme === 'dark' ? 'Light mode' : 'Dark mode'}
                 </TooltipContent>
               </Tooltip>
               <Tooltip>
@@ -265,6 +267,8 @@ function Home() {
   const rows = batchItems.map((item, index) => ({
     item,
     status: statusQueries[index]?.data,
+    queryError: statusQueries[index]?.error,
+    retry: statusQueries[index]?.refetch,
   }));
 
   const overallProgress = useMemo(() => {
@@ -272,6 +276,9 @@ function Home() {
     const total = rows.reduce((sum, row) => sum + progressFor(row.item, row.status), 0);
     return Math.round(total / rows.length);
   }, [rows]);
+  const failedCount = rows.filter(
+    ({ item, status }) => Boolean(item.error) || status?.status === 'failed'
+  ).length;
 
   function updateBatchItem(id: string, patch: Partial<BatchItem>) {
     setBatchItems((current) =>
@@ -350,7 +357,7 @@ function Home() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
         <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Review workspace</CardTitle>
+          <CardTitle as="h1" className="text-xl">Review workspace</CardTitle>
           <CardDescription>
             Upload ad creatives or review platform copy by itself.
           </CardDescription>
@@ -377,72 +384,91 @@ function Home() {
               />
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <FormField label="Ad copy / platform captions" htmlFor="ad_copy">
+            <FormField label="Ad copy / platform captions" htmlFor="ad_copy">
+              <div className="grid gap-2">
                 <Textarea
                   id="ad_copy"
                   name="ad_copy"
                   value={adCopyText}
                   className="min-h-32"
                   placeholder={'Save more today.\nGet a free quote in minutes.'}
+                  aria-describedby="ad-copy-help"
                   onChange={(event) => setAdCopyText(event.currentTarget.value)}
                 />
-              </FormField>
-              <FormField label="Additional policy/guidelines" htmlFor="policy_text">
-                <Textarea
-                  id="policy_text"
-                  name="policy_text"
-                  className="min-h-32"
-                  placeholder="Saved publisher guidelines are included automatically."
-                />
-              </FormField>
-              <FormField label="Optional transcript override" htmlFor="manual_transcript">
-                <Textarea
-                  id="manual_transcript"
-                  name="manual_transcript"
-                  className="min-h-28"
-                />
-              </FormField>
-              <FormField label="Optional product/brand notes" htmlFor="notes">
-                <Textarea id="notes" name="notes" className="min-h-28" />
-              </FormField>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
-              <FormField label="OpenRouter model" htmlFor="model">
-                <Input
-                  id="model"
-                  name="model"
-                  placeholder="deepseek/deepseek-v4-flash"
-                />
-              </FormField>
-              <FormField label="Frame interval" htmlFor="frame_interval_seconds">
-                <Input
-                  id="frame_interval_seconds"
-                  name="frame_interval_seconds"
-                  type="number"
-                  step="0.5"
-                  min="0.5"
-                  defaultValue="1"
-                />
-              </FormField>
-            </div>
-
-            <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/30 px-3 py-3">
-              <div className="grid gap-1">
-                <Label htmlFor="scene_detection">Video scene-change detection</Label>
-                <p className="text-sm text-muted-foreground">
-                  For MP4s, also samples frames at sharp visual cuts so quick
-                  cutaways and brief on-screen text are less likely to be missed.
-                  This can add a little processing time.
+                <p id="ad-copy-help" className="text-xs leading-5 text-muted-foreground">
+                  Without a creative, each non-empty line becomes a separate job. With
+                  creatives, the full text is attached to every selected creative.
                 </p>
               </div>
-              <Switch
-                id="scene_detection"
-                checked={sceneDetection}
-                onCheckedChange={setSceneDetection}
-              />
-            </div>
+            </FormField>
+
+            <details className="group rounded-lg border bg-muted/20">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+                <SlidersHorizontal className="size-4 text-muted-foreground" />
+                Advanced review options
+                <span className="ml-auto hidden text-xs font-normal text-muted-foreground group-open:hidden sm:inline">
+                  Policy, transcript, notes, model, and sampling
+                </span>
+              </summary>
+              <div className="grid gap-4 border-t px-3 py-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <FormField label="Additional policy/guidelines" htmlFor="policy_text">
+                    <Textarea
+                      id="policy_text"
+                      name="policy_text"
+                      className="min-h-28"
+                      placeholder="Saved publisher guidelines are included automatically."
+                    />
+                  </FormField>
+                  <FormField label="Optional transcript override" htmlFor="manual_transcript">
+                    <Textarea
+                      id="manual_transcript"
+                      name="manual_transcript"
+                      className="min-h-28"
+                    />
+                  </FormField>
+                </div>
+
+                <FormField label="Optional product/brand notes" htmlFor="notes">
+                  <Textarea id="notes" name="notes" className="min-h-24" />
+                </FormField>
+
+                <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px]">
+                  <FormField label="OpenRouter model" htmlFor="model">
+                    <Input
+                      id="model"
+                      name="model"
+                      placeholder="deepseek/deepseek-v4-flash"
+                    />
+                  </FormField>
+                  <FormField label="Frame interval" htmlFor="frame_interval_seconds">
+                    <Input
+                      id="frame_interval_seconds"
+                      name="frame_interval_seconds"
+                      type="number"
+                      step="0.5"
+                      min="0.5"
+                      defaultValue="1"
+                    />
+                  </FormField>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 rounded-lg border bg-background/70 px-3 py-3">
+                  <div className="grid gap-1">
+                    <Label htmlFor="scene_detection">Video scene-change detection</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Also sample sharp visual cuts so brief on-screen text is less likely
+                      to be missed. This can add processing time.
+                    </p>
+                  </div>
+                  <Switch
+                    id="scene_detection"
+                    checked={sceneDetection}
+                    onCheckedChange={setSceneDetection}
+                  />
+                </div>
+              </div>
+            </details>
 
             {submitError ? (
               <Alert variant="destructive">
@@ -483,22 +509,49 @@ function Home() {
                     Clear
                   </Button>
                 ) : null}
-                <Badge variant={overallProgress === 100 ? 'secondary' : 'outline'}>
-                  {overallProgress}%
+                <Badge
+                  variant={
+                    failedCount ? 'destructive' : overallProgress === 100 && rows.length
+                      ? 'secondary'
+                      : 'outline'
+                  }
+                >
+                  {failedCount
+                    ? `${failedCount} failed`
+                    : overallProgress === 100 && rows.length
+                      ? 'Complete'
+                      : `${overallProgress}%`}
                 </Badge>
               </div>
             </CardAction>
           </CardHeader>
           <CardContent className="grid gap-4">
             <Progress value={overallProgress}>
-              <ProgressLabel>Overall</ProgressLabel>
+              <ProgressLabel>
+                {failedCount ? `Overall · ${failedCount} failed` : 'Overall'}
+              </ProgressLabel>
               <ProgressValue />
             </Progress>
+            {failedCount ? (
+              <Alert variant="destructive">
+                <AlertCircle />
+                <AlertTitle>Some jobs did not complete</AlertTitle>
+                <AlertDescription>
+                  Review the failed job messages below, then adjust the input and resubmit.
+                </AlertDescription>
+              </Alert>
+            ) : null}
             <Separator />
             {rows.length ? (
               <div className="grid gap-3">
-                {rows.map(({ item, status }) => (
-                  <BatchRow key={item.id} item={item} status={status} />
+                {rows.map(({ item, queryError, retry, status }) => (
+                  <BatchRow
+                    key={item.id}
+                    item={item}
+                    status={status}
+                    queryError={queryError}
+                    onRetry={retry ? () => void retry() : undefined}
+                  />
                 ))}
               </div>
             ) : (
@@ -511,6 +564,7 @@ function Home() {
       <HistoryCard
         error={historyQuery.error}
         isLoading={historyQuery.isLoading}
+        onRetry={() => void historyQuery.refetch()}
         reviews={historyQuery.data ?? []}
       />
     </div>
@@ -550,10 +604,25 @@ function EmptyBatchState() {
   );
 }
 
-function BatchRow({ item, status }: { item: BatchItem; status?: Status }) {
+function BatchRow({
+  item,
+  onRetry,
+  queryError,
+  status,
+}: {
+  item: BatchItem;
+  onRetry?: () => void;
+  queryError?: Error | null;
+  status?: Status;
+}) {
   const progress = progressFor(item, status);
-  const displayStatus = item.error ? 'failed' : status?.status ?? item.phase;
-  const message = item.error ?? status?.message ?? phaseMessage(item.phase, item.kind);
+  const displayStatus = item.error
+    ? 'failed'
+    : status?.status ?? (queryError ? 'connection_issue' : item.phase);
+  const message =
+    item.error ??
+    status?.message ??
+    (queryError ? 'Status temporarily unavailable' : phaseMessage(item.phase, item.kind));
 
   return (
     <div className="grid gap-3 rounded-lg border bg-card/60 p-3">
@@ -570,6 +639,21 @@ function BatchRow({ item, status }: { item: BatchItem; status?: Status }) {
         <ProgressLabel className="truncate">{message}</ProgressLabel>
         <ProgressValue />
       </Progress>
+      {queryError ? (
+        <Alert>
+          <AlertCircle />
+          <AlertTitle>Could not refresh this job</AlertTitle>
+          <AlertDescription>{errorMessage(queryError)}</AlertDescription>
+          {onRetry ? (
+            <AlertAction>
+              <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+                <RefreshCw />
+                Retry
+              </Button>
+            </AlertAction>
+          ) : null}
+        </Alert>
+      ) : null}
       {status?.report_ready ? (
         <Link
           to="/reviews/$jobId/report"
@@ -595,10 +679,12 @@ function BatchRow({ item, status }: { item: BatchItem; status?: Status }) {
 function HistoryCard({
   error,
   isLoading,
+  onRetry,
   reviews,
 }: {
   error: Error | null;
   isLoading: boolean;
+  onRetry: () => void;
   reviews: ReviewHistoryItem[];
 }) {
   return (
@@ -617,7 +703,13 @@ function HistoryCard({
           <Alert variant="destructive">
             <AlertCircle />
             <AlertTitle>History unavailable</AlertTitle>
-            <AlertDescription>{String(error)}</AlertDescription>
+            <AlertDescription>{errorMessage(error)}</AlertDescription>
+            <AlertAction>
+              <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+                <RefreshCw />
+                Retry
+              </Button>
+            </AlertAction>
           </Alert>
         ) : isLoading ? (
           <div className="grid gap-3">
@@ -727,7 +819,7 @@ function ProgressPage() {
   return (
     <Card className="mx-auto max-w-3xl">
       <CardHeader>
-        <CardTitle className="text-xl">Job progress</CardTitle>
+        <CardTitle as="h1" className="text-xl">Job progress</CardTitle>
         <CardDescription>{status?.file_name ?? jobId}</CardDescription>
         <CardAction>
           <StatusBadge status={status?.status ?? 'loading'} />
@@ -752,7 +844,18 @@ function ProgressPage() {
           <Alert variant="destructive">
             <AlertCircle />
             <AlertTitle>Status unavailable</AlertTitle>
-            <AlertDescription>{String(query.error)}</AlertDescription>
+            <AlertDescription>{errorMessage(query.error)}</AlertDescription>
+            <AlertAction>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => void query.refetch()}
+              >
+                <RefreshCw />
+                Retry
+              </Button>
+            </AlertAction>
           </Alert>
         ) : null}
       </CardContent>
@@ -802,8 +905,19 @@ function ReportPage() {
         <AlertCircle />
         <AlertTitle>Report unavailable</AlertTitle>
         <AlertDescription>
-          {query.error ? String(query.error) : 'The report is not ready yet.'}
+          {query.error ? errorMessage(query.error) : 'The report is not ready yet.'}
         </AlertDescription>
+        <AlertAction>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw />
+            Retry
+          </Button>
+        </AlertAction>
       </Alert>
     );
   }
@@ -812,7 +926,7 @@ function ReportPage() {
     <div className="grid gap-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Summary</CardTitle>
+          <CardTitle as="h1" className="text-xl">Review summary</CardTitle>
           <CardDescription>Review job {jobId}</CardDescription>
           <CardAction>
             <StatusBadge status={query.data.overall_status} />
@@ -838,7 +952,8 @@ function ReportPage() {
           <CardDescription>{query.data.findings.length} findings returned</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
+          <div className="overflow-x-auto">
+            <Table>
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
@@ -872,7 +987,8 @@ function ReportPage() {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+            </Table>
+          </div>
         </CardContent>
       </Card>
 
@@ -915,7 +1031,7 @@ function SettingsPage() {
     <div className="mx-auto grid max-w-3xl gap-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Settings</CardTitle>
+          <CardTitle as="h1" className="text-xl">Settings</CardTitle>
           <CardDescription>Runtime configuration for deployed reviews.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 text-sm leading-6 text-muted-foreground">
@@ -1042,6 +1158,10 @@ function formatStatus(status: string) {
   return status
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatSource(source: Finding['source']) {
