@@ -1,29 +1,125 @@
-# Ad Compliance Creative Reviewer
+# Vibe Check
 
-Cloudflare-native MVP for reviewing MP4, JPG, PNG, and WebP ad creatives, or standalone pasted ad copy, against saved publisher guidelines plus optional pasted platform policies. It extracts video metadata with `ffprobe`, extracts WAV audio and samples video frames with `ffmpeg`, prepares still images for OCR with Pillow, runs OCR with Tesseract, transcribes audio through OpenRouter Speech-to-Text with a manual transcript override, optionally extracts compact visual observations from sampled frames with an OpenRouter vision model, and sends compact evidence to OpenRouter Chat Completions for a strict JSON compliance report.
+[![Deploy](https://github.com/AliKhairreddin/vibe-check/actions/workflows/deploy.yml/badge.svg)](https://github.com/AliKhairreddin/vibe-check/actions/workflows/deploy.yml)
 
-## Stack
+Vibe Check is a cloud-native ad-compliance review system for video, image, and copy-only creatives. It converts raw media into compact, traceable evidence—metadata, sampled frames, OCR, transcript segments, and visual observations—then produces a structured decision-support report against saved publisher guidance and optional campaign-specific policies.
 
-- Frontend: Vite, React, TypeScript, TanStack Router, TanStack Query, TanStack Table, Tailwind CSS, local shadcn-style components, lucide-react.
-- Backend: FastAPI, Pydantic, ffmpeg/ffprobe, OpenCV/Pillow, pytesseract, OpenRouter.
-- Cloud runtime: Cloudflare Worker, Cloudflare Containers, Convex.
+**Live application:** [vibe-check.thatcanadian.dev](https://vibe-check.thatcanadian.dev)
 
-## Cloudflare Architecture
+> **Status:** Deployed internal MVP. Reports support human review; they are not official publisher approval and should not be treated as legal advice.
 
-`vibe-check.thatcanadian.dev` is served by a Cloudflare Worker.
+## Why This Project Exists
 
-- Static frontend routes are served from `frontend/dist` via Workers Static Assets.
-- `/api/*` routes are forwarded to a Cloudflare Container running the FastAPI backend.
-- Uploaded creatives, extracted audio, sampled frames, prepared image frames, OCR artifacts, and visual observation artifacts stay in temporary container scratch space only.
-- Convex stores the uploaded filename and size, job status/progress, resolved source link metadata, and final compliance report JSON.
+Creative review is slow when a reviewer must separately inspect video frames, on-screen text, spoken claims, captions, and policy documents. Vibe Check turns that fragmented process into a repeatable pipeline while preserving the evidence behind every result.
 
-R2 is not required for this MVP because uploaded creatives and frame artifacts are intentionally not durable.
+The system is intentionally hybrid:
+
+- deterministic media tooling extracts observable facts;
+- bounded AI stages interpret only compact evidence;
+- durable job records make batch progress and final reports recoverable;
+- uncertain or ambiguous source matches fail safely instead of guessing.
+
+## What It Does
+
+- Accepts MP4, JPG, PNG, WebP, or one copy-only review per non-empty input line.
+- Extracts media metadata with `ffprobe`, audio and frames with `ffmpeg`, and OCR-ready imagery with Pillow/OpenCV.
+- Runs Tesseract OCR, timestamped speech-to-text, and a capped sampled-frame vision pass.
+- Produces strict JSON reports with separate creative and ad-copy results.
+- Uses a four-level verdict model: green, yellow, orange, and red.
+- Handles files up to 200 MB through retryable 8 MB chunks.
+- Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
+- Persists batches, job state, report JSON, and source metadata in Convex.
+- Supports folder-scoped Google Drive browsing/import with exact file IDs and safe duplicate handling.
+- Sends one Telegram summary after every item in a batch reaches a terminal state.
+- Provides cursor-paginated review history and direct report/source links.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U["React review workspace"] --> W["Cloudflare Worker"]
+    W --> C["FastAPI container"]
+    C --> M["ffmpeg / ffprobe"]
+    C --> O["OCR + speech-to-text"]
+    C --> V["Capped vision pass"]
+    M --> E["Compact evidence bundle"]
+    O --> E
+    V --> E
+    E --> L["Structured LLM review"]
+    C <--> D["Convex jobs and reports"]
+    C <--> G["Google Drive read-only import"]
+    C --> T["Telegram batch notification"]
+```
+
+### Runtime Boundaries
+
+- **Cloudflare Worker:** serves the built frontend and proxies `/api/*` requests.
+- **Cloudflare Container:** runs FastAPI plus native media/OCR dependencies.
+- **Convex:** stores durable workflow state and report data, not uploaded media.
+- **Temporary container storage:** holds uploaded creatives and derived artifacts only while a job is running.
+
+R2 is intentionally not required. Uploaded creatives, extracted audio, frames, OCR intermediates, and visual-observation artifacts are removed after processing.
+
+## Engineering Highlights
+
+### Bounded Concurrency
+
+Heavy jobs may run ffmpeg, OCR, vision, transcription, and final analysis. The queue therefore uses a configurable semaphore rather than launching an unbounded task for every upload. Browser admission and backend processing are both parallelized without overwhelming a single container.
+
+### Evidence and Cost Control
+
+The final analysis receives deduplicated OCR, timestamped transcript chunks, a capped number of resized frames, and compact visual observations. This reduces repeated tokens and prevents full-resolution media from being forwarded unnecessarily.
+
+### Source Integrity
+
+Drive imports retain the selected file ID. Filename-based lookups are constrained to the configured folder and use file size to disambiguate new uploads; missing or ambiguous matches never produce a guessed link.
+
+### Failure-Aware Batch State
+
+Batches are registered before item uploads begin. Upload failures become terminal records, so one broken item cannot leave the entire batch or Telegram notification waiting forever.
+
+### Regression Coverage
+
+The repository currently includes 55 backend tests covering pipeline behavior, chunked upload rules, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+
+## Technology
+
+| Layer | Technologies |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, TanStack Router/Query/Table, Tailwind CSS |
+| API | FastAPI, Pydantic, Python |
+| Media | ffmpeg, ffprobe, OpenCV, Pillow, Tesseract |
+| AI | OpenRouter chat, vision, and speech-to-text models |
+| Runtime | Cloudflare Workers, Static Assets, Containers |
+| State | Convex |
+| Delivery | GitHub Actions, Wrangler, Docker |
+
+## Repository Layout
+
+```text
+backend/app/                 FastAPI entry point and review pipeline
+backend/tests/               Pipeline and API regression tests
+frontend/src/                Review workspace and report UI
+worker/                      Cloudflare Worker router/container binding
+convex/                      Durable batch and review state
+scripts/                     Verification helpers
+Dockerfile                   Container image with native media tooling
+wrangler.jsonc               Worker, assets, container, and route config
+```
 
 ## Local Development
 
+### Prerequisites
+
+- Python 3.12
+- Node.js and pnpm
+- ffmpeg/ffprobe
+- Tesseract
+- Docker, when testing the production container shape
+
 ```bash
 cp .env.example .env
-/opt/homebrew/bin/python3.12 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -r backend/requirements.txt
 pnpm install
@@ -31,137 +127,55 @@ uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev
 ```
 
-Open the Vite dev URL and upload one or more MP4, JPG, PNG, or WebP creatives with optional ad copy and policy text, or paste standalone ad copy without a creative. Ad copy means the submitted platform caption/body text, separate from audio transcript and on-creative OCR text.
-The UI creates one review job per selected creative and shows upload progress first,
-then backend queue and processing progress for each job. Creatives larger than 8 MB are
-sent as retryable 8 MB chunks so files up to the configured 200 MB application limit do
-not exceed Cloudflare's plan-level per-request body limit. Upload admission and backend
-processing both run in bounded parallel pools (four jobs at a time by default). With no
-creative selected, each non-empty ad copy line becomes its own review job.
+The frontend creates one review job per selected creative. With no creative selected, every non-empty ad-copy line becomes a separate job.
 
-## Cloudflare Deployment
+## Configuration
 
-Cloudflare Containers require a Workers Paid plan. Docker or a compatible Docker engine must also be running on the machine or CI runner that executes `wrangler deploy`, because Wrangler builds and pushes the container image during deployment. The configured container instance type is `standard-1` so ffmpeg, Tesseract, and OpenCV have enough memory/disk for normal creative review jobs.
+Use [`.env.example`](.env.example) as the source of truth. Important groups include:
 
-One-time setup:
+- `OPENROUTER_*` for final analysis, vision, and speech-to-text models;
+- `CONVEX_URL`, `CONVEX_DEPLOYMENT`, and `CONVEX_HTTP_SECRET` for durable state;
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` and `GOOGLE_DRIVE_FOLDER_ID` for folder-scoped import;
+- `TELEGRAM_*` for batch completion notifications;
+- `MAX_UPLOAD_MB` and `JOB_WORKER_CONCURRENCY` for resource limits.
+
+Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository.
+
+## API Overview
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/reviews` | Create a creative or copy-only review |
+| `POST /api/batches` | Register a durable multi-item batch |
+| `GET /api/batches/{batch_id}` | Read aggregate and item progress |
+| `GET /api/reviews/history` | Browse cursor-paginated history |
+| `GET /api/reviews/{job_id}` | Read job state |
+| `GET /api/reviews/{job_id}/report` | Read structured report JSON |
+| `GET /api/reviews/{job_id}/source` | Resolve safe creative/copy source links |
+
+Default publisher guidance lives in `backend/app/review_pipeline/guidelines/` and is combined with optional policy text submitted for a review.
+
+## Verification
 
 ```bash
-pnpm install
-pnpm run wrangler:types
-
-shared_secret="$(openssl rand -hex 32)"
-printf '%s' "$shared_secret" | pnpm exec convex env set --deployment energetic-partridge-813 CONVEX_HTTP_SECRET
-printf '%s' "$shared_secret" | pnpm exec wrangler secret put CONVEX_HTTP_SECRET
-
-pnpm exec wrangler secret put OPENROUTER_API_KEY
-pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN
-pnpm exec wrangler secret put TELEGRAM_CHAT_ID
+pnpm run verify
 ```
 
-The production Convex URL is configured as `https://energetic-partridge-813.convex.cloud` in `wrangler.jsonc`. Keep `CONVEX_HTTP_SECRET` out of git and set the same random value in both Convex and Cloudflare.
+The verification gate regenerates Worker types, type-checks the Worker, runs backend tests, and builds the production frontend.
 
-Deploy:
+## Deployment
 
 ```bash
 pnpm run convex:deploy
-pnpm run cloudflare:deploy
 ```
 
-`pnpm run deploy` runs those two deployment steps in order. `pnpm run cloudflare:dry-run` builds the frontend and validates the Worker bundle without rolling out a container image.
+Pushes to `main` trigger `.github/workflows/deploy.yml`, which verifies the repository, deploys Convex, builds the Docker-backed container image, and deploys Cloudflare. The container release intentionally runs in GitHub Actions because the runner has Docker available.
 
-### GitHub Actions deployment
+## Known Limitations
 
-The repository includes `.github/workflows/deploy.yml` to deploy on every push to `main` and from the manual **Run workflow** button in GitHub Actions. The GitHub-hosted Ubuntu runner has Docker available, so this path can build and upload the Cloudflare Container without Docker installed locally.
-
-Required GitHub repository secrets:
-
-- `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account id.
-- `CLOUDFLARE_API_TOKEN`: Cloudflare API token. Use the **Edit Cloudflare Workers** template and include Containers edit access if the template does not include it.
-- `CONVEX_DEPLOY_KEY`: Convex production deploy key with `deployment:deploy` permission.
-
-Cloudflare Worker secrets are managed directly in Cloudflare with `wrangler secret put`; the current deployment needs `OPENROUTER_API_KEY` and `CONVEX_HTTP_SECRET`, which are already set in Cloudflare.
-
-With GitHub CLI:
-
-```bash
-gh secret set CLOUDFLARE_ACCOUNT_ID --body "33fc046ae39af5e3cc14e465646b1544"
-gh secret set CLOUDFLARE_API_TOKEN
-gh secret set CONVEX_DEPLOY_KEY
-```
-
-The Worker is configured in `wrangler.jsonc` for:
-
-```text
-https://vibe-check.thatcanadian.dev
-```
-
-If the custom domain cannot be created by Wrangler, add it in the Cloudflare dashboard under Workers & Pages > vibe-check > Settings > Domains & Routes, or re-authenticate Wrangler with a token/profile that can manage the `thatcanadian.dev` zone.
-
-## Environment Variables
-
-- `OPENROUTER_API_KEY`: required for real LLM review and automatic audio transcription. Store as a Cloudflare Worker secret.
-- `OPENROUTER_MODEL`: default model, currently `deepseek/deepseek-v4-flash`.
-- `OPENROUTER_VISION_ENABLED`: set to `false` to skip sampled-frame vision review, default `true`.
-- `OPENROUTER_VISION_MODEL`: vision pre-pass model, currently `minimax/minimax-m3`.
-- `OPENROUTER_VISION_MAX_FRAMES`: maximum sampled frames sent to the vision model per creative, default `12`.
-- `OPENROUTER_VISION_MAX_IMAGE_EDGE`: resized max image dimension before vision upload, default `1024`.
-- `OPENROUTER_VISION_JPEG_QUALITY`: JPEG quality for vision input frames, default `75`.
-- `OPENROUTER_STT_MODEL`: default speech-to-text model, currently `openai/whisper-large-v3`.
-- `OPENROUTER_STT_LANGUAGE`: optional ISO-639-1 transcription language code. Leave empty for auto-detection.
-- `OPENROUTER_STT_CHUNK_SECONDS`: automatic transcript chunk size for approximate audio timestamps, default `10`.
-- `OPENROUTER_STT_MAX_CHUNKS`: maximum automatic transcript chunks, default `30`.
-- `CONVEX_DEPLOYMENT`: Convex deployment selector for CLI commands, currently `prod:energetic-partridge-813`.
-- `CONVEX_URL`: Convex deployment URL ending in `.convex.cloud`. This is non-secret config in `wrangler.jsonc`.
-- `CONVEX_HTTP_SECRET`: shared secret used by the container when writing to Convex. Store the same value in Convex env vars and Cloudflare Worker secrets.
-- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`: complete Google service-account credential JSON used for read-only Drive lookup. Store it only as a Cloudflare Worker secret.
-- `GOOGLE_DRIVE_FOLDER_ID`: root Drive folder used to constrain creative filename matches.
-- `GOOGLE_AD_COPY_SHEET_URL`: shared Google Sheet opened from copy-only review reports.
-- `APP_PASSWORD`: optional simple API password gate for deployed MVP.
-- `APP_PUBLIC_URL`: public app URL used when Telegram notifications link to completed reports.
-- `TELEGRAM_BOT_TOKEN`: optional bot token for completed-review Telegram alerts. Store as a Cloudflare Worker secret.
-- `TELEGRAM_CHAT_ID`: optional group chat id for completed-review Telegram alerts. Store as a Cloudflare Worker secret.
-- `TELEGRAM_MESSAGE_THREAD_ID`: optional Telegram topic/thread id when posting into a forum topic.
-- `MAX_UPLOAD_MB`: upload limit, default `200`.
-- `JOB_DATA_DIR`: scratch job artifact directory inside the container, default `/tmp/vibe-check/jobs` in Cloudflare.
-- `JOB_WORKER_CONCURRENCY`: number of review jobs processed in parallel, default `4` and capped at `8` to protect a single container from accidental overload.
-
-## API
-
-- `POST /api/reviews`: create a job with one MP4, JPG, PNG, or WebP creative, optional platform caption/body ad copy, optional additional policy text, notes, optional manual transcript override, model, frame interval, scene toggle. If no creative file is submitted, `ad_copy` is required and the job reviews copy only.
-- `POST /api/batches`: register a multi-item batch before its individual review uploads begin.
-- `GET /api/batches/{batch_id}`: batch progress, terminal results, failures, and individual job links.
-- `POST /api/batches/{batch_id}/items/{item_id}/failed`: mark an upload failure as terminal so it cannot block the batch notification.
-
-Saved default guidelines live in `backend/app/review_pipeline/guidelines/general_publisher_ad_creative_guidelines.md` and are included in every LLM review. Any submitted `policy_text` is appended as additional policy context.
-- `GET /api/reviews`: recent review history with filename, upload date, status, progress, and final result when available.
-- `GET /api/reviews/history`: cursor-paginated review history for browsing every saved review.
-- `GET /api/reviews/{job_id}`: status and progress.
-- `GET /api/reviews/{job_id}/report`: structured report JSON.
-- `GET /api/reviews/{job_id}/source`: resolved Drive creative and/or shared ad-copy spreadsheet links. Exact-name matches are constrained to the configured Drive folder; missing and ambiguous matches return a safe non-linked state.
-- `GET /api/reviews/{job_id}/report.json`: downloadable report.
-- `GET /api/reviews/{job_id}/frames/{filename}`: frame thumbnail.
-
-## Job Records
-
-Each job persists a Convex `reviews` row with the job id, uploaded filename or copy preview, upload/update timestamps, current status/progress, resolved source metadata, and final report JSON. Creative source links are resolved lazily from an exact filename search within the configured Drive folder, with uploaded size used to disambiguate duplicate names for new reviews. A unique match is cached; missing or ambiguous matches never guess and can be retried later. Copy-only reports link to the configured shared spreadsheet. Reports include separate creative and ad-copy source results when the LLM returns them. Result verdicts use a four-level scale: `green` (ready to run), `yellow` (minor fixes), `orange` (human review required), and `red` (do not publish without material changes). Multi-creative uploads and multi-line copy-only submissions are registered as durable batches before uploads begin. Batch Telegram notifications wait for every item to complete or fail, then send one summary with a link to the batch report page and its individual report buttons. Creatives, frames, OCR scratch files, visual observation scratch files, and audio extracts are deleted from the container after processing.
-
-## Cost-Saving Notes
-
-The backend sends at most `OPENROUTER_VISION_MAX_FRAMES` resized sampled frames to the vision pre-pass, then sends only compact visual observations to the final compliance LLM. It also sends timestamped transcript chunks, deduplicated OCR text, and sampled frame references. Increase frame sampling intervals or lower the vision frame cap to reduce OCR, vision, and transcription cost.
-
-## Limitations
-
-- 1 frame/sec can miss quick flashes.
-- OCR can miss stylized, animated, obscured, or tiny text.
-- Automatic transcription uses OpenRouter Speech-to-Text and requires `OPENROUTER_API_KEY`; automatic audio timestamps are approximate chunk ranges, not word-level alignment. Paste a manual transcript when audio is unavailable or transcription fails.
-- Long audio may exceed upstream transcription timeouts; short ad creatives are the intended MVP path.
-- Visual review depends on selected model capability and is based on capped, resized sampled frames rather than every video frame.
-- Automated review is not official platform approval and should be treated as decision support.
-
-## Testing
-
-```bash
-pnpm run test
-pnpm run build
-pnpm run typecheck:worker
-```
+- Frame sampling can miss very short visual disclosures.
+- OCR may miss small, stylized, moving, or obstructed text.
+- Speech timestamps are approximate chunk ranges rather than word-level alignment.
+- Long audio can exceed upstream transcription timeouts; short advertising creatives are the intended path.
+- Vision review sees capped, resized samples rather than every frame.
+- Review quality still depends on the supplied policy context and selected models.
