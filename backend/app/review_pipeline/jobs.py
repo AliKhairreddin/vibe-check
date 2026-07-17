@@ -2,7 +2,12 @@ from __future__ import annotations
 import asyncio, logging, shutil, anyio
 from pathlib import Path
 from .media import MediaKind, image_metadata, prepare_image_frame
-from .models import ComplianceReport, JobStatus, OfferComplianceResult, OfferProfile, ReviewRequestMeta
+from .models import ComplianceReport, JobStatus, OfferComplianceResult, OfferOutcome, OfferProfile, ReviewRequestMeta
+from .offer_catalog import offer_sort_key
+from .automation_storage import (
+    record_review_automation_job_result,
+    release_review_automation_claim,
+)
 from .storage import job_dir, set_report, set_status, write_json
 from .telegram import finish_batch_item_and_notify, send_review_message
 from .video import metadata, extract_frames
@@ -14,6 +19,7 @@ from .llm import review_internal_overrides_with_openrouter, review_with_openrout
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 logger = logging.getLogger(__name__)
+
 
 def build_review_evidence(
     media_kind: MediaKind,
@@ -216,6 +222,71 @@ async def _review_offer(
         report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
     )
 
+
+def _completed_offer_outcomes(
+    meta:ReviewRequestMeta,
+    offer_results:list[OfferComplianceResult],
+)->list[OfferOutcome]:
+    results_by_offer={result.offer_id:result for result in offer_results}
+    snapshots=[outcome.model_copy(deep=True) for outcome in meta.offer_outcomes]
+    if not snapshots:
+        snapshots=[
+            OfferOutcome(
+                offer_id=result.offer_id,
+                offer_name=result.offer_name,
+                evaluation_state='evaluated',
+            )
+            for result in offer_results
+        ]
+
+    outcomes=[]
+    seen:set[str]=set()
+    for snapshot in snapshots:
+        result=results_by_offer.get(snapshot.offer_id)
+        if result is None:
+            outcomes.append(snapshot)
+            seen.add(snapshot.offer_id)
+            continue
+        outcomes.append(OfferOutcome(
+            offer_id=result.offer_id,
+            offer_name=result.offer_name,
+            evaluation_state='evaluated',
+            overall_status=result.overall_status,
+            creative_result=(
+                result.source_results.creative.status
+                if result.source_results.creative is not None
+                else None
+            ),
+            ad_copy_result=(
+                result.source_results.ad_copy.status
+                if result.source_results.ad_copy is not None
+                else None
+            ),
+            message='Evaluated using the saved official guidelines.',
+        ))
+        seen.add(result.offer_id)
+    for result in offer_results:
+        if result.offer_id in seen:
+            continue
+        outcomes.append(OfferOutcome(
+            offer_id=result.offer_id,
+            offer_name=result.offer_name,
+            evaluation_state='evaluated',
+            overall_status=result.overall_status,
+            creative_result=(
+                result.source_results.creative.status
+                if result.source_results.creative is not None
+                else None
+            ),
+            ad_copy_result=(
+                result.source_results.ad_copy.status
+                if result.source_results.ad_copy is not None
+                else None
+            ),
+            message='Evaluated using the saved official guidelines.',
+        ))
+    return sorted(outcomes, key=offer_sort_key)
+
 async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, meta:ReviewRequestMeta):
     jd=job_dir(job_id)
     audio_path=jd/'audio.wav'
@@ -274,34 +345,57 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             for profile in profiles
         ])
         primary=offer_results[0]
+        offer_outcomes=_completed_offer_outcomes(meta, offer_results)
         report=ComplianceReport(
             **primary.model_dump(),
             schema_version=2,
             primary_offer_id=primary.offer_id,
             offer_results=offer_results,
+            offer_outcomes=offer_outcomes,
         )
         report_json=report.model_dump(mode='json')
-        set_report(job_id, report_json)
+        set_report(job_id, report_json, meta.automation_run_id)
         rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
+        try:
+            record_review_automation_job_result(meta, job_id)
+        except Exception:
+            logger.exception('Could not finalize automation run for job %s', job_id)
         if meta.has_batch:
             try:
-                finish_batch_item_and_notify(
+                await asyncio.to_thread(
+                    finish_batch_item_and_notify,
                     meta.batch_id or '',
                     meta.batch_item_id or '',
                     status='complete',
                     job_id=job_id,
                     result=report.overall_status,
+                    offer_outcomes=offer_outcomes,
                     message='Complete',
                 )
             except Exception:
                 logger.exception('Batch completion notification failed for job %s', job_id)
         else:
-            send_review_message(rec, report_json, meta.ad_copy, media_kind)
+            await asyncio.to_thread(
+                send_review_message,
+                rec,
+                report_json,
+                meta.ad_copy,
+                media_kind,
+            )
     except Exception as e:
         set_status(job_id, JobStatus.failed, 100, str(e))
+        try:
+            release_review_automation_claim(meta)
+        except Exception:
+            logger.exception('Could not release automation claim for failed job %s', job_id)
+        try:
+            record_review_automation_job_result(meta, job_id)
+        except Exception:
+            logger.exception('Could not finalize failed automation run for job %s', job_id)
         if meta.has_batch:
             try:
-                finish_batch_item_and_notify(
+                await asyncio.to_thread(
+                    finish_batch_item_and_notify,
                     meta.batch_id or '',
                     meta.batch_item_id or '',
                     status='failed',

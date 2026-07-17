@@ -1,7 +1,8 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Literal
-from pydantic import BaseModel, Field, field_validator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ResultStatus = Literal['green','yellow','orange','red']
 ReviewSourceKind = Literal['google_drive_file','google_sheet']
@@ -41,7 +42,7 @@ class OverrideAnnotationSet(BaseModel):
 class OfferProfile(BaseModel):
     offer_id: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=160)
-    official_guidelines: str = Field(min_length=1, max_length=200_000)
+    official_guidelines: str = Field(default='', max_length=200_000)
     internal_overrides: list[OfferOverride] = Field(default_factory=list)
     enabled: bool = True
     is_default: bool = False
@@ -49,12 +50,32 @@ class OfferProfile(BaseModel):
     created_at: int | None = None
     updated_at: int | None = None
 
+    @model_validator(mode='after')
+    def validate_availability(self):
+        if self.enabled and not self.official_guidelines.strip():
+            raise ValueError('Enabled offers must include official guidelines.')
+        if self.is_default and not self.enabled:
+            raise ValueError('The default offer must be enabled.')
+        return self
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.official_guidelines.strip())
+
 class OfferProfileInput(BaseModel):
     display_name: str = Field(min_length=1, max_length=160)
-    official_guidelines: str = Field(min_length=1, max_length=200_000)
+    official_guidelines: str = Field(default='', max_length=200_000)
     internal_overrides: list[OfferOverride] = Field(default_factory=list)
     enabled: bool = True
     is_default: bool = False
+
+    @model_validator(mode='after')
+    def validate_availability(self):
+        if self.enabled and not self.official_guidelines.strip():
+            raise ValueError('Enabled offers must include official guidelines.')
+        if self.is_default and not self.enabled:
+            raise ValueError('The default offer must be enabled.')
+        return self
 
 class OfferProfileList(BaseModel):
     offers: list[OfferProfile] = Field(default_factory=list)
@@ -110,10 +131,26 @@ class OfferComplianceResult(BaseModel):
     def normalize_legacy_status(cls, value):
         return normalize_result_status(value)
 
+
+class OfferOutcome(BaseModel):
+    offer_id: str
+    offer_name: str
+    evaluation_state: Literal['evaluated', 'disabled', 'missing_guidelines']
+    overall_status: ResultStatus | None = None
+    creative_result: ResultStatus | None = None
+    ad_copy_result: ResultStatus | None = None
+    message: str = ''
+
+    @field_validator('overall_status', 'creative_result', 'ad_copy_result', mode='before')
+    @classmethod
+    def normalize_legacy_status(cls, value):
+        return normalize_result_status(value) if value is not None else None
+
 class ComplianceReport(OfferComplianceResult):
     schema_version: int = 1
     primary_offer_id: str | None = None
     offer_results: list[OfferComplianceResult] = Field(default_factory=list)
+    offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
 
 class JobRecord(BaseModel):
     job_id: str
@@ -154,6 +191,7 @@ class ReviewHistoryItem(JobRecord):
     overall_status: ResultStatus | None = None
     creative_result: ResultStatus | None = None
     ad_copy_result: ResultStatus | None = None
+    offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
 
 class ReviewHistoryPage(BaseModel):
     reviews: list[ReviewHistoryItem] = Field(default_factory=list)
@@ -171,6 +209,11 @@ class ReviewRequestMeta(BaseModel):
     batch_id: str | None = None
     batch_item_id: str | None = None
     offer_profiles: list[OfferProfile] = Field(default_factory=list)
+    offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
+    automation_id: str | None = None
+    automation_run_id: str | None = None
+    automation_file_id: str | None = None
+    automation_file_modified_time: str = ''
 
     @property
     def has_ad_copy(self) -> bool:
@@ -272,6 +315,7 @@ class ReviewBatchItem(CreateBatchItem):
     status: str = 'pending'
     job_id: str | None = None
     result: ResultStatus | None = None
+    offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
     message: str = ''
 
 class ReviewBatch(BaseModel):
@@ -281,3 +325,55 @@ class ReviewBatch(BaseModel):
     expected_count: int
     items: list[ReviewBatchItem]
     notification_status: str = 'pending'
+
+
+class ReviewAutomationInput(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    enabled: bool = False
+    folder_id: str = Field(min_length=1, max_length=512)
+    file_name_pattern: str = Field(default='*', min_length=1, max_length=200)
+    time_of_day: str = Field(pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+    timezone: str = Field(default='America/Toronto', min_length=1, max_length=100)
+    days_of_week: list[int] = Field(default_factory=lambda:list(range(7)), min_length=1, max_length=7)
+    include_subfolders: bool = True
+
+    @field_validator('timezone')
+    @classmethod
+    def validate_timezone(cls, value):
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            raise ValueError('Choose a valid IANA timezone.') from None
+        return value
+
+    @field_validator('days_of_week')
+    @classmethod
+    def validate_days_of_week(cls, value):
+        if any(day < 0 or day > 6 for day in value):
+            raise ValueError('Schedule days must be between Monday (0) and Sunday (6).')
+        return sorted(set(value))
+
+
+class ReviewAutomation(ReviewAutomationInput):
+    automation_id: str
+    created_at: int
+    updated_at: int
+    last_run_at: int | None = None
+    last_run_status: str | None = None
+    last_run_message: str = ''
+    last_batch_id: str | None = None
+    last_scheduled_for: str | None = None
+
+
+class ReviewAutomationList(BaseModel):
+    automations: list[ReviewAutomation] = Field(default_factory=list)
+
+
+class AutomationRunResult(BaseModel):
+    automation: ReviewAutomation
+    status: str
+    message: str
+    matched_count: int = 0
+    queued_count: int = 0
+    batch_id: str | None = None
+    job_ids: list[str] = Field(default_factory=list)

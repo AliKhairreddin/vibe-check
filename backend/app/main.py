@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, re, secrets, shutil, uuid
+import asyncio, json, logging, os, re, secrets, shutil, uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
     BatchFailure,
+    AutomationRunResult,
     ComplianceReport,
     CreateDriveReview,
     CreateReviewBatch,
@@ -26,6 +27,9 @@ from .review_pipeline.models import (
     ReviewSource,
     ReviewSources,
     ReviewBatch,
+    ReviewAutomation,
+    ReviewAutomationInput,
+    ReviewAutomationList,
     ReviewHistoryItem,
     ReviewHistoryPage,
     ReviewStats,
@@ -33,6 +37,7 @@ from .review_pipeline.models import (
     ReviewRequestMeta,
 )
 from .review_pipeline.storage import (
+    backfill_review_offer_stats,
     create_batch,
     delete_review,
     disable_offer_profile,
@@ -46,7 +51,8 @@ from .review_pipeline.storage import (
     get_review_stats,
     list_offer_profiles,
     now_ms,
-    resolve_offer_profiles,
+    resolve_active_offer_profiles,
+    resolve_review_offer_snapshot,
     set_review_source,
     upsert_offer_profile,
 )
@@ -60,6 +66,18 @@ from .review_pipeline.drive import (
 )
 from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
+from .review_pipeline.automation_storage import (
+    delete_review_automation,
+    deliver_pending_batch_notifications,
+    get_review_automation,
+    list_review_automations,
+    recover_interrupted_automation_jobs,
+    upsert_review_automation,
+)
+from .review_pipeline.automations import (
+    run_due_review_automations,
+    run_review_automation,
+)
 
 COPY_LABEL_MAX_LENGTH = 72
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
@@ -71,6 +89,22 @@ JOB_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 MAX_BATCH_ITEMS = 100
 ADMIN_PASSWORD_HEADER = 'x-admin-password'
+AUTOMATION_SECRET_HEADER = 'x-automation-secret'
+logger = logging.getLogger(__name__)
+background_tasks:set[asyncio.Task]=set()
+
+
+async def deliver_batch_notifications_in_background()->None:
+    try:
+        await asyncio.to_thread(deliver_pending_batch_notifications, limit=1)
+    except Exception:
+        logger.exception('Could not deliver a pending batch notification.')
+
+
+def start_background_task(coroutine)->None:
+    task=asyncio.create_task(coroutine)
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
 
 
 def copy_review_file_name(ad_copy: str) -> str:
@@ -114,12 +148,15 @@ def review_meta(
     batch_item_id: str,
     offer_ids: list[str] | None = None,
 ) -> ReviewRequestMeta:
-    try:
-        offer_profiles=resolve_offer_profiles(offer_ids or ['acp'])
-    except KeyError as exc:
-        raise HTTPException(400, f'Unknown or disabled offer: {exc.args[0]}') from None
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
+    # Offer eligibility is server-owned. The legacy offer_ids input remains accepted
+    # for backwards compatibility, but a caller cannot force a disabled/unconfigured
+    # offer to run or omit an eligible one.
+    offer_profiles,offer_outcomes=resolve_review_offer_snapshot()
+    if not offer_profiles:
+        raise HTTPException(
+            409,
+            'No offers are available for review. Save official guidelines and enable at least one offer in Settings.',
+        )
     return ReviewRequestMeta(
         ad_copy=ad_copy.strip(),
         policy_text=policy_text,
@@ -131,6 +168,7 @@ def review_meta(
         batch_id=batch_id or None,
         batch_item_id=batch_item_id or None,
         offer_profiles=offer_profiles,
+        offer_outcomes=offer_outcomes,
     )
 
 
@@ -148,7 +186,25 @@ def parse_offer_ids(value:str)->list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        migration=await asyncio.to_thread(backfill_review_offer_stats)
+        if migration['processed']:
+            logger.info(
+                'Backfilled offer stats for %s existing review(s).',
+                migration['processed'],
+            )
+        if not migration['is_done']:
+            logger.warning('Offer stats backfill will resume on the next automation tick.')
+    except Exception:
+        logger.exception('Could not backfill review offer stats at startup.')
+    try:
+        recovered=await asyncio.to_thread(recover_interrupted_automation_jobs)
+        if recovered:
+            logger.warning('Recovered %s interrupted automation run(s) at startup.', recovered)
+    except Exception:
+        logger.exception('Could not reconcile interrupted automation jobs at startup.')
     await start_job_workers()
+    start_background_task(deliver_batch_notifications_in_background())
     yield
     await stop_job_workers()
 
@@ -177,10 +233,91 @@ def require_admin(request:Request)->None:
         raise HTTPException(401, 'Invalid or missing admin password.')
 
 
+def require_automation_secret(request:Request)->None:
+    expected=os.getenv('CONVEX_HTTP_SECRET','')
+    provided=request.headers.get(AUTOMATION_SECRET_HEADER,'')
+    if not expected or not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(401, 'Invalid or missing automation secret.')
+
+
 @app.get('/api/admin/check')
 def admin_check(request:Request):
     require_admin(request)
     return {'authorized':True}
+
+
+@app.post('/api/automations/internal/tick')
+async def tick_review_automations(request:Request):
+    require_automation_secret(request)
+    try:
+        await asyncio.to_thread(backfill_review_offer_stats)
+    except Exception:
+        logger.exception('Could not resume the review offer stats backfill.')
+    await asyncio.to_thread(recover_interrupted_automation_jobs)
+    results=await run_due_review_automations()
+    start_background_task(deliver_batch_notifications_in_background())
+    return {'runs':[result.model_dump(mode='json') for result in results]}
+
+
+@app.get('/api/automations', response_model=ReviewAutomationList)
+def review_automations(request:Request):
+    require_admin(request)
+    return ReviewAutomationList(
+        automations=list_review_automations(include_disabled=True)
+    )
+
+
+@app.put('/api/automations/{automation_id}', response_model=ReviewAutomation)
+def save_review_automation(
+    automation_id:str,
+    payload:ReviewAutomationInput,
+    request:Request,
+):
+    require_admin(request)
+    normalized=automation_id.strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(400, 'Automation ID must be a lowercase slug.')
+    if payload.enabled:
+        if not resolve_active_offer_profiles():
+            raise HTTPException(
+                409,
+                'Enable at least one offer with saved official guidelines before enabling an automation.',
+            )
+        try:
+            folder=get_google_drive_client().get_file(payload.folder_id)
+        except DriveLookupError as exc:
+            raise HTTPException(400, str(exc)) from None
+        if folder.mime_type != FOLDER_MIME_TYPE:
+            raise HTTPException(400, 'The automation source must be a Google Drive folder.')
+    return upsert_review_automation(normalized, payload)
+
+
+@app.delete('/api/automations/{automation_id}')
+def remove_review_automation(automation_id:str, request:Request):
+    require_admin(request)
+    normalized=automation_id.strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(404, 'Review automation not found')
+    try:
+        delete_review_automation(normalized)
+    except KeyError:
+        raise HTTPException(404, 'Review automation not found') from None
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {'automation_id':normalized}
+
+
+@app.post('/api/automations/{automation_id}/run', response_model=AutomationRunResult)
+async def run_saved_review_automation(automation_id:str, request:Request):
+    require_admin(request)
+    normalized=automation_id.strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(404, 'Review automation not found')
+    try:
+        automation=get_review_automation(normalized)
+    except KeyError:
+        raise HTTPException(404, 'Review automation not found') from None
+    return await run_review_automation(automation, manual=True)
 
 @app.post('/api/reviews', response_model=JobRecord)
 async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form('["acp"]')):
@@ -509,12 +646,13 @@ def fail_batch_upload(batch_id:str, item_id:str, payload:BatchFailure):
 
 @app.get('/api/offers/catalog')
 def offer_catalog():
-    offers=list_offer_profiles(include_disabled=False)
+    offers=list_offer_profiles(include_disabled=True)
     return {'offers':[
         {
             'offer_id':offer.offer_id,
             'display_name':offer.display_name,
             'enabled':offer.enabled,
+            'configured':offer.configured,
             'is_default':offer.is_default,
             'version':offer.version,
             'override_count':sum(1 for override in offer.internal_overrides if override.enabled),

@@ -37,6 +37,9 @@
       "custom_domain": true
     }
   ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "secrets": {
     "required": [
       "CONVEX_HTTP_SECRET",

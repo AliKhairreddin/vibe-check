@@ -39,6 +39,12 @@ import {
   type ReviewStats,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  getOfferColumns,
+  OfferOutcomeCell,
+  reviewOutcomeForOffer,
+  type OfferColumn,
+} from '@/components/offer-outcomes';
 
 const RESULT_ORDER: OverallStatus[] = ['green', 'yellow', 'orange', 'red'];
 const RESULT_META: Record<OverallStatus, {
@@ -86,18 +92,18 @@ const RESULT_META: Record<OverallStatus, {
 export function DashboardPage() {
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const offersQuery = useQuery({
-    queryKey: ['offers', 'enabled'],
+    queryKey: ['offers'],
     queryFn: listOfferCatalog,
     staleTime: 60_000,
   });
   const enabledOffers = useMemo(
-    () => (offersQuery.data ?? []).filter((offer) => offer.enabled),
+    () => (offersQuery.data ?? []).filter((offer) => offer.enabled && offer.configured),
     [offersQuery.data]
   );
   const fallbackOffer = enabledOffers.find((offer) => offer.is_default) ?? enabledOffers[0];
   const effectiveOfferId = enabledOffers.some((offer) => offer.offer_id === selectedOfferId)
     ? selectedOfferId
-    : fallbackOffer?.offer_id ?? 'acp';
+    : fallbackOffer?.offer_id ?? '';
 
   useEffect(() => {
     if (selectedOfferId !== effectiveOfferId) setSelectedOfferId(effectiveOfferId);
@@ -106,6 +112,7 @@ export function DashboardPage() {
   const statsQuery = useQuery({
     queryKey: ['reviews', 'stats', effectiveOfferId],
     queryFn: () => getReviewStats(effectiveOfferId),
+    enabled: Boolean(effectiveOfferId),
     staleTime: 15_000,
   });
   const recentQuery = useQuery({
@@ -128,7 +135,7 @@ export function DashboardPage() {
             Monitor review volume, outcomes, and the latest creative checks.
           </p>
         </div>
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-end">
           <OfferFilter
             offers={enabledOffers}
             selectedOfferId={effectiveOfferId}
@@ -147,7 +154,7 @@ export function DashboardPage() {
           <AlertCircle />
           <AlertTitle>Offer profiles unavailable</AlertTitle>
           <AlertDescription>
-            Dashboard totals are falling back to ACP. {errorMessage(offersQuery.error)}
+            Dashboard totals cannot be filtered until offer profiles load. {errorMessage(offersQuery.error)}
           </AlertDescription>
           <AlertAction>
             <Button type="button" size="xs" variant="outline" onClick={() => void offersQuery.refetch()}>
@@ -161,9 +168,9 @@ export function DashboardPage() {
       {!offersQuery.isLoading && !offersQuery.error && !enabledOffers.length ? (
         <Alert>
           <Layers3 />
-          <AlertTitle>No enabled offer profiles</AlertTitle>
+          <AlertTitle>No review-ready offer profiles</AlertTitle>
           <AlertDescription>
-            Showing legacy ACP review data. Enable an offer profile in Settings to filter future results.
+            Enable an offer with saved guidelines in Settings before starting a review.
           </AlertDescription>
           <AlertAction>
             <Link to="/settings" className={buttonVariants({ variant: 'outline', size: 'xs' })}>
@@ -196,6 +203,7 @@ export function DashboardPage() {
         isLoading={recentQuery.isLoading}
         onRetry={() => void recentQuery.refetch()}
         reviews={recentQuery.data ?? []}
+        offers={offersQuery.data ?? []}
       />
     </div>
   );
@@ -229,7 +237,7 @@ function OfferFilter({
             <option key={offer.offer_id} value={offer.offer_id}>
               {offer.display_name}
             </option>
-          )) : <option value="acp">ACP</option>}
+          )) : <option value="">No review-ready offers</option>}
         </select>
       )}
     </label>
@@ -362,12 +370,18 @@ function RecentReviewsCard({
   isLoading,
   onRetry,
   reviews,
+  offers,
 }: {
   error: Error | null;
   isLoading: boolean;
   onRetry: () => void;
   reviews: ReviewHistoryItem[];
+  offers: OfferCatalogItem[];
 }) {
+  const offerColumns = useMemo(
+    () => getOfferColumns(offers, reviews.map((review) => review.offer_outcomes)),
+    [offers, reviews]
+  );
   return (
     <Card>
       <CardHeader>
@@ -403,7 +417,9 @@ function RecentReviewsCard({
           </div>
         ) : reviews.length ? (
           <div className="divide-y rounded-lg border">
-            {reviews.map((review) => <RecentReviewRow key={review.job_id} review={review} />)}
+            {reviews.map((review) => (
+              <RecentReviewRow key={review.job_id} review={review} offerColumns={offerColumns} />
+            ))}
           </div>
         ) : (
           <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
@@ -425,24 +441,40 @@ function RecentReviewsCard({
   );
 }
 
-function RecentReviewRow({ review }: { review: ReviewHistoryItem }) {
+function RecentReviewRow({
+  offerColumns,
+  review,
+}: {
+  offerColumns: OfferColumn[];
+  review: ReviewHistoryItem;
+}) {
   const content = (
     <>
-      <span className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{review.file_name || review.job_id}</span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span>{formatDateTime(review.created_at)}</span>
-          <span aria-hidden="true">·</span>
-          <span>{formatOfferId(review.primary_offer_id ?? review.offer_ids?.[0] ?? 'acp')}</span>
           {!review.report_ready && review.status !== 'failed' ? (
             <>
               <span aria-hidden="true">·</span>
               <span>{review.progress}%</span>
             </>
           ) : null}
-        </span>
-      </span>
-      <CompactStatusBadge status={review.overall_status ?? review.status} />
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4 xl:flex xl:flex-wrap">
+          {offerColumns.map((offer) => (
+            <div
+              key={offer.offer_id}
+              className="flex min-w-0 items-center justify-between gap-1 rounded-md border bg-background px-2 py-1"
+            >
+              <span className="truncate text-[11px] font-medium text-muted-foreground">
+                {offer.offer_name}
+              </span>
+              <OfferOutcomeCell compact outcome={reviewOutcomeForOffer(review, offer)} />
+            </div>
+          ))}
+        </div>
+      </div>
       <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover/review:translate-x-0.5" />
     </>
   );
@@ -457,22 +489,6 @@ function RecentReviewRow({ review }: { review: ReviewHistoryItem }) {
       {content}
     </Link>
   );
-}
-
-function CompactStatusBadge({ status }: { status?: string | null }) {
-  const result = normalizeResultStatus(status);
-  if (result) {
-    const meta = RESULT_META[result];
-    return (
-      <Badge variant="outline" className={meta.badgeClass}>
-        <span className={cn('size-1.5 rounded-full', meta.barClass)} />
-        {meta.label}
-      </Badge>
-    );
-  }
-  if (status === 'failed') return <Badge variant="destructive">Failed</Badge>;
-  if (status === 'complete') return <Badge variant="secondary">Complete</Badge>;
-  return <Badge variant="outline">{formatStatus(status ?? 'queued')}</Badge>;
 }
 
 function DashboardStatsSkeleton() {

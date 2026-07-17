@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v7";
+const BACKEND_INSTANCE = "primary-v8";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -10,6 +10,84 @@ type OptionalSecrets = Env & {
   TELEGRAM_CHAT_ID?: string;
   TELEGRAM_MESSAGE_THREAD_ID?: string;
 };
+
+type AutomationSchedule = {
+  days_of_week: number[];
+  last_run_status?: string | null;
+  last_scheduled_for?: string | null;
+  time_of_day: string;
+  timezone: string;
+};
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Mon: 0,
+  Tue: 1,
+  Wed: 2,
+  Thu: 3,
+  Fri: 4,
+  Sat: 5,
+  Sun: 6,
+};
+
+function dueScheduleKey(automation: AutomationSchedule, now = new Date()): string | null {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: automation.timezone,
+    weekday: "short",
+    year: "numeric",
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const weekday = WEEKDAY_INDEX[value("weekday")];
+  if (!automation.days_of_week.includes(weekday)) return null;
+  const currentTime = `${value("hour")}:${value("minute")}`;
+  if (currentTime < automation.time_of_day) return null;
+  return `${value("year")}-${value("month")}-${value("day")}@${automation.time_of_day}`;
+}
+
+async function hasDueAutomations(env: Env): Promise<boolean> {
+  const now = Date.now();
+  const response = await fetch(`${env.CONVEX_URL.replace(/\/$/, "")}/api/query`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      path: "automations:tickState",
+      args: { secret: env.CONVEX_HTTP_SECRET, now },
+      format: "json",
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Automation eligibility check failed with status ${response.status}`);
+  }
+  const payload = await response.json() as { status?: string; value?: unknown };
+  if (payload.status !== "success") {
+    throw new Error("Automation eligibility check returned an invalid response");
+  }
+  const state = payload.value as {
+    automations?: AutomationSchedule[];
+    needs_maintenance?: boolean;
+    needs_notification?: boolean;
+    needs_recovery?: boolean;
+  } | null;
+  if (!state || typeof state !== "object") return false;
+  if (state.needs_maintenance || state.needs_recovery || state.needs_notification) return true;
+  return (state.automations ?? []).some((automation) => {
+    if (automation.last_run_status === "failed" && automation.last_scheduled_for) {
+      return true;
+    }
+    if (["running", "queued"].includes(automation.last_run_status ?? "")) {
+      return false;
+    }
+    const scheduleKey = dueScheduleKey(automation);
+    if (!scheduleKey) return false;
+    if (automation.last_scheduled_for !== scheduleKey) return true;
+    return false;
+  });
+}
 
 export class ReviewBackend extends Container<Env> {
   defaultPort = 8000;
@@ -59,5 +137,28 @@ export default {
     }
 
     return env.ASSETS.fetch(request);
+  },
+  scheduled(_controller, env, ctx): void {
+    const optionalSecrets = env as OptionalSecrets;
+    const headers = new Headers({
+      "content-type": "application/json",
+      "x-automation-secret": env.CONVEX_HTTP_SECRET,
+    });
+    if (optionalSecrets.APP_PASSWORD) {
+      headers.set("x-app-password", optionalSecrets.APP_PASSWORD);
+    }
+    const baseUrl = optionalSecrets.APP_PUBLIC_URL || "https://vibe-check.thatcanadian.dev";
+    const request = new Request(new URL("/api/automations/internal/tick", baseUrl), {
+      method: "POST",
+      headers,
+    });
+    ctx.waitUntil((async () => {
+      if (!await hasDueAutomations(env)) return;
+      const backend = env.REVIEW_BACKEND.getByName(BACKEND_INSTANCE);
+      const response = await backend.fetch(request);
+      if (!response.ok) {
+        throw new Error(`Automation tick failed with status ${response.status}`);
+      }
+    })());
   },
 } satisfies ExportedHandler<Env>;

@@ -25,15 +25,16 @@ The system is intentionally hybrid:
 - Extracts media metadata with `ffprobe`, audio and frames with `ffmpeg`, and OCR-ready imagery with Pillow/OpenCV.
 - Runs Tesseract OCR, timestamped speech-to-text, and a capped sampled-frame vision pass.
 - Produces strict JSON reports with separate creative and ad-copy results.
-- Evaluates one evidence bundle against one or more independently configured offers.
+- Evaluates one evidence bundle against every active offer with saved guidelines; inactive or unconfigured offers remain visible as N/A.
 - Keeps official guideline findings separate from offer-scoped internal overrides.
 - Uses a four-level verdict model: green, yellow, orange, and red.
 - Handles files up to 200 MB through retryable 8 MB chunks.
 - Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.
 - Supports folder-first Google Drive browsing, whole-folder selection, drill-down file selection, and exact-ID deduplication.
-- Sends one Telegram summary after every item in a batch reaches a terminal state.
+- Sends one multi-offer Telegram summary after every item in a batch reaches a terminal state.
 - Provides an offer-filtered dashboard, cursor-paginated history, recoverable history removal, and direct report/source links.
+- Saves disabled-by-default Drive review automations with timezone, weekday, time, subfolder, and filename-glob controls.
 
 ## Architecture
 
@@ -82,7 +83,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 72 backend tests covering pipeline behavior, two-pass offer isolation, internal overrides, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 93 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, two-pass offer isolation, internal overrides, scheduled automation claims and retries, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -129,7 +130,7 @@ uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev
 ```
 
-The frontend creates one review job per selected creative. With no creative selected, every non-empty ad-copy line becomes a separate job.
+The frontend creates one review job per selected creative. With no creative selected, every non-empty ad-copy line becomes a separate job. Offer selection is server-owned: every enabled profile with non-empty official guidelines is evaluated, and callers cannot force disabled offers to run or omit eligible offers.
 
 ## Configuration
 
@@ -164,8 +165,14 @@ The public offer catalog contains names and version counts only. Full official g
 | `GET /api/offers` | Admin-only list of complete saved offer profiles |
 | `GET /api/offers/{offer_id}/versions/{version}` | Admin-only immutable policy revision lookup |
 | `PUT /api/offers/{offer_id}` | Admin-only save of official guidelines and scoped overrides |
+| `GET /api/automations` | Admin-only list of saved review schedules |
+| `PUT /api/automations/{automation_id}` | Admin-only create or update of a disabled-by-default Drive schedule |
+| `POST /api/automations/{automation_id}/run` | Admin-only manual scan and queue of new/changed matches |
+| `DELETE /api/automations/{automation_id}` | Admin-only deletion of a saved schedule |
 
-The bundled publisher guidance in `backend/app/review_pipeline/guidelines/` is the ACP fallback. Settings can persist ACP updates and additional offer profiles in Convex. Official guideline text, internal overrides, and optional per-review policy supplements remain separate inputs in every report.
+The bundled publisher guidance in `backend/app/review_pipeline/guidelines/` is the ACP fallback. ACP, Kissterra, Lead Economy, and Smart Financial always appear in the catalog; the latter three begin disabled and without guidelines. Settings can persist policy text and activation state in Convex. Official guideline text, internal overrides, and optional per-review policy supplements remain separate inputs in every report.
+
+Cloudflare Cron checks Convex once per minute and only wakes the review container when an automation is due. Runs are claimed idempotently by schedule with bounded recovery for failed or abandoned scans, and Drive files are claimed by automation, file ID, and modified time so an unchanged successful creative is not reviewed again. Failed review jobs release their file-version claim for a future retry. Filename globs support `{date}`, `{YYYY}`, `{MM}`, and `{DD}` placeholders. No automation is seeded or enabled by deployment.
 
 ## Verification
 

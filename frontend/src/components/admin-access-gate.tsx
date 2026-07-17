@@ -63,6 +63,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
       setAdminPassword(candidate);
       setIsUnlocked(true);
       await queryClient.invalidateQueries({ queryKey: ['offer-profiles'] });
+      await queryClient.invalidateQueries({ queryKey: ['automations'] });
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -76,6 +77,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
     setIsUnlocked(false);
     setError('');
     queryClient.removeQueries({ queryKey: ['offer-profiles'] });
+    queryClient.removeQueries({ queryKey: ['automations'] });
   }
 
   return (
@@ -87,7 +89,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
             Admin access
           </CardTitle>
           <CardDescription>
-            Required to view or change official guidelines, manage overrides, and remove review history.
+            Required to manage official guidelines, review automations, overrides, and review history.
           </CardDescription>
           {isUnlocked ? (
             <CardAction className="flex items-center gap-2">
@@ -112,7 +114,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
               </div>
               <Button type="submit" disabled={isChecking || !password.trim()}>
                 {isChecking ? <LoaderCircle className="animate-spin" /> : <KeyRound />}
-                {isChecking ? 'Checking' : 'Unlock settings'}
+                {isChecking ? 'Checking' : 'Unlock admin tools'}
               </Button>
             </form>
             {error ? (

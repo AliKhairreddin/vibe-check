@@ -1,17 +1,22 @@
 import json
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
-from app.main import app, copy_review_file_name
+from app.main import app, copy_review_file_name, review_meta
+from app.review_pipeline import automation_storage as review_automation_storage
+from app.review_pipeline import automations as review_automations
 from app.review_pipeline import jobs as review_jobs
 from app.review_pipeline import queue as review_queue
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
-from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOverride, OfferProfile, OfferProfileInput, OverrideAnnotationSet, ReviewRequestMeta
+from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, OverrideAnnotationSet, ReviewAutomation, ReviewAutomationInput, ReviewRequestMeta
+from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
 from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
@@ -19,7 +24,8 @@ from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import create_batch, delete_review, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
+from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
+from app.review_pipeline.automation_storage import claim_automation_files, claim_automation_run, finish_automation_run, list_review_automations, upsert_review_automation
 from app.review_pipeline.source_links import resolve_review_sources
 from app.review_pipeline.telegram import build_batch_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
@@ -627,7 +633,15 @@ def test_offer_profiles_persist_guidelines_and_offer_scoped_overrides(tmp_path, 
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
 
-    assert [profile.offer_id for profile in list_offer_profiles()] == ['acp']
+    initial=list_offer_profiles()
+    assert [profile.offer_id for profile in initial] == [
+        'acp',
+        'kissterra',
+        'lead-economy',
+        'smart-financial',
+    ]
+    assert initial[0].enabled and initial[0].configured
+    assert all(not profile.enabled and not profile.configured for profile in initial[1:])
     saved=upsert_offer_profile('kissterra', OfferProfileInput(
         display_name='Kissterra',
         official_guidelines='Kissterra official policy.',
@@ -657,6 +671,664 @@ def test_offer_profiles_persist_guidelines_and_offer_scoped_overrides(tmp_path, 
     assert acp.version == 2
     assert get_offer_profile_revision('acp', 1).official_guidelines == load_default_guidelines()
     assert get_offer_profile_revision('acp', 2).official_guidelines == 'Updated ACP official policy.'
+
+
+def test_review_eligibility_is_server_owned_and_snapshots_na_states(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    upsert_offer_profile('kissterra', OfferProfileInput(
+        display_name='Kissterra',
+        official_guidelines='Kissterra official policy.',
+        enabled=True,
+    ))
+
+    meta=review_meta('', '', '', '', '', 1.0, False, '', '', ['acp'])
+    assert [profile.offer_id for profile in meta.offer_profiles] == ['acp', 'kissterra']
+    assert [outcome.evaluation_state for outcome in meta.offer_outcomes] == [
+        'evaluated',
+        'evaluated',
+        'missing_guidelines',
+        'missing_guidelines',
+    ]
+
+    disable_offer_profile('acp')
+    assert [profile.offer_id for profile in resolve_active_offer_profiles()] == ['kissterra']
+    acp_outcome=next(outcome for outcome in current_offer_outcomes() if outcome.offer_id == 'acp')
+    assert acp_outcome.evaluation_state == 'disabled'
+
+
+def test_disabled_offer_can_be_blank_but_enabled_offer_requires_guidelines():
+    draft=OfferProfileInput(
+        display_name='Lead Economy',
+        official_guidelines='',
+        enabled=False,
+    )
+    assert not draft.enabled
+    with pytest.raises(ValueError, match='official guidelines'):
+        OfferProfileInput(
+            display_name='Lead Economy',
+            official_guidelines='',
+            enabled=True,
+        )
+
+
+def test_review_creation_is_blocked_when_every_offer_is_ineligible(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    disable_offer_profile('acp')
+    with pytest.raises(HTTPException) as error:
+        review_meta('', '', '', '', '', 1.0, False, '', '', ['acp'])
+    assert getattr(error.value, 'status_code', None) == 409
+    assert 'No offers are available' in str(getattr(error.value, 'detail', ''))
+
+
+def test_review_automation_schedule_and_claims_are_durable_and_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_automation_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    payload=ReviewAutomationInput(
+        name='Daily creative folder',
+        enabled=False,
+        folder_id='drive-folder-123',
+        file_name_pattern='creative-{date}-*.png',
+        time_of_day='16:30',
+        timezone='America/Toronto',
+        days_of_week=[3],
+        include_subfolders=True,
+    )
+    automation=upsert_review_automation('daily-creatives', payload)
+    assert not automation.enabled
+    assert len(list_review_automations()) == 1
+
+    current=datetime(2026, 7, 16, 21, 0, tzinfo=timezone.utc)
+    assert due_schedule_key(automation, current) == '2026-07-16@16:30'
+    assert rendered_file_pattern(automation, current.astimezone()) == 'creative-2026-07-16-*.png'
+
+    run_id=claim_automation_run(automation, 'manual:test', allow_disabled=True)
+    assert run_id
+    assert claim_automation_run(automation, 'manual:test', allow_disabled=True) is None
+    files=[{
+        'file_id':'file-1',
+        'file_name':'creative-2026-07-16-a.png',
+        'modified_time':'2026-07-16T20:00:00Z',
+    }]
+    assert claim_automation_files(automation.automation_id, run_id, files) == files
+    assert claim_automation_files(automation.automation_id, run_id, files) == []
+    updated=finish_automation_run(
+        run_id,
+        automation.automation_id,
+        status='queued',
+        message='Queued one creative.',
+        matched_count=1,
+        queued_count=1,
+        job_ids=['job-1'],
+    )
+    assert updated.last_run_status == 'queued'
+    assert updated.last_run_message == 'Queued one creative.'
+
+
+def test_failed_automation_schedule_retries_three_times(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_automation_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    automation=upsert_review_automation('retry-daily', ReviewAutomationInput(
+        name='Retry daily',
+        enabled=False,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=[0],
+    ))
+
+    run_ids=[]
+    for _attempt in range(3):
+        run_id=claim_automation_run(automation, '2026-07-20@09:00', allow_disabled=True)
+        assert run_id
+        run_ids.append(run_id)
+        finish_automation_run(
+            run_id,
+            automation.automation_id,
+            status='failed',
+            message='Drive temporarily unavailable.',
+            matched_count=0,
+            queued_count=0,
+        )
+
+    assert len(set(run_ids)) == 3
+    assert claim_automation_run(
+        automation,
+        '2026-07-20@09:00',
+        allow_disabled=True,
+    ) is None
+    assert list_review_automations()[0].last_run_status == 'failed_exhausted'
+
+
+def test_failed_automated_job_releases_its_file_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_automation_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    automation=upsert_review_automation('release-failure', ReviewAutomationInput(
+        name='Release failure',
+        enabled=False,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=[0],
+    ))
+    first_run=claim_automation_run(automation, 'manual:first', allow_disabled=True)
+    assert first_run
+    file_claim={
+        'file_id':'file-1',
+        'file_name':'creative.png',
+        'job_id':'job-1',
+        'modified_time':'2026-07-16T20:00:00Z',
+    }
+    assert claim_automation_files(automation.automation_id, first_run, [file_claim])
+
+    review_automation_storage.release_review_automation_claim(ReviewRequestMeta(
+        automation_id=automation.automation_id,
+        automation_run_id=first_run,
+        automation_file_id='file-1',
+        automation_file_modified_time='2026-07-16T20:00:00Z',
+    ))
+    finish_automation_run(
+        first_run,
+        automation.automation_id,
+        status='failed',
+        message='The first review failed.',
+        matched_count=1,
+        queued_count=0,
+    )
+    second_run=claim_automation_run(automation, 'manual:first', allow_disabled=True)
+    assert second_run
+    assert claim_automation_files(automation.automation_id, second_run, [file_claim])
+
+
+def test_automation_file_claims_are_fenced_by_the_active_lease(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_automation_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    clock={'now':1_000}
+    monkeypatch.setattr(review_automation_storage, 'now_ms', lambda: clock['now'])
+    automation=upsert_review_automation('lease-fence', ReviewAutomationInput(
+        name='Lease fence',
+        enabled=False,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=[0],
+    ))
+    run_id=claim_automation_run(automation, '2026-07-20@09:00', allow_disabled=True)
+    assert run_id
+    clock['now'] += review_automation_storage.AUTOMATION_RUN_LEASE_MS + 1
+
+    with pytest.raises(RuntimeError, match='lease is no longer active'):
+        review_automation_storage.heartbeat_automation_run(automation.automation_id, run_id)
+    with pytest.raises(RuntimeError, match='lease is no longer active'):
+        claim_automation_files(automation.automation_id, run_id, [{
+            'file_id':'file-1',
+            'file_name':'creative.png',
+            'modified_time':'v1',
+        }])
+
+
+def test_fast_automation_completion_closes_local_parent_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_automation_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    automation=upsert_review_automation('fast-job', ReviewAutomationInput(
+        name='Fast job',
+        enabled=False,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=[0],
+    ))
+    run_id=claim_automation_run(automation, 'manual:fast', allow_disabled=True)
+    assert run_id
+    claim_automation_files(automation.automation_id, run_id, [{
+        'file_id':'file-1',
+        'file_name':'creative.png',
+        'job_id':'job-1',
+        'modified_time':'v1',
+    }])
+    set_status('job-1', JobStatus.complete, 100, 'Complete', 'creative.png')
+    meta=ReviewRequestMeta(
+        automation_id=automation.automation_id,
+        automation_run_id=run_id,
+    )
+
+    # A very fast worker can finish before the scan has attached job IDs to its parent.
+    review_automation_storage.record_review_automation_job_result(meta, 'job-1')
+    updated=finish_automation_run(
+        run_id,
+        automation.automation_id,
+        status='queued',
+        message='Queued one creative.',
+        matched_count=1,
+        queued_count=1,
+        job_ids=['job-1'],
+    )
+
+    runs=review_storage.read_json(tmp_path/'settings'/'review_automation_runs.json')
+    assert runs[0]['status'] == 'complete'
+    assert runs[0]['message'] == 'All automated reviews completed.'
+    assert updated.last_run_status == 'complete'
+
+
+def test_partial_automation_waits_for_queued_jobs_before_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_automation_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    automation=upsert_review_automation('partial-parent', ReviewAutomationInput(
+        name='Partial parent',
+        enabled=False,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=[0],
+    ))
+    schedule_key='2026-07-20@09:00'
+    run_id=claim_automation_run(automation, schedule_key, allow_disabled=True)
+    assert run_id
+    claims=[
+        {'file_id':'file-1', 'file_name':'one.png', 'job_id':'job-1', 'modified_time':'v1'},
+        {'file_id':'file-2', 'file_name':'two.png', 'job_id':'job-2', 'modified_time':'v1'},
+    ]
+    assert len(claim_automation_files(automation.automation_id, run_id, claims)) == 2
+    review_automation_storage.mark_automation_run_retry_required(
+        automation.automation_id,
+        run_id,
+    )
+    review_automation_storage.release_automation_files(
+        automation.automation_id,
+        run_id,
+        [claims[1]],
+    )
+    finish_automation_run(
+        run_id,
+        automation.automation_id,
+        status='queued',
+        message='One queued; one will retry.',
+        matched_count=2,
+        queued_count=1,
+        job_ids=['job-1'],
+        retry_required=True,
+    )
+
+    assert claim_automation_run(automation, schedule_key, allow_disabled=True) is None
+    set_status('job-1', JobStatus.complete, 100, 'Complete', 'one.png')
+    review_automation_storage.record_review_automation_job_result(
+        ReviewRequestMeta(
+            automation_id=automation.automation_id,
+            automation_run_id=run_id,
+        ),
+        'job-1',
+    )
+    assert list_review_automations()[0].last_run_status == 'failed'
+    assert claim_automation_run(automation, schedule_key, allow_disabled=True)
+
+
+@pytest.mark.anyio
+async def test_partial_automation_enqueue_failure_stays_retryable(monkeypatch):
+    automation=ReviewAutomation(
+        automation_id='partial-enqueue',
+        name='Partial enqueue',
+        enabled=True,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=list(range(7)),
+        created_at=0,
+        updated_at=0,
+    )
+    files=[
+        DriveFile('file-1', 'one.png', 'image/png', ('folder',), 'https://drive/one', 100),
+        DriveFile('file-2', 'two.png', 'image/png', ('folder',), 'https://drive/two', 100),
+    ]
+    profile=OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Official rules',
+        enabled=True,
+        is_default=True,
+        version=1,
+        created_at=0,
+        updated_at=0,
+    )
+    captured={}
+    monkeypatch.setattr(review_automations, 'claim_automation_run', lambda *args, **kwargs: 'run-1')
+    monkeypatch.setattr(review_automations, 'resolve_review_offer_snapshot', lambda: (
+        [profile],
+        [OfferOutcome(
+            offer_id='acp',
+            offer_name='ACP',
+            evaluation_state='evaluated',
+        )],
+    ))
+    monkeypatch.setattr(review_automations, '_matching_drive_files', lambda value, scheduled_for=None: files)
+    monkeypatch.setattr(review_automations, 'heartbeat_automation_run', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'claim_automation_files', lambda _automation_id, _run_id, values: values)
+    monkeypatch.setattr(review_automations, 'attach_automation_batch_items', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'create_batch', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'release_automation_files', lambda *args: None)
+    retry_markers=[]
+    monkeypatch.setattr(
+        review_automations,
+        'mark_automation_run_retry_required',
+        lambda automation_id, run_id: retry_markers.append((automation_id, run_id)),
+    )
+    monkeypatch.setattr(review_automations, 'finish_batch_item_and_notify', lambda *args, **kwargs: None)
+
+    async def fake_enqueue(_automation, drive_file, **kwargs):
+        if drive_file.file_id == 'file-2':
+            raise RuntimeError('queue unavailable')
+        return kwargs['job_id']
+
+    def fake_finish(_run_id, _automation_id, **kwargs):
+        captured.update(kwargs)
+        return automation
+
+    monkeypatch.setattr(review_automations, '_enqueue_automation_file', fake_enqueue)
+    monkeypatch.setattr(review_automations, 'finish_automation_run', fake_finish)
+
+    result=await review_automations.run_review_automation(automation, manual=True)
+
+    assert result.status == 'queued'
+    assert result.queued_count == 1
+    assert captured['status'] == 'queued'
+    assert captured['retry_required'] is True
+    assert retry_markers == [('partial-enqueue', 'run-1')]
+    assert captured['job_ids'] and len(captured['job_ids']) == 1
+    assert 'will be retried' in captured['message']
+
+
+@pytest.mark.anyio
+async def test_partial_automation_cleanup_failure_stays_recoverable(monkeypatch):
+    automation=ReviewAutomation(
+        automation_id='cleanup-failure',
+        name='Cleanup failure',
+        enabled=True,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=list(range(7)),
+        created_at=0,
+        updated_at=0,
+    )
+    files=[
+        DriveFile('file-1', 'one.png', 'image/png', ('folder',), 'https://drive/one', 100),
+        DriveFile('file-2', 'two.png', 'image/png', ('folder',), 'https://drive/two', 100),
+    ]
+    profile=OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Official rules',
+        enabled=True,
+        is_default=True,
+        version=1,
+        created_at=0,
+        updated_at=0,
+    )
+    outcomes=[OfferOutcome(
+        offer_id='acp',
+        offer_name='ACP',
+        evaluation_state='evaluated',
+    )]
+    captured={}
+    released=[]
+    created=[]
+    monkeypatch.setattr(review_automations, 'claim_automation_run', lambda *args, **kwargs: 'run-1')
+    monkeypatch.setattr(review_automations, 'resolve_review_offer_snapshot', lambda: ([profile], outcomes))
+    monkeypatch.setattr(review_automations, '_matching_drive_files', lambda value, scheduled_for=None: files)
+    monkeypatch.setattr(review_automations, 'heartbeat_automation_run', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'claim_automation_files', lambda _automation_id, _run_id, values: values)
+    monkeypatch.setattr(review_automations, 'attach_automation_batch_items', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'create_batch', lambda *args: created.append(args))
+    monkeypatch.setattr(review_automations, 'release_automation_files', lambda *args: released.append(args))
+    monkeypatch.setattr(review_automations, 'mark_automation_run_retry_required', lambda *args: None)
+
+    def fail_batch_cleanup(*args, **kwargs):
+        raise RuntimeError('batch storage unavailable')
+
+    async def fake_enqueue(_automation, drive_file, **kwargs):
+        if drive_file.file_id == 'file-2':
+            raise RuntimeError('queue unavailable')
+        return kwargs['job_id']
+
+    def fake_finish(_run_id, _automation_id, **kwargs):
+        captured.update(kwargs)
+        return automation
+
+    monkeypatch.setattr(review_automations, 'finish_batch_item_and_notify', fail_batch_cleanup)
+    monkeypatch.setattr(review_automations, '_enqueue_automation_file', fake_enqueue)
+    monkeypatch.setattr(review_automations, 'finish_automation_run', fake_finish)
+
+    result=await review_automations.run_review_automation(automation, manual=True)
+
+    assert result.status == 'queued'
+    assert result.queued_count == 1
+    assert released == []
+    assert captured['status'] == 'queued'
+    assert captured['retry_required'] is True
+    assert len(captured['job_ids']) == 2
+    assert created[0][2] == outcomes
+
+
+@pytest.mark.anyio
+async def test_automation_batch_setup_ambiguity_retains_recovery_state(monkeypatch):
+    automation=ReviewAutomation(
+        automation_id='setup-ambiguity',
+        name='Setup ambiguity',
+        enabled=True,
+        folder_id='folder',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=list(range(7)),
+        created_at=0,
+        updated_at=0,
+    )
+    drive_file=DriveFile(
+        'file-1',
+        'creative.png',
+        'image/png',
+        ('folder',),
+        'https://drive/creative',
+        100,
+    )
+    profile=OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Official rules',
+        enabled=True,
+        is_default=True,
+        version=1,
+        created_at=0,
+        updated_at=0,
+    )
+    outcome=OfferOutcome(
+        offer_id='acp',
+        offer_name='ACP',
+        evaluation_state='evaluated',
+    )
+    captured={}
+    released=[]
+    close_attempts=[]
+    monkeypatch.setattr(review_automations, 'claim_automation_run', lambda *args, **kwargs: 'run-1')
+    monkeypatch.setattr(review_automations, 'resolve_review_offer_snapshot', lambda: ([profile], [outcome]))
+    monkeypatch.setattr(review_automations, '_matching_drive_files', lambda value, scheduled_for=None: [drive_file])
+    monkeypatch.setattr(review_automations, 'heartbeat_automation_run', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'claim_automation_files', lambda _automation_id, _run_id, values: values)
+    monkeypatch.setattr(review_automations, 'attach_automation_batch_items', lambda *args: None)
+    monkeypatch.setattr(
+        review_automations,
+        'create_batch',
+        lambda *args: (_ for _ in ()).throw(RuntimeError('response lost after commit')),
+    )
+    monkeypatch.setattr(review_automations, 'mark_automation_run_retry_required', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'release_automation_files', lambda *args: released.append(args))
+
+    def fail_batch_cleanup(*args, **kwargs):
+        close_attempts.append((args, kwargs))
+        raise RuntimeError('batch write unavailable')
+
+    def fake_finish(_run_id, _automation_id, **kwargs):
+        captured.update(kwargs)
+        return automation
+
+    monkeypatch.setattr(review_automations, 'finish_batch_item_and_notify', fail_batch_cleanup)
+    monkeypatch.setattr(review_automations, 'finish_automation_run', fake_finish)
+    monkeypatch.setattr(
+        review_automations,
+        '_enqueue_automation_file',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('enqueue must not run')),
+    )
+
+    result=await review_automations.run_review_automation(automation, manual=True)
+
+    assert result.status == 'queued'
+    assert result.queued_count == 0
+    assert released == []
+    assert len(close_attempts) == 1
+    assert captured['retry_required'] is True
+    assert len(captured['job_ids']) == 1
+
+
+@pytest.mark.anyio
+async def test_failed_automation_retries_its_original_schedule_and_pattern_date(monkeypatch):
+    automation=ReviewAutomation(
+        automation_id='original-schedule',
+        name='Original schedule',
+        enabled=True,
+        folder_id='folder',
+        file_name_pattern='creative-{date}.png',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=[0],
+        last_run_status='failed',
+        last_scheduled_for='2026-07-13@09:00',
+        created_at=0,
+        updated_at=0,
+    )
+    captured=[]
+
+    async def fake_run(value, *, scheduled_for=None, **kwargs):
+        captured.append((value.automation_id, scheduled_for))
+        return scheduled_for
+
+    monkeypatch.setattr(review_automations, 'list_review_automations', lambda **kwargs: [automation])
+    monkeypatch.setattr(review_automations, 'run_review_automation', fake_run)
+
+    results=await review_automations.run_due_review_automations()
+
+    assert captured == [('original-schedule', '2026-07-13@09:00')]
+    assert results == ['2026-07-13@09:00']
+    scheduled_time=review_automations._scheduled_local_time(
+        automation,
+        automation.last_scheduled_for,
+    )
+    assert scheduled_time.strftime('%Y-%m-%d %H:%M %Z') == '2026-07-13 09:00 EDT'
+    assert rendered_file_pattern(automation, scheduled_time) == 'creative-2026-07-13.png'
+
+
+def test_notification_delivery_drains_claimed_batch_outbox(monkeypatch):
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', 'https://convex.example')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', 'secret')
+    batch={
+        'batch_id':'recovered-batch',
+        'created_at':1,
+        'updated_at':2,
+        'expected_count':1,
+        'notification_status':'claimed',
+        'items':[{
+            'file_name':'creative.png',
+            'item_id':'item-1',
+            'media_kind':'image',
+            'message':'Interrupted',
+            'offer_outcomes':[],
+            'status':'failed',
+        }],
+    }
+    claimed=[batch, None]
+
+    def fake_convex_call(kind, path, args):
+        if path == 'automations:recoverInterrupted':
+            return {'processed':0}
+        if path == 'batches:claimNotification':
+            return claimed.pop(0)
+        raise AssertionError(path)
+
+    sent=[]
+    marked=[]
+    monkeypatch.setattr(review_automation_storage, '_convex_call', fake_convex_call)
+    monkeypatch.setattr(review_telegram, 'send_batch_message', lambda value: sent.append(value) or True)
+    monkeypatch.setattr(review_storage, 'mark_batch_notification', lambda batch_id, success: marked.append((batch_id, success)))
+
+    assert review_automation_storage.recover_interrupted_automation_jobs() == 0
+    assert review_automation_storage.deliver_pending_batch_notifications(limit=1) == 1
+    assert [value.batch_id for value in sent] == ['recovered-batch']
+    assert marked == [('recovered-batch', True)]
+
+
+def test_automation_filters_large_folder_before_match_limit(monkeypatch):
+    folder=DriveFile(
+        file_id='folder',
+        name='Creative archive',
+        mime_type='application/vnd.google-apps.folder',
+        parents=('root',),
+        web_view_link='https://drive.example/folder',
+    )
+    children=[
+        DriveFile(
+            file_id=f'archive-{index}',
+            name=f'archive-{index}.png',
+            mime_type='image/png',
+            parents=('folder',),
+            web_view_link=f'https://drive.example/archive-{index}',
+            size=100,
+        )
+        for index in range(150)
+    ]
+    children.append(DriveFile(
+        file_id='target',
+        name='today.png',
+        mime_type='image/png',
+        parents=('folder',),
+        web_view_link='https://drive.example/target',
+        size=100,
+    ))
+
+    class LargeFolderDrive:
+        def get_file(self, file_id):
+            assert file_id == 'folder'
+            return folder
+
+        def list_folder_children(self, file_id):
+            assert file_id == 'folder'
+            return children
+
+    monkeypatch.setattr(review_automations, 'get_google_drive_client', lambda: LargeFolderDrive())
+    automation=ReviewAutomation(
+        automation_id='large-folder',
+        name='Large folder',
+        enabled=True,
+        folder_id='folder',
+        file_name_pattern='today.png',
+        time_of_day='09:00',
+        timezone='America/Toronto',
+        days_of_week=list(range(7)),
+        include_subfolders=True,
+        created_at=0,
+        updated_at=0,
+    )
+
+    matches=review_automations._matching_drive_files(automation)
+
+    assert [match.file_id for match in matches] == ['target']
 
 def test_offer_profile_and_report_size_guards_run_before_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
@@ -863,7 +1535,37 @@ def test_review_history_lists_local_jobs(tmp_path, monkeypatch):
     assert len(history)==1
     assert history[0].file_name=='creative.mp4'
     assert history[0].overall_status=='green'
+    assert [outcome.offer_id for outcome in history[0].offer_outcomes] == [
+        'acp',
+        'kissterra',
+        'lead-economy',
+        'smart-financial',
+    ]
+    assert history[0].offer_outcomes[0].overall_status == 'green'
+    assert all(
+        outcome.overall_status is None
+        for outcome in history[0].offer_outcomes[1:]
+    )
     assert history[0].created_at is not None
+
+def test_in_progress_history_has_no_false_na_offer_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status(
+        'active-review',
+        JobStatus.reviewing_with_llm,
+        90,
+        'Reviewing with LLM',
+        'creative.mp4',
+        offer_ids=['acp', 'kissterra'],
+        primary_offer_id='acp',
+    )
+
+    history=list_reviews()
+
+    assert history[0].offer_ids == ['acp', 'kissterra']
+    assert history[0].offer_outcomes == []
 
 def test_review_stats_are_offer_aware_and_keep_override_counts_separate(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -1012,7 +1714,14 @@ async def test_offer_admin_routes_require_password_and_catalog_is_sanitized(tmp_
 
     assert unavailable.status_code == 503
     assert catalog.status_code == 200
-    assert catalog.json()['offers'][0]['offer_id'] == 'acp'
+    assert [offer['offer_id'] for offer in catalog.json()['offers']] == [
+        'acp',
+        'kissterra',
+        'lead-economy',
+        'smart-financial',
+    ]
+    assert catalog.json()['offers'][0]['configured'] is True
+    assert catalog.json()['offers'][1]['configured'] is False
     assert 'official_guidelines' not in catalog.json()['offers'][0]
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
@@ -1163,6 +1872,42 @@ async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatc
     assert statuses[0][1] == JobStatus.downloading_from_drive
     assert statuses[-1][2] == 9
 
+
+@pytest.mark.anyio
+async def test_automated_job_heartbeat_starts_while_waiting_in_queue(monkeypatch):
+    queue=asyncio.Queue()
+    started=asyncio.Event()
+    hold=asyncio.Event()
+    monkeypatch.setattr(review_queue, '_queue', queue)
+    monkeypatch.setattr(review_queue, '_automation_heartbeat_jobs', {})
+    monkeypatch.setattr(review_queue, '_automation_heartbeat_ref_counts', {})
+    monkeypatch.setattr(review_queue, '_automation_heartbeat_tasks', {})
+    monkeypatch.setattr(review_queue, 'set_status', lambda *args, **kwargs: None)
+
+    async def fake_heartbeat(meta):
+        started.set()
+        await hold.wait()
+
+    monkeypatch.setattr(review_queue, '_keep_automation_lease_alive', fake_heartbeat)
+    meta=ReviewRequestMeta(
+        ad_copy='Queued creative',
+        automation_id='daily',
+        automation_run_id='run-1',
+    )
+
+    await review_queue.enqueue_job(
+        'job-1',
+        None,
+        'copy_only',
+        meta,
+        'Ad copy',
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    assert queue.qsize() == 1
+    assert review_queue._automation_heartbeat_ref_counts[('daily', 'run-1')] == 1
+    await review_queue._release_automation_heartbeat('job-1')
+
 @pytest.mark.anyio
 async def test_job_workers_process_four_jobs_in_parallel(monkeypatch):
     queue=asyncio.Queue()
@@ -1307,7 +2052,11 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
     assert 'Ad copy: Save $600 this month' in message
     assert 'Unsupported guaranteed savings claim' not in message
     assert 'Caption includes a guaranteed' not in message
-    assert message.count('/reviews/abc123/report') == 2
+    assert message.count('/reviews/abc123/report') == 1
+    assert message.index('<b>ACP:</b>') < message.index('<b>Kissterra:</b>')
+    assert message.index('<b>Kissterra:</b>') < message.index('<b>Lead Economy:</b>')
+    assert message.index('<b>Lead Economy:</b>') < message.index('<b>Smart Financial:</b>')
+    assert message.count('N/A — Not reviewed') == 3
 
 def test_telegram_message_omits_missing_source_sections(monkeypatch):
     monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
@@ -1399,6 +2148,153 @@ def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeyp
     assert '🟢 Green — Ready to run' in message
     assert message.count('/batches/batch1') == 1
     assert message.count('<b>Report Link:</b>') == 1
+
+
+def test_batch_persists_and_formats_per_offer_outcomes(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    create_batch('multi-results', [
+        CreateBatchItem(item_id='item1', file_name='creative.png', media_kind='image'),
+        CreateBatchItem(item_id='item2', file_name='failed.png', media_kind='image'),
+    ])
+    outcomes=[
+        OfferOutcome(
+            offer_id='acp',
+            offer_name='ACP',
+            evaluation_state='evaluated',
+            overall_status='green',
+        ),
+        OfferOutcome(
+            offer_id='kissterra',
+            offer_name='Kissterra',
+            evaluation_state='disabled',
+        ),
+        OfferOutcome(
+            offer_id='lead-economy',
+            offer_name='Lead Economy',
+            evaluation_state='missing_guidelines',
+        ),
+        OfferOutcome(
+            offer_id='smart-financial',
+            offer_name='Smart Financial',
+            evaluation_state='missing_guidelines',
+        ),
+    ]
+    finish_batch_item_and_notify(
+        'multi-results',
+        'item1',
+        status='complete',
+        job_id='missing-report',
+        result='green',
+        offer_outcomes=outcomes,
+        message='Complete',
+    )
+    batch=finish_batch_item_and_notify(
+        'multi-results',
+        'item2',
+        status='upload_failed',
+        message='Import failed',
+    )
+    assert [outcome.offer_id for outcome in batch.items[0].offer_outcomes] == [
+        'acp',
+        'kissterra',
+        'lead-economy',
+        'smart-financial',
+    ]
+    message=build_batch_message(batch)
+    assert '🟢 Green — Ready to run' in message
+    assert 'N/A — Turned off' in message
+    assert message.count('N/A — Guidelines not saved') == 2
+    assert 'Import failed' in message
+
+
+def test_batch_telegram_loads_report_when_ready_snapshot_has_no_verdict(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    create_batch('outbox-result', [
+        CreateBatchItem(item_id='item1', file_name='creative.png', media_kind='image'),
+    ])
+    batch=get_batch('outbox-result')
+    batch.items[0].status='complete'
+    batch.items[0].job_id='job-1'
+    batch.items[0].offer_outcomes=[OfferOutcome(
+        offer_id='acp',
+        offer_name='ACP',
+        evaluation_state='disabled',
+    )]
+    monkeypatch.setattr(review_telegram, '_load_batch_item_report', lambda job_id: {
+        'schema_version':2,
+        'primary_offer_id':'acp',
+        'offer_results':[
+            {'offer_id':'acp', 'offer_name':'ACP', 'overall_status':'green'},
+        ],
+    })
+
+    message=build_batch_message(batch)
+
+    assert '<b>ACP:</b> 🟢 Green — Ready to run' in message
+
+
+def test_batch_telegram_bulk_hydrates_offer_summaries_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    create_batch('bulk-summary', [
+        CreateBatchItem(item_id='item1', file_name='creative.png', media_kind='image'),
+    ])
+    batch=get_batch('bulk-summary')
+    batch.items[0].status='complete'
+    batch.items[0].job_id='job-1'
+    batch.items[0].offer_outcomes=[OfferOutcome(
+        offer_id='acp',
+        offer_name='ACP',
+        evaluation_state='disabled',
+        message='Offer was turned off when this review started.',
+    )]
+    lookups=[]
+    sent=[]
+
+    def fake_summaries(job_ids):
+        lookups.append(job_ids)
+        return {
+            'job-1':{
+                'offer_results':[
+                    {'offer_id':'acp', 'overall_status':'green'},
+                ],
+            },
+        }
+
+    monkeypatch.setattr(review_storage, 'get_batch_offer_summaries', fake_summaries)
+    monkeypatch.setattr(
+        review_telegram,
+        '_load_batch_item_report',
+        lambda *args: (_ for _ in ()).throw(AssertionError('per-item report lookup must not run')),
+    )
+    monkeypatch.setattr(
+        review_telegram,
+        '_send_telegram_message',
+        lambda message, context: sent.append((message, context)) or True,
+    )
+
+    assert review_telegram.send_batch_message(batch)
+    assert lookups == [['job-1']]
+    assert len(sent) == 1
+    assert '<b>ACP:</b> 🟢 Green — Ready to run' in sent[0][0]
+
+
+def test_telegram_429_uses_response_retry_after():
+    request=httpx.Request('POST', 'https://api.telegram.org/bot-token/sendMessage')
+    response=httpx.Response(
+        429,
+        request=request,
+        json={'ok':False, 'parameters':{'retry_after':30}},
+    )
+    error=httpx.HTTPStatusError('Too many requests', request=request, response=response)
+
+    assert review_telegram._telegram_retry_delay(error, 1) == 30
 
 def test_batched_jobs_suppress_individual_messages_until_last_job(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

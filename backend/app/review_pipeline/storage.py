@@ -13,6 +13,7 @@ from .models import (
     DeletedReview,
     JobRecord,
     JobStatus,
+    OfferOutcome,
     OfferProfile,
     OfferProfileInput,
     ReviewBatch,
@@ -24,6 +25,7 @@ from .models import (
     ReviewSource,
 )
 from .guidelines import built_in_acp_profile
+from .offer_catalog import KNOWN_OFFERS, KNOWN_OFFER_NAMES, offer_sort_key
 
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
 CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
@@ -65,6 +67,22 @@ def batch_path(batch_id:str)->Path:
 def convex_enabled()->bool:
     return bool(CONVEX_URL and CONVEX_HTTP_SECRET)
 
+
+def backfill_review_offer_stats(*, max_pages:int=10)->dict[str, Any]:
+    if not convex_enabled():
+        return {'processed':0, 'is_done':True}
+    processed=0
+    is_done=False
+    for _page in range(max(1, min(max_pages, 20))):
+        result=_convex_call('mutation', 'reviews:backfillOfferStats', {})
+        if not isinstance(result, dict):
+            raise RuntimeError('Review stats backfill returned an invalid response.')
+        processed += int(result.get('processed', 0))
+        is_done=bool(result.get('isDone'))
+        if is_done:
+            break
+    return {'processed':processed, 'is_done':is_done}
+
 def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
     if not convex_enabled():
         return None
@@ -85,7 +103,7 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
 
-def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None)->JobRecord:
+def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None, automation_run_id:str|None=None)->JobRecord:
     current_file_name=file_name
     current_file_size=file_size
     current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
@@ -145,9 +163,11 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         review_args['batchItemId'] = rec.batch_item_id
     if rec.file_size is not None:
         review_args['fileSize'] = rec.file_size
+    if automation_run_id:
+        review_args['automationRunId'] = automation_run_id
     _convex_call('mutation', 'reviews:upsertStatus', review_args)
     if rec.batch_id and rec.batch_item_id:
-        update_batch_item(
+        _update_local_batch_item(
             rec.batch_id,
             rec.batch_item_id,
             status=rec.status.value,
@@ -194,7 +214,7 @@ def get_status(job_id:str)->JobRecord:
     if not p.exists(): raise FileNotFoundError(job_id)
     return JobRecord.model_validate(read_json(p))
 
-def set_report(job_id:str, report:dict[str, Any])->None:
+def set_report(job_id:str, report:dict[str, Any], automation_run_id:str|None=None)->None:
     offer_results=report.get('offer_results')
     results=offer_results if isinstance(offer_results, list) and offer_results else [report]
     for result in results:
@@ -207,8 +227,24 @@ def set_report(job_id:str, report:dict[str, Any])->None:
                 f'The generated report for {offer_id} is too large to save. '
                 'Run the review again with shorter policy supplements or fewer findings.'
             )
+    if report.get('schema_version') == 2:
+        record=get_status(job_id)
+        actual_ids={
+            str(result.get('offer_id') or '').strip().lower()
+            for result in results
+            if isinstance(result, dict) and str(result.get('offer_id') or '').strip()
+        }
+        expected_ids=set(record.offer_ids)
+        if actual_ids != expected_ids:
+            raise ValueError('Report offer results do not match the review offer snapshot.')
+        primary_offer_id=str(report.get('primary_offer_id') or '').strip().lower()
+        if primary_offer_id not in expected_ids:
+            raise ValueError('Report primary offer is not part of the review offer snapshot.')
     write_json(job_dir(job_id)/'report.json', report)
-    _convex_call('mutation', 'reviews:setReport', {'jobId': job_id, 'report': report})
+    args={'jobId': job_id, 'report': report}
+    if automation_run_id:
+        args['automationRunId']=automation_run_id
+    _convex_call('mutation', 'reviews:setReport', args)
 
 def get_report(job_id:str)->dict[str, Any]|None:
     remote=_convex_call('query', 'reviews:getReport', {'jobId': job_id})
@@ -221,14 +257,54 @@ def get_report(job_id:str)->dict[str, Any]|None:
         return None
     return read_json(p)
 
-def create_batch(batch_id:str, items:list[CreateBatchItem])->ReviewBatch:
+
+def get_batch_offer_summaries(job_ids:list[str])->dict[str, dict[str, Any]]:
+    unique_job_ids=list(dict.fromkeys(job_id for job_id in job_ids if job_id))[:100]
+    if not unique_job_ids:
+        return {}
+    remote=_convex_call(
+        'query',
+        'reviews:getBatchOfferSummaries',
+        {'jobIds':unique_job_ids},
+    )
+    if remote is not None:
+        return {
+            value['job_id']:{'offer_results':value.get('offer_results', [])}
+            for value in remote
+            if isinstance(value, dict) and value.get('job_id')
+        }
+    if convex_enabled():
+        return {}
+    summaries={}
+    for job_id in unique_job_ids:
+        report=get_report(job_id)
+        if isinstance(report, dict):
+            summaries[job_id]=report
+    return summaries
+
+def create_batch(
+    batch_id:str,
+    items:list[CreateBatchItem],
+    offer_outcomes:list[OfferOutcome]|None=None,
+)->ReviewBatch:
     timestamp=now_ms()
+    outcome_snapshot=(
+        [outcome.model_copy(deep=True) for outcome in offer_outcomes]
+        if offer_outcomes is not None
+        else current_offer_outcomes()
+    )
     batch=ReviewBatch(
         batch_id=batch_id,
         created_at=timestamp,
         updated_at=timestamp,
         expected_count=len(items),
-        items=[ReviewBatchItem(**item.model_dump()) for item in items],
+        items=[
+            ReviewBatchItem(
+                **item.model_dump(),
+                offer_outcomes=[outcome.model_copy(deep=True) for outcome in outcome_snapshot],
+            )
+            for item in items
+        ],
     )
     write_json(batch_path(batch_id), batch.model_dump(mode='json'))
     remote=_convex_call('mutation', 'batches:createBatch', {
@@ -238,6 +314,15 @@ def create_batch(batch_id:str, items:list[CreateBatchItem])->ReviewBatch:
                 'itemId': item.item_id,
                 'fileName': item.file_name,
                 'mediaKind': item.media_kind,
+                'offerOutcomes': [
+                    {
+                        'offerId':outcome.offer_id,
+                        'offerName':outcome.offer_name,
+                        'evaluationState':outcome.evaluation_state,
+                        'message':outcome.message,
+                    }
+                    for outcome in outcome_snapshot
+                ],
             }
             for item in items
         ],
@@ -260,6 +345,7 @@ def _update_local_batch_item(
     status:str,
     job_id:str|None=None,
     result:str|None=None,
+    offer_outcomes:list[OfferOutcome]|None=None,
     message:str='',
     claim_notification:bool=False,
 )->tuple[ReviewBatch,bool]:
@@ -274,6 +360,19 @@ def _update_local_batch_item(
             item.job_id=job_id
         if result in RESULT_STATUSES:
             item.result=result
+        if offer_outcomes is not None:
+            item.offer_outcomes=[outcome.model_copy(deep=True) for outcome in offer_outcomes]
+        elif result in RESULT_STATUSES:
+            unrated_evaluated=[
+                outcome
+                for outcome in item.offer_outcomes
+                if outcome.evaluation_state == 'evaluated' and outcome.overall_status is None
+            ]
+            # Legacy callers only provide the primary result. Fill it when the
+            # eligibility snapshot has exactly one possible target; otherwise
+            # leave the per-offer cells unrated instead of guessing.
+            if len(unrated_evaluated) == 1:
+                unrated_evaluated[0].overall_status=result
         item.message=message
         break
     if not found:
@@ -303,13 +402,14 @@ def update_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
     remote=_convex_call('mutation', 'batches:updateItemStatus', args)
     return ReviewBatch.model_validate(remote) if remote is not None else local
 
-def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=None, result:str|None=None, message:str='')->tuple[ReviewBatch,bool]:
+def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=None, result:str|None=None, offer_outcomes:list[OfferOutcome]|None=None, message:str='')->tuple[ReviewBatch,bool]:
     local,local_should_notify=_update_local_batch_item(
         batch_id,
         item_id,
         status=status,
         job_id=job_id,
         result=result,
+        offer_outcomes=offer_outcomes,
         message=message,
         claim_notification=True,
     )
@@ -318,19 +418,41 @@ def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
         args['jobId']=job_id
     if result in RESULT_STATUSES:
         args['result']=result
+    local_item=next(item for item in local.items if item.item_id == item_id)
+    resolved_outcomes=(
+        offer_outcomes
+        if offer_outcomes is not None
+        else local_item.offer_outcomes if result in RESULT_STATUSES else None
+    )
+    if resolved_outcomes is not None:
+        args['offerOutcomes']=[
+            {
+                'offerId':outcome.offer_id,
+                'offerName':outcome.offer_name,
+                'evaluationState':outcome.evaluation_state,
+                **({'overallStatus':outcome.overall_status} if outcome.overall_status else {}),
+                **({'creativeResult':outcome.creative_result} if outcome.creative_result else {}),
+                **({'adCopyResult':outcome.ad_copy_result} if outcome.ad_copy_result else {}),
+                'message':outcome.message,
+            }
+            for outcome in resolved_outcomes
+        ]
     remote=_convex_call('mutation', 'batches:finishItem', args)
     if remote is None:
         return local,local_should_notify
     return ReviewBatch.model_validate(remote['batch']),bool(remote['shouldNotify'])
 
 def mark_batch_notification(batch_id:str, success:bool)->None:
-    batch=ReviewBatch.model_validate(read_json(batch_path(batch_id)))
-    batch.notification_status='sent' if success else 'failed'
-    batch.updated_at=now_ms()
-    write_json(batch_path(batch_id), batch.model_dump(mode='json'))
+    status='sent' if success else 'failed'
+    local_path=batch_path(batch_id)
+    if local_path.exists():
+        batch=ReviewBatch.model_validate(read_json(local_path))
+        batch.notification_status=status
+        batch.updated_at=now_ms()
+        write_json(local_path, batch.model_dump(mode='json'))
     _convex_call('mutation', 'batches:markNotification', {
         'batchId':batch_id,
-        'status':batch.notification_status,
+        'status':status,
     })
 
 def _overall_status(report:dict[str, Any]|None)->str|None:
@@ -386,6 +508,73 @@ def _ad_copy_result(report:dict[str, Any]|None, has_ad_copy:bool)->str|None:
         return None
     return _source_result_status(report, 'ad_copy') or _split_result(report, lambda source: source == 'ad_copy')
 
+
+def _offer_outcomes(
+    report:dict[str, Any]|None,
+    *,
+    has_creative:bool=True,
+    has_ad_copy:bool=True,
+)->list[OfferOutcome]:
+    # An in-progress or failed review has no durable verdict snapshot yet. Keep
+    # this empty so the UI can distinguish active eligible offers (Not ready)
+    # from completed legacy reviews where non-primary offers are genuinely N/A.
+    if not isinstance(report, dict):
+        return []
+    if isinstance(report, dict):
+        raw_outcomes=report.get('offer_outcomes')
+        if isinstance(raw_outcomes, list):
+            outcomes=[]
+            for value in raw_outcomes:
+                try:
+                    outcomes.append(OfferOutcome.model_validate(value))
+                except (TypeError, ValueError):
+                    continue
+            if outcomes:
+                return sorted(outcomes, key=offer_sort_key)
+
+        raw_results=report.get('offer_results')
+        if isinstance(raw_results, list) and raw_results:
+            results=[value for value in raw_results if isinstance(value, dict)]
+        else:
+            results=[report]
+    by_offer_id={
+        str(result.get('offer_id') or report.get('primary_offer_id') or 'acp'): result
+        for result in results
+        if isinstance(result, dict)
+    }
+    outcomes=[]
+    for offer in KNOWN_OFFERS:
+        offer_id=offer['offer_id']
+        result=by_offer_id.get(offer_id)
+        if result is None:
+            outcomes.append(OfferOutcome(
+                offer_id=offer_id,
+                offer_name=offer['display_name'],
+                evaluation_state='disabled',
+                message='Not evaluated for this review.',
+            ))
+            continue
+        outcomes.append(OfferOutcome(
+            offer_id=offer_id,
+            offer_name=str(result.get('offer_name') or offer['display_name']),
+            evaluation_state='evaluated',
+            overall_status=_overall_status(result),
+            creative_result=_creative_result(result, has_creative),
+            ad_copy_result=_ad_copy_result(result, has_ad_copy),
+        ))
+    for offer_id,result in by_offer_id.items():
+        if offer_id in KNOWN_OFFER_NAMES:
+            continue
+        outcomes.append(OfferOutcome(
+            offer_id=offer_id,
+            offer_name=str(result.get('offer_name') or offer_id),
+            evaluation_state='evaluated',
+            overall_status=_overall_status(result),
+            creative_result=_creative_result(result, has_creative),
+            ad_copy_result=_ad_copy_result(result, has_ad_copy),
+        ))
+    return sorted(outcomes, key=offer_sort_key)
+
 def _local_reviews()->list[ReviewHistoryItem]:
     if not JOB_DATA_DIR.exists():
         return []
@@ -407,6 +596,14 @@ def _local_reviews()->list[ReviewHistoryItem]:
         data['overall_status']=_overall_status(report)
         data['creative_result']=_creative_result(report, rec.has_creative)
         data['ad_copy_result']=_ad_copy_result(report, rec.has_ad_copy)
+        data['offer_outcomes']=[
+            outcome.model_dump(mode='json')
+            for outcome in _offer_outcomes(
+                report,
+                has_creative=rec.has_creative,
+                has_ad_copy=rec.has_ad_copy,
+            )
+        ]
         items.append(ReviewHistoryItem(**data))
 
     items.sort(key=lambda item: item.created_at or 0, reverse=True)
@@ -516,7 +713,10 @@ def _validate_offer_payload(args:dict[str, Any])->None:
 
 
 def list_offer_profiles(*, include_disabled:bool=True)->list[OfferProfile]:
-    remote=_convex_call('query', 'offers:list', {'includeDisabled': include_disabled})
+    # Always fetch the complete durable catalog before filtering locally. Otherwise
+    # a stored disabled ACP row would be omitted and incorrectly replaced by the
+    # bundled enabled fallback below.
+    remote=_convex_call('query', 'offers:list', {'includeDisabled': True})
     if remote is not None:
         profiles=[OfferProfile.model_validate(item) for item in remote]
     else:
@@ -527,9 +727,21 @@ def list_offer_profiles(*, include_disabled:bool=True)->list[OfferProfile]:
         if any(profile.is_default for profile in profiles):
             acp=acp.model_copy(update={'is_default':False})
         profiles.append(acp)
+    existing_ids={profile.offer_id for profile in profiles}
+    for offer in KNOWN_OFFERS:
+        if offer['offer_id'] in existing_ids:
+            continue
+        profiles.append(OfferProfile(
+            offer_id=offer['offer_id'],
+            display_name=offer['display_name'],
+            official_guidelines='',
+            enabled=False,
+            is_default=False,
+            version=1,
+        ))
     if not include_disabled:
-        profiles=[profile for profile in profiles if profile.enabled]
-    return sorted(profiles, key=lambda profile: (not profile.is_default, profile.display_name.casefold()))
+        profiles=[profile for profile in profiles if profile.enabled and profile.configured]
+    return sorted(profiles, key=lambda profile: (offer_sort_key(profile), not profile.is_default, profile.display_name.casefold()))
 
 
 def get_offer_profile(offer_id:str)->OfferProfile:
@@ -564,10 +776,9 @@ def upsert_offer_profile(offer_id:str, payload:OfferProfileInput)->OfferProfile:
         return profile
 
     existing={profile.offer_id:profile for profile in _read_local_offer_profiles()}
-    try:
-        previous=get_offer_profile(offer_id)
-    except KeyError:
-        previous=None
+    previous=existing.get(offer_id)
+    if previous is None and offer_id == 'acp':
+        previous=built_in_acp_profile()
     timestamp=now_ms()
     profile=OfferProfile(
         offer_id=offer_id,
@@ -609,8 +820,6 @@ def get_offer_profile_revision(offer_id:str, version:int)->OfferProfile:
 
 
 def disable_offer_profile(offer_id:str)->OfferProfile:
-    if offer_id == 'acp':
-        raise ValueError('ACP is the built-in fallback and cannot be disabled.')
     remote=_convex_call('mutation', 'offers:disable', {'offerId':offer_id})
     if remote is not None:
         return OfferProfile.model_validate(remote)
@@ -638,6 +847,49 @@ def resolve_offer_profiles(offer_ids:list[str])->list[OfferProfile]:
     if missing:
         raise KeyError(', '.join(missing))
     return [available[offer_id].model_copy(deep=True) for offer_id in unique_ids]
+
+
+def resolve_review_offer_snapshot()->tuple[list[OfferProfile], list[OfferOutcome]]:
+    catalog=[
+        profile.model_copy(deep=True)
+        for profile in list_offer_profiles(include_disabled=True)
+    ]
+    active_profiles=[
+        profile.model_copy(deep=True)
+        for profile in catalog
+        if profile.enabled and profile.configured
+    ]
+    outcomes=[]
+    for profile in catalog:
+        if not profile.configured:
+            state='missing_guidelines'
+            message='Official guidelines have not been saved.'
+        elif not profile.enabled:
+            state='disabled'
+            message='Offer was turned off when this review started.'
+        else:
+            state='evaluated'
+            message='Evaluated using the saved official guidelines.'
+        outcomes.append(OfferOutcome(
+            offer_id=profile.offer_id,
+            offer_name=profile.display_name,
+            evaluation_state=state,
+            message=message,
+        ))
+    return (
+        sorted(active_profiles, key=lambda profile:(not profile.is_default, offer_sort_key(profile))),
+        sorted(outcomes, key=offer_sort_key),
+    )
+
+
+def resolve_active_offer_profiles()->list[OfferProfile]:
+    profiles,_=resolve_review_offer_snapshot()
+    return profiles
+
+
+def current_offer_outcomes()->list[OfferOutcome]:
+    _,outcomes=resolve_review_offer_snapshot()
+    return outcomes
 
 
 def _report_offer_result(report:dict[str, Any]|None, offer_id:str)->dict[str, Any]|None:

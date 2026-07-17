@@ -25,7 +25,7 @@ import {
 } from '@tanstack/react-table';
 import {
   AlertCircle,
-  Check,
+  CalendarClock,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -82,6 +82,15 @@ import { DashboardPage } from '@/components/dashboard';
 import { DriveBrowser } from '@/components/drive-browser';
 import { AdminAccessGate } from '@/components/admin-access-gate';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
+import { AutomationsPage } from '@/components/automations-page';
+import {
+  batchOutcomeForOffer,
+  findOfferOutcome,
+  getOfferColumns,
+  OfferEligibilityGrid,
+  OfferOutcomeCell,
+  reviewOutcomeForOffer,
+} from '@/components/offer-outcomes';
 import {
   deleteReview,
   createDriveReview,
@@ -97,6 +106,7 @@ import {
   resolveDriveSelection,
   reportBatchUploadFailure,
   type OverallStatus,
+  type OfferOutcome,
   type OfferResult,
   type ResultStatus,
   type ReviewBatch,
@@ -237,6 +247,7 @@ function AppShell() {
           <ShellLink to="/" label="Dashboard" icon={<LayoutDashboard />} />
           <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
           <ShellLink to="/history" label="History" icon={<History />} />
+          <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
           <ShellLink to="/settings" label="Settings" icon={<Settings />} />
         </nav>
         <div className="mt-auto grid gap-3">
@@ -273,10 +284,11 @@ function AppShell() {
               {theme === 'dark' ? <Sun /> : <Moon />}
             </Button>
           </div>
-          <nav className="mt-3 grid grid-cols-4 gap-1" aria-label="Primary navigation">
+          <nav className="mt-3 grid grid-cols-5 gap-1" aria-label="Primary navigation">
             <ShellLink compact to="/" label="Dashboard" icon={<LayoutDashboard />} />
             <ShellLink compact to="/reviews/new" label="Review" icon={<Plus />} />
             <ShellLink compact to="/history" label="History" icon={<History />} />
+            <ShellLink compact to="/automations" label="Automate" icon={<CalendarClock />} />
             <ShellLink compact to="/settings" label="Settings" icon={<Settings />} />
           </nav>
         </header>
@@ -297,7 +309,7 @@ function ShellLink({
   compact?: boolean;
   icon: React.ReactNode;
   label: string;
-  to: '/' | '/reviews/new' | '/history' | '/settings';
+  to: '/' | '/reviews/new' | '/history' | '/automations' | '/settings';
 }) {
   return (
     <Link
@@ -328,8 +340,6 @@ function ReviewWorkspace() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [selectedDriveFolderIds, setSelectedDriveFolderIds] = useState<Set<string>>(new Set());
   const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<Set<string>>(new Set());
-  const [selectedOfferIds, setSelectedOfferIds] = useState<Set<string>>(new Set(['acp']));
-  const offerSelectionInitialized = React.useRef(false);
   const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -357,16 +367,10 @@ function ReviewWorkspace() {
     queryFn: listOfferCatalog,
     staleTime: 60_000,
   });
-
-  useEffect(() => {
-    if (offerSelectionInitialized.current || !offersQuery.data) return;
-    const enabledOffers = offersQuery.data.filter((offer) => offer.enabled);
-    const defaultOffer = enabledOffers.find((offer) => offer.is_default)
-      ?? enabledOffers.find((offer) => offer.offer_id === 'acp')
-      ?? enabledOffers[0];
-    if (defaultOffer) setSelectedOfferIds(new Set([defaultOffer.offer_id]));
-    offerSelectionInitialized.current = true;
-  }, [offersQuery.data]);
+  const eligibleOffers = useMemo(
+    () => (offersQuery.data ?? []).filter((offer) => offer.enabled && offer.configured),
+    [offersQuery.data]
+  );
 
   const selectedDriveFiles = driveSelectionQuery.data?.files ?? [];
   const creativeCount = creativeSource === 'drive' ? selectedDriveFiles.length : selectedFiles.length;
@@ -449,12 +453,20 @@ function ReviewWorkspace() {
       setSubmitError(errorMessage(driveSelectionQuery.error));
       return;
     }
-    if (!selectedOfferIds.size) {
-      setSubmitError('Select at least one offer to review against.');
+    if (offersQuery.isLoading) {
+      setSubmitError('Offer eligibility is still loading. Try again in a moment.');
       return;
     }
-    if (selectedOfferIds.size > MAX_OFFERS_PER_REVIEW) {
-      setSubmitError(`Select no more than ${MAX_OFFERS_PER_REVIEW} offers per review.`);
+    if (offersQuery.error) {
+      setSubmitError(`Offer eligibility could not be loaded. ${errorMessage(offersQuery.error)}`);
+      return;
+    }
+    if (!eligibleOffers.length) {
+      setSubmitError('Turn on at least one offer with saved guidelines before starting a review.');
+      return;
+    }
+    if (eligibleOffers.length > MAX_OFFERS_PER_REVIEW) {
+      setSubmitError(`No more than ${MAX_OFFERS_PER_REVIEW} offers can be active for a review.`);
       return;
     }
 
@@ -469,7 +481,7 @@ function ReviewWorkspace() {
 
     const sharedFields = new FormData(form);
     sharedFields.set('model', loadOpenRouterModel());
-    sharedFields.set('offer_ids', JSON.stringify(Array.from(selectedOfferIds)));
+    sharedFields.set('offer_ids', JSON.stringify(eligibleOffers.map((offer) => offer.offer_id)));
     const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
     const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
@@ -596,13 +608,13 @@ function ReviewWorkspace() {
           <form onSubmit={submit} className="grid gap-5">
             <div className="grid gap-3">
               <div className="flex items-center justify-between gap-3">
-                <Label>Offers to evaluate</Label>
+                <Label>Offer eligibility</Label>
                 <Badge variant="outline">
-                  {selectedOfferIds.size} / {MAX_OFFERS_PER_REVIEW} selected
+                  {eligibleOffers.length} will review
                 </Badge>
               </div>
               {offersQuery.isLoading ? (
-                <Skeleton className="h-16" />
+                <Skeleton className="h-28" />
               ) : offersQuery.error ? (
                 <Alert variant="destructive">
                   <AlertCircle />
@@ -610,50 +622,10 @@ function ReviewWorkspace() {
                   <AlertDescription>{errorMessage(offersQuery.error)}</AlertDescription>
                 </Alert>
               ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(offersQuery.data ?? []).filter((offer) => offer.enabled).map((offer) => {
-                    const selected = selectedOfferIds.has(offer.offer_id);
-                    const atOfferLimit = !selected && selectedOfferIds.size >= MAX_OFFERS_PER_REVIEW;
-                    return (
-                      <button
-                        key={offer.offer_id}
-                        type="button"
-                        aria-pressed={selected}
-                        disabled={atOfferLimit}
-                        title={atOfferLimit ? `A review can include up to ${MAX_OFFERS_PER_REVIEW} offers.` : undefined}
-                        className={cn(
-                          'flex items-center gap-3 rounded-lg border bg-background p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                          selected && 'border-primary/50 bg-primary/5'
-                        )}
-                        onClick={() => setSelectedOfferIds((current) => {
-                          const next = new Set(current);
-                          if (next.has(offer.offer_id)) {
-                            if (next.size > 1) next.delete(offer.offer_id);
-                          } else if (next.size < MAX_OFFERS_PER_REVIEW) {
-                            next.add(offer.offer_id);
-                          }
-                          return next;
-                        })}
-                      >
-                        <span className={cn(
-                          'grid size-5 shrink-0 place-items-center rounded border',
-                          selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'
-                        )}>
-                          {selected ? <Check className="size-3.5" /> : null}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">{offer.display_name}</span>
-                          <span className="block text-xs text-muted-foreground">
-                            Guidelines v{offer.version} · {offer.override_count} overrides
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <OfferEligibilityGrid offers={offersQuery.data ?? []} />
               )}
               <p className="text-xs leading-5 text-muted-foreground">
-                Evidence is extracted once, then evaluated independently for up to {MAX_OFFERS_PER_REVIEW} selected offers.
+                Evidence is extracted once. Every active offer with saved guidelines is evaluated automatically; all others are recorded as N/A.
               </p>
             </div>
 
@@ -819,7 +791,16 @@ function ReviewWorkspace() {
               <p className="text-sm text-muted-foreground">
                 {submissionHint(creativeCount, adCopyLines.length)}
               </p>
-              <Button type="submit" disabled={isSubmitting}>
+              <Button
+                type="submit"
+                disabled={
+                  isSubmitting
+                  || offersQuery.isLoading
+                  || Boolean(offersQuery.error)
+                  || !eligibleOffers.length
+                  || eligibleOffers.length > MAX_OFFERS_PER_REVIEW
+                }
+              >
                 <Upload data-icon="inline-start" />
                 {isSubmitting
                   ? 'Starting reviews…'
@@ -1046,6 +1027,11 @@ function HistoryCard({
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
+  const offerCatalogQuery = useQuery({
+    queryKey: ['offers'],
+    queryFn: listOfferCatalog,
+    staleTime: 60_000,
+  });
   const deleteMutation = useMutation({
     mutationFn: deleteReview,
     onSuccess: (deleted) => {
@@ -1080,11 +1066,26 @@ function HistoryCard({
         review.ad_copy_result,
         review.ad_copy_result ? formatStatus(review.ad_copy_result) : null,
         ...(review.offer_ids ?? []),
+        ...(review.offer_outcomes ?? []).flatMap((outcome) => [
+          outcome.offer_id,
+          outcome.offer_name,
+          outcome.overall_status,
+          outcome.creative_result,
+          outcome.ad_copy_result,
+          outcome.message,
+        ]),
         formatDateTime(review.created_at),
       ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch))
     );
   }, [normalizedSearch, reviews]);
   const isSearching = normalizedSearch.length > 0;
+  const offerColumns = useMemo(
+    () => getOfferColumns(
+      offerCatalogQuery.data ?? [],
+      reviews.map((review) => review.offer_outcomes)
+    ),
+    [offerCatalogQuery.data, reviews]
+  );
 
   return (
     <Card>
@@ -1190,11 +1191,13 @@ function HistoryCard({
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead>Review</TableHead>
-                  <TableHead>Offers</TableHead>
                   <TableHead>Uploaded</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Creative Result</TableHead>
-                  <TableHead>Ad Copy Result</TableHead>
+                  {offerColumns.map((offer) => (
+                    <TableHead key={offer.offer_id} className="min-w-36">
+                      {offer.offer_name}
+                    </TableHead>
+                  ))}
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1206,48 +1209,20 @@ function HistoryCard({
                         {review.file_name || review.job_id}
                       </span>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex min-w-max items-center gap-1">
-                        <Badge variant="outline">
-                          {(review.primary_offer_id ?? review.offer_ids?.[0] ?? 'acp').toUpperCase()}
-                        </Badge>
-                        {(review.offer_ids?.length ?? 0) > 1 ? (
-                          <span className="text-xs text-muted-foreground">
-                            +{(review.offer_ids?.length ?? 1) - 1}
-                          </span>
-                        ) : null}
-                      </div>
-                    </TableCell>
                     <TableCell className="min-w-40 text-muted-foreground">
                       {formatDateTime(review.created_at)}
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={review.status} />
                     </TableCell>
-                    <TableCell>
-                      {review.has_creative ?? true ? (
-                        <ResultCell
-                          status={
-                            review.creative_result ??
-                            (review.has_creative === undefined ? review.overall_status : null)
-                          }
+                    {offerColumns.map((offer) => (
+                      <TableCell key={offer.offer_id}>
+                        <OfferOutcomeCell
+                          outcome={reviewOutcomeForOffer(review, offer)}
+                          showSources
                         />
-                      ) : (
-                        <span className="text-sm text-muted-foreground">N/A</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {review.has_ad_copy ?? true ? (
-                        <ResultCell
-                          status={
-                            review.ad_copy_result ??
-                            (review.has_ad_copy === undefined ? review.overall_status : null)
-                          }
-                        />
-                      ) : (
-                        <span className="text-sm text-muted-foreground">N/A</span>
-                      )}
-                    </TableCell>
+                      </TableCell>
+                    ))}
                     <TableCell className="text-right">
                       <div className="flex min-w-max justify-end gap-1">
                         {deleteCandidate === review.job_id ? (
@@ -1443,8 +1418,24 @@ function ReportPage() {
       ? query.data.offer_results
       : [query.data]
     : [];
-  const activeOffer = offerResults.find((result) => result.offer_id === selectedOfferId)
-    ?? offerResults[0];
+  const offerOutcomes: OfferOutcome[] = query.data?.offer_outcomes?.length
+    ? query.data.offer_outcomes
+    : offerResults.map((result) => ({
+        offer_id: result.offer_id,
+        offer_name: result.offer_name,
+        evaluation_state: 'evaluated' as const,
+        overall_status: normalizeResultStatus(result.overall_status),
+        creative_result: normalizeResultStatus(result.source_results?.creative?.status),
+        ad_copy_result: normalizeResultStatus(result.source_results?.ad_copy?.status),
+        message: 'Evaluated using saved offer guidelines.',
+      }));
+  const detailedResults = offerResults.filter((result) => {
+    const outcome = findOfferOutcome(offerOutcomes, result.offer_id);
+    return !outcome || outcome.evaluation_state === 'evaluated';
+  });
+  const activeOffer = detailedResults.find((result) => result.offer_id === selectedOfferId)
+    ?? detailedResults[0];
+  const offerColumns = getOfferColumns([], [offerOutcomes]);
   const column = createColumnHelper<Finding>();
   const table = useReactTable({
     data: activeOffer?.findings ?? [],
@@ -1544,26 +1535,61 @@ function ReportPage() {
 
   return (
     <div className="grid gap-4">
-      {offerResults.length > 1 ? (
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Offer result selection">
-          {offerResults.map((result) => (
-            <Button
-              key={result.offer_id}
-              type="button"
-              size="sm"
-              variant={result.offer_id === activeOffer.offer_id ? 'default' : 'outline'}
-              aria-pressed={result.offer_id === activeOffer.offer_id}
-              onClick={() => setSelectedOfferId(result.offer_id)}
-            >
-              {result.offer_name}
-              <StatusBadge status={result.overall_status} />
-            </Button>
-          ))}
-        </div>
-      ) : null}
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle as="h1" className="text-xl">Offer availability</CardTitle>
+          <CardDescription>
+            Evaluated offers include a result. Offers that were off or missing guidelines remain N/A for this review.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div
+            className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4"
+            role="group"
+            aria-label="Offer result selection"
+          >
+            {offerColumns.map((offer) => {
+              const outcome = findOfferOutcome(offerOutcomes, offer.offer_id);
+              const result = detailedResults.find((candidate) => candidate.offer_id === offer.offer_id);
+              const isSelected = result?.offer_id === activeOffer.offer_id;
+              const content = (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{offer.offer_name}</span>
+                    <OfferOutcomeCell compact outcome={outcome} />
+                  </div>
+                  <span className="text-xs leading-4 text-muted-foreground">
+                    {result
+                      ? isSelected ? 'Showing detailed findings' : 'Open detailed findings'
+                      : outcome?.message || 'No result was generated.'}
+                  </span>
+                </>
+              );
+              return result ? (
+                <button
+                  key={offer.offer_id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  className={cn(
+                    'grid gap-2 rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
+                    isSelected && 'border-primary/50 bg-primary/5'
+                  )}
+                  onClick={() => setSelectedOfferId(result.offer_id)}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div key={offer.offer_id} className="grid gap-2 rounded-lg border bg-muted/20 p-3">
+                  {content}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
-          <CardTitle as="h1" className="text-xl">{activeOffer.offer_name} review summary</CardTitle>
+          <CardTitle as="h2" className="text-xl">{activeOffer.offer_name} review summary</CardTitle>
           <CardDescription>
             Review job {jobId}{activeOffer.guideline_version ? ` · guidelines v${activeOffer.guideline_version}` : ''}
           </CardDescription>
@@ -1740,6 +1766,11 @@ function BatchPage() {
       return batch?.items.every((item) => isTerminalBatchStatus(item.status)) ? false : 1500;
     },
   });
+  const offerCatalogQuery = useQuery({
+    queryKey: ['offers'],
+    queryFn: listOfferCatalog,
+    staleTime: 60_000,
+  });
 
   if (query.isLoading) return <Skeleton className="h-72" />;
   if (!query.data) {
@@ -1756,6 +1787,10 @@ function BatchPage() {
 
   const completeCount = query.data.items.filter((item) => item.status === 'complete').length;
   const failedCount = query.data.items.filter((item) => isFailedBatchStatus(item.status)).length;
+  const offerColumns = getOfferColumns(
+    offerCatalogQuery.data ?? [],
+    query.data.items.map((item) => item.offer_outcomes)
+  );
 
   return (
     <Card>
@@ -1780,7 +1815,9 @@ function BatchPage() {
                 <TableHead>Type</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Result</TableHead>
+                {offerColumns.map((offer) => (
+                  <TableHead key={offer.offer_id} className="min-w-32">{offer.offer_name}</TableHead>
+                ))}
                 <TableHead className="text-right">Report</TableHead>
               </TableRow>
             </TableHeader>
@@ -1795,13 +1832,11 @@ function BatchPage() {
                     ) : null}
                   </TableCell>
                   <TableCell><StatusBadge status={item.status} /></TableCell>
-                  <TableCell>
-                    {item.result ? <StatusBadge status={item.result} /> : (
-                      <span className="text-sm text-muted-foreground">
-                        {isFailedBatchStatus(item.status) ? 'No result' : 'Not ready'}
-                      </span>
-                    )}
-                  </TableCell>
+                  {offerColumns.map((offer) => (
+                    <TableCell key={offer.offer_id}>
+                      <OfferOutcomeCell outcome={batchOutcomeForOffer(item, offer)} />
+                    </TableCell>
+                  ))}
                   <TableCell className="text-right">
                     {item.status === 'complete' && item.job_id ? (
                       <Link
@@ -1895,6 +1930,14 @@ function SettingsPage() {
   );
 }
 
+function AutomationsRoutePage() {
+  return (
+    <AdminAccessGate>
+      <AutomationsPage />
+    </AdminAccessGate>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   const result = normalizeResultStatus(status);
   if (result) return <ResultBadge status={result} />;
@@ -1944,14 +1987,6 @@ function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
   if (severity === 'high') return <Badge variant="destructive">High</Badge>;
   if (severity === 'medium') return <Badge variant="secondary">Medium</Badge>;
   return <Badge variant="outline">Low</Badge>;
-}
-
-function ResultCell({ status }: { status?: string | null }) {
-  return status ? (
-    <StatusBadge status={status} />
-  ) : (
-    <span className="text-sm text-muted-foreground">Not ready</span>
-  );
 }
 
 function buildReviewForm(
@@ -2107,7 +2142,7 @@ function formatStatus(status: string) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function normalizeResultStatus(status: string): OverallStatus | null {
+function normalizeResultStatus(status?: string | null): OverallStatus | null {
   const normalized: Record<ResultStatus, OverallStatus> = {
     green: 'green',
     yellow: 'yellow',
@@ -2206,11 +2241,17 @@ const settingsRoute = createRoute({
   path: '/settings',
   component: SettingsPage,
 });
+const automationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/automations',
+  component: AutomationsRoutePage,
+});
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     newReviewRoute,
     historyRoute,
+    automationsRoute,
     batchRoute,
     progressRoute,
     reportRoute,

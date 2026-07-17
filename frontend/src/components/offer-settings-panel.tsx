@@ -75,7 +75,7 @@ function emptyOfferDraft(): DraftProfile {
     display_name: '',
     official_guidelines: '',
     internal_overrides: [],
-    enabled: true,
+    enabled: false,
     is_default: false,
     version: 0,
     created_at: null,
@@ -269,7 +269,9 @@ export function OfferSettingsPanel() {
       return `An offer with the ID “${offerId}” already exists.`;
     }
     if (!current.display_name.trim()) return 'Display name is required.';
-    if (!current.official_guidelines.trim()) return 'Official guidelines are required.';
+    if (current.enabled && !current.official_guidelines.trim()) {
+      return 'Add official guidelines before enabling this offer.';
+    }
     if (current.official_guidelines.length > MAX_GUIDELINES_LENGTH) {
       return 'Guidelines must be 200,000 characters or fewer.';
     }
@@ -299,7 +301,7 @@ export function OfferSettingsPanel() {
     }
 
     const offerId = draft.offer_id.trim().toLocaleLowerCase();
-    const enabled = offerId === 'acp' ? true : draft.enabled;
+    const enabled = draft.enabled && Boolean(draft.official_guidelines.trim());
     saveMutation.mutate({
       offerId,
       input: {
@@ -313,13 +315,13 @@ export function OfferSettingsPanel() {
           enabled: override.enabled,
         })),
         enabled,
-        is_default: draft.is_default,
+        is_default: enabled ? draft.is_default : false,
       },
     });
   }
 
   function disableCurrentOffer() {
-    if (!draft || draft.offer_id === 'acp') return;
+    if (!draft) return;
     if (!window.confirm(`Disable ${draft.display_name} for new reviews? Existing reports remain unchanged.`)) {
       return;
     }
@@ -537,12 +539,17 @@ export function OfferSettingsPanel() {
                       value={draft.official_guidelines}
                       className="min-h-72 font-mono text-xs leading-5"
                       maxLength={MAX_GUIDELINES_LENGTH}
-                      required
                       aria-describedby={`${fieldPrefix}-guidelines-count`}
-                      onChange={(event) => updateDraft((current) => ({
-                        ...current,
-                        official_guidelines: event.currentTarget.value,
-                      }))}
+                      onChange={(event) => updateDraft((current) => {
+                        const officialGuidelines = event.currentTarget.value;
+                        const configured = Boolean(officialGuidelines.trim());
+                        return {
+                          ...current,
+                          official_guidelines: officialGuidelines,
+                          enabled: configured ? current.enabled : false,
+                          is_default: configured ? current.is_default : false,
+                        };
+                      })}
                     />
                     <p id={`${fieldPrefix}-guidelines-count`} className="text-right text-xs text-muted-foreground">
                       {draft.official_guidelines.length.toLocaleString()} / {MAX_GUIDELINES_LENGTH.toLocaleString()} characters
@@ -554,13 +561,15 @@ export function OfferSettingsPanel() {
                       <div className="grid gap-1">
                         <Label htmlFor={`${fieldPrefix}-enabled`}>Available for new reviews</Label>
                         <p className="text-xs text-muted-foreground">
-                          Disabled offers remain visible in historical reports.
+                          {draft.official_guidelines.trim()
+                            ? 'Disabled offers remain visible in historical reports.'
+                            : 'Add official guidelines before turning this offer on.'}
                         </p>
                       </div>
                       <Switch
                         id={`${fieldPrefix}-enabled`}
-                        checked={draft.offer_id === 'acp' ? true : draft.enabled}
-                        disabled={draft.offer_id === 'acp'}
+                        checked={draft.enabled}
+                        disabled={!draft.enabled && !draft.official_guidelines.trim()}
                         onCheckedChange={(enabled) => updateDraft((current) => ({
                           ...current,
                           enabled,
@@ -572,13 +581,13 @@ export function OfferSettingsPanel() {
                       <div className="grid gap-1">
                         <Label htmlFor={`${fieldPrefix}-default`}>Default offer</Label>
                         <p className="text-xs text-muted-foreground">
-                          Preselected when starting a new review.
+                          Used as the primary result when every active offer is reviewed.
                         </p>
                       </div>
                       <Switch
                         id={`${fieldPrefix}-default`}
                         checked={draft.is_default}
-                        disabled={!draft.enabled && draft.offer_id !== 'acp'}
+                        disabled={!draft.enabled}
                         onCheckedChange={(isDefault) => updateDraft((current) => ({
                           ...current,
                           is_default: isDefault,
@@ -716,7 +725,7 @@ export function OfferSettingsPanel() {
 
                 <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    {!isCreating && draft.offer_id !== 'acp' && draft.enabled ? (
+                    {!isCreating && draft.enabled ? (
                       <Button
                         type="button"
                         variant="destructive"

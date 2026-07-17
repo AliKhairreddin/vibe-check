@@ -105,6 +105,7 @@ export type OfferCatalogItem = Pick<
   OfferProfile,
   'offer_id' | 'display_name' | 'enabled' | 'is_default' | 'version'
 > & {
+  configured: boolean;
   override_count: number;
 };
 
@@ -128,6 +129,16 @@ export type Finding = {
 export type OverallStatus = 'green' | 'yellow' | 'orange' | 'red';
 export type LegacyOverallStatus = 'pass' | 'needs_review' | 'likely_violation';
 export type ResultStatus = OverallStatus | LegacyOverallStatus;
+
+export type OfferOutcome = {
+  offer_id: string;
+  offer_name: string;
+  evaluation_state: 'evaluated' | 'disabled' | 'missing_guidelines';
+  overall_status: OverallStatus | null;
+  creative_result: OverallStatus | null;
+  ad_copy_result: OverallStatus | null;
+  message: string;
+};
 
 export type OfferResult = {
   offer_id: string;
@@ -156,12 +167,14 @@ export type Report = OfferResult & {
   schema_version?: number;
   primary_offer_id?: string | null;
   offer_results?: OfferResult[];
+  offer_outcomes?: OfferOutcome[];
 };
 
 export type ReviewHistoryItem = Status & {
   overall_status?: Report['overall_status'] | null;
   creative_result?: Report['overall_status'] | null;
   ad_copy_result?: Report['overall_status'] | null;
+  offer_outcomes?: OfferOutcome[];
 };
 
 export type ReviewHistoryPage = {
@@ -177,6 +190,7 @@ export type ReviewBatchItem = {
   status: string;
   job_id?: string | null;
   result?: OverallStatus | null;
+  offer_outcomes?: OfferOutcome[];
   message: string;
 };
 
@@ -209,6 +223,47 @@ export type ReviewStats = {
 export type DeletedReview = {
   job_id: string;
   deleted_at: number;
+};
+
+export type ReviewAutomation = {
+  automation_id: string;
+  name: string;
+  enabled: boolean;
+  folder_id: string;
+  file_name_pattern: string;
+  time_of_day: string;
+  timezone: string;
+  days_of_week: number[];
+  include_subfolders: boolean;
+  created_at?: number | null;
+  updated_at?: number | null;
+  last_run_at?: number | null;
+  last_run_status?: string | null;
+  last_scheduled_for?: string | null;
+  last_run_message?: string | null;
+  last_batch_id?: string | null;
+};
+
+export type ReviewAutomationInput = Pick<
+  ReviewAutomation,
+  | 'name'
+  | 'enabled'
+  | 'folder_id'
+  | 'file_name_pattern'
+  | 'time_of_day'
+  | 'timezone'
+  | 'days_of_week'
+  | 'include_subfolders'
+>;
+
+export type AutomationRunResult = {
+  automation: ReviewAutomation;
+  status: string;
+  message: string;
+  matched_count: number;
+  queued_count: number;
+  batch_id?: string | null;
+  job_ids: string[];
 };
 
 type ChunkedUpload = {
@@ -477,6 +532,44 @@ export async function disableOfferProfile(offerId: string): Promise<OfferProfile
     method: 'DELETE',
     headers: adminHeaders(),
   });
+}
+
+export async function listReviewAutomations(): Promise<ReviewAutomation[]> {
+  const response = await requestJson<
+    ReviewAutomation[] | { automations: ReviewAutomation[] }
+  >('/api/automations', { headers: adminHeaders() });
+  return Array.isArray(response) ? response : response.automations;
+}
+
+export async function saveReviewAutomation(
+  automationId: string,
+  input: ReviewAutomationInput
+): Promise<ReviewAutomation> {
+  return requestJson<ReviewAutomation>(
+    `/api/automations/${encodeURIComponent(automationId)}`,
+    {
+      method: 'PUT',
+      headers: adminHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function deleteReviewAutomation(automationId: string): Promise<void> {
+  await requestJson<unknown>(`/api/automations/${encodeURIComponent(automationId)}`, {
+    method: 'DELETE',
+    headers: adminHeaders(),
+  });
+}
+
+export async function runReviewAutomation(automationId: string): Promise<AutomationRunResult> {
+  return requestJson<AutomationRunResult>(
+    `/api/automations/${encodeURIComponent(automationId)}/run`,
+    {
+      method: 'POST',
+      headers: adminHeaders(),
+    }
+  );
 }
 
 export async function listReviewHistoryPage(
