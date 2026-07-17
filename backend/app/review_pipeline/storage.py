@@ -904,12 +904,21 @@ def _report_offer_result(report:dict[str, Any]|None, offer_id:str)->dict[str, An
     return report if primary == offer_id else None
 
 
-def get_review_stats(offer_id:str='acp')->ReviewStats:
-    remote=_convex_call('query', 'reviews:getStats', {'offerId':offer_id})
+def get_review_stats(offer_ids:str|list[str]='acp')->ReviewStats:
+    requested_offer_ids=[offer_ids] if isinstance(offer_ids, str) else offer_ids
+    normalized_offer_ids=list(dict.fromkeys(
+        offer_id.strip().lower()
+        for offer_id in requested_offer_ids
+        if offer_id.strip()
+    )) or ['acp']
+    remote=_convex_call('query', 'reviews:getStats', {'offerIds':normalized_offer_ids})
     if remote is not None:
         return ReviewStats.model_validate(remote)
 
-    stats=ReviewStats(offer_id=offer_id)
+    stats=ReviewStats(
+        offer_id=normalized_offer_ids[0] if len(normalized_offer_ids) == 1 else 'all',
+        offer_ids=normalized_offer_ids,
+    )
     outcomes=stats.outcomes.model_dump()
     if not JOB_DATA_DIR.exists():
         return stats
@@ -920,7 +929,8 @@ def get_review_stats(offer_id:str='acp')->ReviewStats:
             record=JobRecord.model_validate(read_json(status_path))
         except (OSError, ValueError):
             continue
-        if offer_id not in record.offer_ids:
+        matched_offer_ids=[offer_id for offer_id in normalized_offer_ids if offer_id in record.offer_ids]
+        if not matched_offer_ids:
             continue
         stats.total_reviews += 1
         if record.has_creative:
@@ -936,12 +946,13 @@ def get_review_stats(offer_id:str='acp')->ReviewStats:
         stats.completed_reviews += 1
         report_path=status_path.parent/'report.json'
         report=read_json(report_path) if report_path.exists() else None
-        result=_report_offer_result(report, offer_id)
-        status=_overall_status(result)
-        if status:
-            outcomes[status] += 1
-        if isinstance(result, dict) and result.get('internal_disposition') == 'accepted_with_override':
-            stats.accepted_overrides += 1
+        for offer_id in matched_offer_ids:
+            result=_report_offer_result(report, offer_id)
+            status=_overall_status(result)
+            if status:
+                outcomes[status] += 1
+            if isinstance(result, dict) and result.get('internal_disposition') == 'accepted_with_override':
+                stats.accepted_overrides += 1
     stats.outcomes=ReviewOutcomeCounts(**outcomes)
     return stats
 

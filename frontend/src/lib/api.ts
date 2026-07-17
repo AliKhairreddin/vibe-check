@@ -210,6 +210,7 @@ export type CreateReviewBatchInput = {
 
 export type ReviewStats = {
   offer_id: string;
+  offer_ids: string[];
   total_reviews: number;
   completed_reviews: number;
   creative_reviews: number;
@@ -486,8 +487,8 @@ export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
   return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
 }
 
-export async function getReviewStats(offerId = 'acp'): Promise<ReviewStats> {
-  const params = new URLSearchParams({ offer_id: offerId });
+export async function getReviewStats(offerIds: string[] = ['acp']): Promise<ReviewStats> {
+  const params = new URLSearchParams({ offer_ids: offerIds.join(',') });
   return requestJson<ReviewStats>(`/api/reviews/stats?${params}`);
 }
 

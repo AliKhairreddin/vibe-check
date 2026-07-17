@@ -83,7 +83,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 93 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, two-pass offer isolation, internal overrides, scheduled automation claims and retries, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 94 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, two-pass offer isolation, internal overrides, scheduled automation claims and retries, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 

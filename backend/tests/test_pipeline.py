@@ -1612,10 +1612,51 @@ def test_review_stats_are_offer_aware_and_keep_override_counts_separate(tmp_path
 
     acp=get_review_stats('acp')
     kissterra=get_review_stats('kissterra')
+    combined=get_review_stats(['acp','kissterra'])
     assert acp.total_reviews == 1 and acp.outcomes.red == 1
     assert acp.accepted_overrides == 1
     assert kissterra.total_reviews == 1 and kissterra.outcomes.green == 1
     assert kissterra.accepted_overrides == 0
+    assert combined.offer_id == 'all'
+    assert combined.offer_ids == ['acp','kissterra']
+    assert combined.total_reviews == 1 and combined.completed_reviews == 1
+    assert combined.outcomes.red == 1 and combined.outcomes.green == 1
+    assert combined.accepted_overrides == 1
+
+@pytest.mark.anyio
+async def test_review_stats_api_accepts_multiple_offer_filters(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status(
+        'multi-offer-api',
+        JobStatus.queued,
+        0,
+        'Queued',
+        'creative.png',
+        offer_ids=['acp','kissterra'],
+        primary_offer_id='acp',
+    )
+    set_report('multi-offer-api', {
+        'schema_version':2,
+        'primary_offer_id':'acp',
+        'overall_status':'orange',
+        'summary':'Review needed.',
+        'offer_results':[
+            {'offer_id':'acp','overall_status':'orange','internal_disposition':'none'},
+            {'offer_id':'kissterra','overall_status':'green','internal_disposition':'clear'},
+        ],
+    })
+    set_status('multi-offer-api', JobStatus.complete, 100, 'Complete')
+
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response=await client.get('/api/reviews/stats?offer_ids=acp,kissterra')
+
+    assert response.status_code == 200
+    assert response.json()['offer_ids'] == ['acp','kissterra']
+    assert response.json()['total_reviews'] == 1
+    assert response.json()['outcomes'] == {'green':1,'yellow':0,'orange':1,'red':0}
 
 def test_delete_review_tombstones_history_report_and_stats(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

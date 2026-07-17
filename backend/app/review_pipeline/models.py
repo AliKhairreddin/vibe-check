@@ -286,6 +286,7 @@ class ReviewOutcomeCounts(BaseModel):
 
 class ReviewStats(BaseModel):
     offer_id: str = 'acp'
+    offer_ids: list[str] = Field(default_factory=lambda: ['acp'])
     total_reviews: int = 0
     completed_reviews: int = 0
     creative_reviews: int = 0

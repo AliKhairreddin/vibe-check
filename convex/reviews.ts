@@ -915,16 +915,27 @@ export const getStats = query({
   args: {
     secret: v.string(),
     offerId: v.optional(v.string()),
+    offerIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const requestedOfferId = normalizeOfferId(args.offerId) ?? "acp";
-    const reviews = await ctx.db
-      .query("reviewOfferStats")
-      .withIndex("by_offer_id_deleted_at", (query) =>
-        query.eq("offerId", requestedOfferId).eq("deletedAt", undefined)
-      )
-      .collect();
+    const requestedOfferIds = [...new Set(
+      (args.offerIds?.length ? args.offerIds : [args.offerId])
+        .flatMap((offerId) => {
+          const normalized = normalizeOfferId(offerId);
+          return normalized ? [normalized] : [];
+        })
+    )].slice(0, 10);
+    if (!requestedOfferIds.length) requestedOfferIds.push("acp");
+    const reviewRows = await Promise.all(requestedOfferIds.map((offerId) =>
+      ctx.db
+        .query("reviewOfferStats")
+        .withIndex("by_offer_id_deleted_at", (query) =>
+          query.eq("offerId", offerId).eq("deletedAt", undefined)
+        )
+        .collect()
+    ));
+    const reviews = reviewRows.flat();
 
     const outcomes: Record<ResultStatus, number> = {
       green: 0,
@@ -933,26 +944,23 @@ export const getStats = query({
       red: 0,
     };
     let acceptedOverrides = 0;
-    let completedReviews = 0;
-    let failedReviews = 0;
-    let creativeReviews = 0;
-    let copyOnlyReviews = 0;
-
     for (const review of reviews) {
-      if (review.hasCreative ?? true) creativeReviews += 1;
-      else copyOnlyReviews += 1;
-      if (review.status === "failed") {
-        failedReviews += 1;
-        continue;
-      }
       if (review.status !== "complete") continue;
-
-      completedReviews += 1;
       if (review.resultStatus) outcomes[review.resultStatus] += 1;
       if (review.internalDisposition === "accepted_with_override") {
         acceptedOverrides += 1;
       }
     }
+
+    const reviewsByJobId = new Map<string, typeof reviews[number]>();
+    for (const review of reviews) {
+      if (!reviewsByJobId.has(review.jobId)) reviewsByJobId.set(review.jobId, review);
+    }
+    const uniqueReviews = [...reviewsByJobId.values()];
+    const completedReviews = uniqueReviews.filter((review) => review.status === "complete").length;
+    const failedReviews = uniqueReviews.filter((review) => review.status === "failed").length;
+    const creativeReviews = uniqueReviews.filter((review) => review.hasCreative ?? true).length;
+    const copyOnlyReviews = uniqueReviews.length - creativeReviews;
 
     return {
       accepted_overrides: acceptedOverrides,
@@ -960,10 +968,11 @@ export const getStats = query({
       copy_only_reviews: copyOnlyReviews,
       creative_reviews: creativeReviews,
       failed_reviews: failedReviews,
-      in_progress_reviews: reviews.length - completedReviews - failedReviews,
-      offer_id: requestedOfferId,
+      in_progress_reviews: uniqueReviews.length - completedReviews - failedReviews,
+      offer_id: requestedOfferIds.length === 1 ? requestedOfferIds[0] : "all",
+      offer_ids: requestedOfferIds,
       outcomes,
-      total_reviews: reviews.length,
+      total_reviews: uniqueReviews.length,
     };
   },
 });

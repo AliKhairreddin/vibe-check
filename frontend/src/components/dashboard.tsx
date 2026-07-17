@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import {
   Activity,
   AlertCircle,
   ArrowRight,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   FileCheck2,
   History,
   Layers3,
+  ListFilter,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -90,7 +93,7 @@ const RESULT_META: Record<OverallStatus, {
 };
 
 export function DashboardPage() {
-  const [selectedOfferId, setSelectedOfferId] = useState('');
+  const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>([]);
   const offersQuery = useQuery({
     queryKey: ['offers'],
     queryFn: listOfferCatalog,
@@ -100,19 +103,28 @@ export function DashboardPage() {
     () => (offersQuery.data ?? []).filter((offer) => offer.enabled && offer.configured),
     [offersQuery.data]
   );
-  const fallbackOffer = enabledOffers.find((offer) => offer.is_default) ?? enabledOffers[0];
-  const effectiveOfferId = enabledOffers.some((offer) => offer.offer_id === selectedOfferId)
-    ? selectedOfferId
-    : fallbackOffer?.offer_id ?? '';
+  const offerCatalog = useMemo(() => offersQuery.data ?? [], [offersQuery.data]);
+  const catalogOfferIds = useMemo(
+    () => offerCatalog.map((offer) => offer.offer_id),
+    [offerCatalog]
+  );
 
   useEffect(() => {
-    if (selectedOfferId !== effectiveOfferId) setSelectedOfferId(effectiveOfferId);
-  }, [effectiveOfferId, selectedOfferId]);
+    const availableIds = new Set(catalogOfferIds);
+    setSelectedOfferIds((current) => {
+      const next = current.filter((offerId) => availableIds.has(offerId));
+      return next.length === current.length ? current : next;
+    });
+  }, [catalogOfferIds]);
+
+  const effectiveOfferIds = selectedOfferIds.length ? selectedOfferIds : catalogOfferIds;
+  const statsOfferKey = effectiveOfferIds.join(',');
+  const statsOfferLabel = offerFilterLabel(offerCatalog, selectedOfferIds);
 
   const statsQuery = useQuery({
-    queryKey: ['reviews', 'stats', effectiveOfferId],
-    queryFn: () => getReviewStats(effectiveOfferId),
-    enabled: Boolean(effectiveOfferId),
+    queryKey: ['reviews', 'stats', statsOfferKey],
+    queryFn: () => getReviewStats(effectiveOfferIds),
+    enabled: Boolean(effectiveOfferIds.length),
     staleTime: 15_000,
   });
   const recentQuery = useQuery({
@@ -122,8 +134,6 @@ export function DashboardPage() {
       (review) => !review.report_ready && review.status !== 'failed'
     ) ? 3_000 : false,
   });
-
-  const selectedOffer = enabledOffers.find((offer) => offer.offer_id === effectiveOfferId);
 
   return (
     <div className="grid gap-4">
@@ -137,9 +147,9 @@ export function DashboardPage() {
         </div>
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-end">
           <OfferFilter
-            offers={enabledOffers}
-            selectedOfferId={effectiveOfferId}
-            onChange={setSelectedOfferId}
+            offers={offerCatalog}
+            selectedOfferIds={selectedOfferIds}
+            onChange={setSelectedOfferIds}
             isLoading={offersQuery.isLoading}
           />
           <Link to="/reviews/new" className={buttonVariants({ size: 'lg' })}>
@@ -195,7 +205,7 @@ export function DashboardPage() {
       ) : statsQuery.isLoading ? (
         <DashboardStatsSkeleton />
       ) : statsQuery.data ? (
-        <DashboardStats stats={statsQuery.data} offer={selectedOffer} />
+        <DashboardStats stats={statsQuery.data} offerLabel={statsOfferLabel} />
       ) : null}
 
       <RecentReviewsCard
@@ -213,38 +223,148 @@ function OfferFilter({
   isLoading,
   offers,
   onChange,
-  selectedOfferId,
+  selectedOfferIds,
 }: {
   isLoading: boolean;
   offers: OfferCatalogItem[];
-  onChange: (offerId: string) => void;
-  selectedOfferId: string;
+  onChange: (offerIds: string[]) => void;
+  selectedOfferIds: string[];
 }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const filterRef = useRef<HTMLDivElement>(null);
+  const selectedSet = new Set(selectedOfferIds);
+  const label = offerFilterLabel(offers, selectedOfferIds);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!filterRef.current?.contains(event.target as Node)) setIsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isOpen]);
+
+  const toggleOffer = (offerId: string) => {
+    const next = selectedSet.has(offerId)
+      ? selectedOfferIds.filter((selectedId) => selectedId !== offerId)
+      : [...selectedOfferIds, offerId];
+    onChange(next.length ? next : []);
+  };
+
   return (
-    <label className="grid min-w-44 gap-1 text-xs font-medium text-muted-foreground">
-      Offer
+    <div ref={filterRef} className="relative grid min-w-44 gap-1">
+      <span className="text-xs font-medium text-muted-foreground">Offer results</span>
       {isLoading ? (
         <Skeleton className="h-9 w-full" />
       ) : (
-        <select
-          aria-label="Dashboard offer"
-          className="h-9 rounded-lg border border-input bg-background px-3 text-sm font-medium text-foreground shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-          value={selectedOfferId}
+        <Button
+          type="button"
+          variant="outline"
+          size="lg"
+          aria-expanded={isOpen}
+          aria-haspopup="dialog"
+          className="w-full justify-between"
           disabled={!offers.length}
-          onChange={(event) => onChange(event.currentTarget.value)}
+          onClick={() => setIsOpen((current) => !current)}
         >
-          {offers.length ? offers.map((offer) => (
-            <option key={offer.offer_id} value={offer.offer_id}>
-              {offer.display_name}
-            </option>
-          )) : <option value="">No review-ready offers</option>}
-        </select>
+          <span className="flex min-w-0 items-center gap-2">
+            <ListFilter className="size-4 text-muted-foreground" />
+            <span className="truncate">{offers.length ? label : 'No offers'}</span>
+          </span>
+          <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', isOpen && 'rotate-180')} />
+        </Button>
       )}
-    </label>
+      {isOpen ? (
+        <div
+          role="dialog"
+          aria-label="Filter dashboard by offer"
+          className="absolute left-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg sm:left-auto sm:right-0"
+        >
+          <div className="grid gap-1 border-b p-3">
+            <p className="text-sm font-semibold">Filter dashboard results</p>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Reviews still run against every active offer. This only changes the totals shown here.
+            </p>
+          </div>
+          <div className="grid gap-1 p-2">
+            <OfferFilterOption
+              checked={!selectedOfferIds.length}
+              description="Show results from the full offer catalog"
+              label="All offers"
+              onClick={() => onChange([])}
+            />
+            <div className="my-1 h-px bg-border" />
+            {offers.map((offer) => (
+              <OfferFilterOption
+                key={offer.offer_id}
+                checked={selectedSet.has(offer.offer_id)}
+                description={offer.enabled && offer.configured ? 'Active' : 'Inactive · results may be N/A'}
+                label={offer.display_name}
+                onClick={() => toggleOffer(offer.offer_id)}
+              />
+            ))}
+          </div>
+          <div className="flex items-center justify-between border-t bg-muted/30 px-3 py-2">
+            <span className="text-xs text-muted-foreground">
+              {selectedOfferIds.length ? `${selectedOfferIds.length} selected` : 'All selected'}
+            </span>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={!selectedOfferIds.length}
+              onClick={() => onChange([])}
+            >
+              Clear filter
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-function DashboardStats({ stats, offer }: { stats: ReviewStats; offer?: OfferCatalogItem }) {
+function OfferFilterOption({
+  checked,
+  description,
+  label,
+  onClick,
+}: {
+  checked: boolean;
+  description: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={onClick}
+    >
+      <span className={cn(
+        'grid size-4 shrink-0 place-items-center rounded border',
+        checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background'
+      )}>
+        {checked ? <Check className="size-3" /> : null}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium">{label}</span>
+        <span className="block truncate text-xs text-muted-foreground">{description}</span>
+      </span>
+    </button>
+  );
+}
+
+function DashboardStats({ stats, offerLabel }: { stats: ReviewStats; offerLabel: string }) {
   const outcomeTotal = RESULT_ORDER.reduce((sum, status) => sum + stats.outcomes[status], 0);
   const summary = [
     {
@@ -279,7 +399,7 @@ function DashboardStats({ stats, offer }: { stats: ReviewStats; offer?: OfferCat
         <CardHeader>
           <CardTitle>Review activity</CardTitle>
           <CardDescription>
-            {offer?.display_name ?? formatOfferId(stats.offer_id)} · all saved, non-deleted reviews
+            {offerLabel} · unique saved, non-deleted review jobs
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -322,7 +442,7 @@ function DashboardStats({ stats, offer }: { stats: ReviewStats; offer?: OfferCat
               </CardHeader>
               <CardContent>
                 <p className="text-xs text-muted-foreground">
-                  {formatPercent(count, outcomeTotal)} of rated reviews
+                  {formatPercent(count, outcomeTotal)} of rated offer results
                 </p>
               </CardContent>
             </Card>
@@ -334,7 +454,7 @@ function DashboardStats({ stats, offer }: { stats: ReviewStats; offer?: OfferCat
         <CardHeader>
           <CardTitle>Status distribution</CardTitle>
           <CardDescription>
-            {outcomeTotal ? `${outcomeTotal} completed reviews with a rated outcome` : 'No rated reviews yet'}
+            {outcomeTotal ? `${outcomeTotal} completed offer results` : 'No rated offer results yet'}
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -517,6 +637,14 @@ function formatPercent(value: number, total: number) {
   return total ? `${Math.round((value / total) * 100)}%` : '0%';
 }
 
+function offerFilterLabel(offers: OfferCatalogItem[], selectedOfferIds: string[]) {
+  if (!selectedOfferIds.length) return 'All offers';
+  if (selectedOfferIds.length === 1) {
+    return offers.find((offer) => offer.offer_id === selectedOfferIds[0])?.display_name ?? '1 offer';
+  }
+  return `${selectedOfferIds.length} offers`;
+}
+
 function distributionLabel(stats: ReviewStats, total: number) {
   if (!total) return 'No rated review outcomes';
   return RESULT_ORDER.map((status) => `${RESULT_META[status].label} ${stats.outcomes[status]}`).join(', ');
@@ -524,12 +652,6 @@ function distributionLabel(stats: ReviewStats, total: number) {
 
 function formatStatus(status: string) {
   return status.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function formatOfferId(offerId: string) {
-  return offerId === 'acp'
-    ? 'ACP'
-    : offerId.replace(/[_-]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatDateTime(value?: number | null) {

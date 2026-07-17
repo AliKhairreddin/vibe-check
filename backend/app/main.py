@@ -715,10 +715,13 @@ def full_review_history(limit:int=50, cursor:str|None=None):
 
 
 @app.get('/api/reviews/stats', response_model=ReviewStats)
-def review_stats(offer_id:str='acp'):
-    normalized=offer_id.strip().lower() or 'acp'
-    if not OFFER_ID_PATTERN.fullmatch(normalized):
-        raise HTTPException(400, 'Invalid offer ID')
+def review_stats(offer_id:str|None=None, offer_ids:str|None=None):
+    requested=(offer_ids.split(',') if offer_ids is not None else [offer_id or 'acp'])
+    normalized=list(dict.fromkeys(value.strip().lower() for value in requested if value.strip()))
+    if not normalized:
+        normalized=['acp']
+    if len(normalized) > 10 or any(not OFFER_ID_PATTERN.fullmatch(value) for value in normalized):
+        raise HTTPException(400, 'Invalid offer IDs')
     return get_review_stats(normalized)
 
 
