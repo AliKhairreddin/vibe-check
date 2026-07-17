@@ -1,8 +1,9 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v6";
+const BACKEND_INSTANCE = "primary-v7";
 type OptionalSecrets = Env & {
+  ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
   APP_PUBLIC_URL?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -18,6 +19,7 @@ export class ReviewBackend extends Container<Env> {
     super(ctx, env);
     const optionalSecrets = env as OptionalSecrets;
     this.envVars = {
+      ADMIN_PASSWORD: optionalSecrets.ADMIN_PASSWORD ?? "",
       APP_PASSWORD: optionalSecrets.APP_PASSWORD ?? "",
       APP_ALLOWED_HOSTS: env.APP_ALLOWED_HOSTS,
       APP_PUBLIC_URL: optionalSecrets.APP_PUBLIC_URL ?? "",

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, re, shutil, uuid
+import asyncio, json, os, re, secrets, shutil, uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
@@ -12,30 +12,52 @@ from .review_pipeline.models import (
     ComplianceReport,
     CreateDriveReview,
     CreateReviewBatch,
+    DeletedReview,
+    DriveBrowserItem,
+    DriveBrowserList,
     DriveCreativeFile,
     DriveCreativeList,
+    DriveFolder,
+    DriveSelectionResult,
     JobRecord,
+    OfferProfile,
+    OfferProfileInput,
+    OfferProfileList,
     ReviewSource,
     ReviewSources,
     ReviewBatch,
     ReviewHistoryItem,
     ReviewHistoryPage,
+    ReviewStats,
+    ResolveDriveSelection,
     ReviewRequestMeta,
 )
 from .review_pipeline.storage import (
     create_batch,
+    delete_review,
+    disable_offer_profile,
     get_batch,
     get_report as get_stored_report,
+    get_offer_profile_revision,
     get_status,
     job_dir,
     list_reviews,
     list_reviews_page,
+    get_review_stats,
+    list_offer_profiles,
     now_ms,
+    resolve_offer_profiles,
     set_review_source,
+    upsert_offer_profile,
 )
 from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
 from .review_pipeline.media import detect_media_kind
-from .review_pipeline.drive import DriveLookupError, get_google_drive_client
+from .review_pipeline.drive import (
+    FOLDER_MIME_TYPE,
+    MAX_DRIVE_SELECTION_FILES,
+    DriveLookupError,
+    get_google_drive_client,
+)
 from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
 
@@ -45,6 +67,10 @@ UPLOAD_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 UPLOAD_METADATA_FILE = 'upload.json'
 UPLOAD_CHUNKS_DIR = 'upload_chunks'
 BATCH_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+JOB_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
+MAX_BATCH_ITEMS = 100
+ADMIN_PASSWORD_HEADER = 'x-admin-password'
 
 
 def copy_review_file_name(ad_copy: str) -> str:
@@ -86,7 +112,14 @@ def review_meta(
     scene_detection: bool,
     batch_id: str,
     batch_item_id: str,
+    offer_ids: list[str] | None = None,
 ) -> ReviewRequestMeta:
+    try:
+        offer_profiles=resolve_offer_profiles(offer_ids or ['acp'])
+    except KeyError as exc:
+        raise HTTPException(400, f'Unknown or disabled offer: {exc.args[0]}') from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     return ReviewRequestMeta(
         ad_copy=ad_copy.strip(),
         policy_text=policy_text,
@@ -97,7 +130,21 @@ def review_meta(
         scene_detection=scene_detection,
         batch_id=batch_id or None,
         batch_item_id=batch_item_id or None,
+        offer_profiles=offer_profiles,
     )
+
+
+def parse_offer_ids(value:str)->list[str]:
+    value=value.strip()
+    if not value:
+        return ['acp']
+    try:
+        parsed=json.loads(value)
+    except json.JSONDecodeError:
+        parsed=[part.strip() for part in value.split(',')]
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise HTTPException(400, 'offer_ids must be a JSON array of offer IDs.')
+    return list(dict.fromkeys(item.strip().lower() for item in parsed if item.strip())) or ['acp']
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -117,10 +164,28 @@ async def optional_password_gate(request: Request, call_next):
         return JSONResponse({'detail':'Invalid or missing x-app-password'}, status_code=401)
     return await call_next(request)
 
+
+def require_admin(request:Request)->None:
+    expected=os.getenv('ADMIN_PASSWORD','')
+    if not expected:
+        raise HTTPException(
+            503,
+            'Admin access is not configured. Set the ADMIN_PASSWORD Worker secret first.',
+        )
+    provided=request.headers.get(ADMIN_PASSWORD_HEADER,'')
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(401, 'Invalid or missing admin password.')
+
+
+@app.get('/api/admin/check')
+def admin_check(request:Request):
+    require_admin(request)
+    return {'authorized':True}
+
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form('')):
+async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form('["acp"]')):
     upload=creative or video
-    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id)
+    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
     if upload is None:
         if not meta.has_ad_copy:
             raise HTTPException(400, 'Choose a creative file or enter ad copy to review.')
@@ -147,6 +212,68 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
     return rec
 
 
+def drive_creative_model(file)->DriveCreativeFile:
+    return DriveCreativeFile(
+        file_id=file.file_id,
+        name=file.name,
+        mime_type=file.mime_type,
+        size=file.size,
+        modified_time=file.modified_time,
+        web_view_link=file.web_view_link,
+    )
+
+
+@app.get('/api/drive/browse', response_model=DriveBrowserList)
+def browse_drive(folder_id:str|None=None):
+    try:
+        drive=get_google_drive_client()
+        current=drive.get_file(folder_id or drive.root_folder_id)
+        children=drive.list_folder_children(current.file_id)
+    except DriveLookupError as exc:
+        raise HTTPException(503, str(exc)) from None
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','200')) * 1024 * 1024
+    items=[]
+    for child in children:
+        is_folder=child.mime_type == FOLDER_MIME_TYPE
+        too_large=not is_folder and child.size is not None and child.size > max_bytes
+        items.append(DriveBrowserItem(
+            **drive_creative_model(child).model_dump(),
+            kind='folder' if is_folder else 'creative',
+            selectable=not too_large,
+            disabled_reason=(f'Exceeds the {os.getenv("MAX_UPLOAD_MB", "200")} MB limit' if too_large else None),
+        ))
+    return DriveBrowserList(
+        current_folder=DriveFolder(
+            folder_id=current.file_id,
+            name=current.name,
+            web_view_link=current.web_view_link,
+        ),
+        items=items,
+        max_selection=MAX_DRIVE_SELECTION_FILES,
+    )
+
+
+@app.post('/api/drive/selection/resolve', response_model=DriveSelectionResult)
+def resolve_drive_selection(payload:ResolveDriveSelection):
+    if not payload.folder_ids and not payload.file_ids:
+        raise HTTPException(400, 'Select at least one Google Drive folder or creative.')
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','200')) * 1024 * 1024
+    try:
+        files=get_google_drive_client().resolve_selection(
+            payload.folder_ids,
+            payload.file_ids,
+            max_file_size=max_bytes,
+        )
+    except DriveLookupError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if not files:
+        raise HTTPException(400, 'The selection contains no supported creatives within the upload limit.')
+    return DriveSelectionResult(
+        files=[drive_creative_model(file) for file in files],
+        max_selection=MAX_DRIVE_SELECTION_FILES,
+    )
+
+
 @app.get('/api/drive/files', response_model=DriveCreativeList)
 def drive_creatives():
     try:
@@ -154,14 +281,7 @@ def drive_creatives():
     except DriveLookupError as exc:
         raise HTTPException(503, str(exc)) from None
     return DriveCreativeList(files=[
-        DriveCreativeFile(
-            file_id=file.file_id,
-            name=file.name,
-            mime_type=file.mime_type,
-            size=file.size,
-            modified_time=file.modified_time,
-            web_view_link=file.web_view_link,
-        )
+        drive_creative_model(file)
         for file in files
     ])
 
@@ -184,16 +304,17 @@ async def create_drive_review(payload: CreateDriveReview):
     if drive_file.size is not None and drive_file.size > max_bytes:
         raise HTTPException(413, f'Max upload is {os.getenv("MAX_UPLOAD_MB", "200")} MB')
 
-    meta = ReviewRequestMeta(
-        ad_copy=payload.ad_copy.strip(),
-        policy_text=payload.policy_text,
-        notes=payload.notes,
-        manual_transcript=payload.manual_transcript,
-        model=payload.model or None,
-        frame_interval_seconds=payload.frame_interval_seconds,
-        scene_detection=payload.scene_detection,
-        batch_id=payload.batch_id or None,
-        batch_item_id=payload.batch_item_id or None,
+    meta = review_meta(
+        payload.ad_copy,
+        payload.policy_text,
+        payload.notes,
+        payload.manual_transcript,
+        payload.model or '',
+        payload.frame_interval_seconds,
+        payload.scene_detection,
+        payload.batch_id or '',
+        payload.batch_item_id or '',
+        payload.offer_ids,
     )
     job_id = uuid.uuid4().hex
     jd = job_dir(job_id)
@@ -308,6 +429,7 @@ async def complete_chunked_upload(
     scene_detection: bool = Form(False),
     batch_id: str = Form(''),
     batch_item_id: str = Form(''),
+    offer_ids: str = Form('["acp"]'),
 ):
     upload_dir, metadata = read_upload_metadata(upload_id)
     if metadata.get('completed') or (upload_dir / 'status.json').exists():
@@ -320,7 +442,7 @@ async def complete_chunked_upload(
     if sum(path.stat().st_size for path in chunk_paths) != int(metadata['size']):
         raise HTTPException(409, 'Upload size does not match; restart this upload.')
 
-    meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id)
+    meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
     media_path = upload_dir / str(metadata['file_name'])
     enqueued = False
     try:
@@ -353,6 +475,8 @@ def create_review_batch(payload:CreateReviewBatch):
         raise HTTPException(400, 'Invalid batch id')
     if len(payload.items) < 2:
         raise HTTPException(400, 'A batch must contain at least two items.')
+    if len(payload.items) > MAX_BATCH_ITEMS:
+        raise HTTPException(400, f'A batch can contain at most {MAX_BATCH_ITEMS} items.')
     if len({item.item_id for item in payload.items}) != len(payload.items):
         raise HTTPException(400, 'Batch item ids must be unique.')
     if any(not BATCH_ID_PATTERN.fullmatch(item.item_id) for item in payload.items):
@@ -382,6 +506,67 @@ def fail_batch_upload(batch_id:str, item_id:str, payload:BatchFailure):
     except (FileNotFoundError, KeyError):
         raise HTTPException(404, 'Review batch item not found') from None
 
+
+@app.get('/api/offers/catalog')
+def offer_catalog():
+    offers=list_offer_profiles(include_disabled=False)
+    return {'offers':[
+        {
+            'offer_id':offer.offer_id,
+            'display_name':offer.display_name,
+            'enabled':offer.enabled,
+            'is_default':offer.is_default,
+            'version':offer.version,
+            'override_count':sum(1 for override in offer.internal_overrides if override.enabled),
+        }
+        for offer in offers
+    ]}
+
+
+@app.get('/api/offers', response_model=OfferProfileList)
+def offer_profiles(request:Request):
+    require_admin(request)
+    return OfferProfileList(offers=list_offer_profiles(include_disabled=True))
+
+
+@app.get('/api/offers/{offer_id}/versions/{version}', response_model=OfferProfile)
+def offer_profile_revision(offer_id:str, version:int, request:Request):
+    require_admin(request)
+    normalized=offer_id.strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(404, 'Offer profile revision not found')
+    try:
+        return get_offer_profile_revision(normalized, version)
+    except KeyError:
+        raise HTTPException(404, 'Offer profile revision not found') from None
+
+
+@app.put('/api/offers/{offer_id}', response_model=OfferProfile)
+def save_offer_profile(offer_id:str, payload:OfferProfileInput, request:Request):
+    require_admin(request)
+    normalized=offer_id.strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(400, 'Offer ID must be a lowercase slug using letters, numbers, hyphens, or underscores.')
+    try:
+        return upsert_offer_profile(normalized, payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.delete('/api/offers/{offer_id}', response_model=OfferProfile)
+def disable_offer(offer_id:str, request:Request):
+    require_admin(request)
+    normalized=offer_id.strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(404, 'Offer profile not found')
+    try:
+        return disable_offer_profile(normalized)
+    except KeyError:
+        raise HTTPException(404, 'Offer profile not found') from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
 @app.get('/api/reviews', response_model=list[ReviewHistoryItem])
 def review_history(limit:int=50):
     return list_reviews(limit)
@@ -389,6 +574,27 @@ def review_history(limit:int=50):
 @app.get('/api/reviews/history', response_model=ReviewHistoryPage)
 def full_review_history(limit:int=50, cursor:str|None=None):
     return list_reviews_page(limit, cursor)
+
+
+@app.get('/api/reviews/stats', response_model=ReviewStats)
+def review_stats(offer_id:str='acp'):
+    normalized=offer_id.strip().lower() or 'acp'
+    if not OFFER_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(400, 'Invalid offer ID')
+    return get_review_stats(normalized)
+
+
+@app.delete('/api/reviews/{job_id}', response_model=DeletedReview)
+def remove_review(job_id:str, request:Request):
+    require_admin(request)
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Review job not found')
+    try:
+        return delete_review(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Review job not found') from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
 
 @app.get('/api/reviews/{job_id}', response_model=JobRecord)
 def review_status(job_id:str):

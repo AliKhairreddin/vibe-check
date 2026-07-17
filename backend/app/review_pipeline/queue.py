@@ -81,6 +81,8 @@ async def enqueue_job(
         has_creative=media_kind != 'copy_only',
         batch_id=meta.batch_id,
         batch_item_id=meta.batch_item_id,
+        offer_ids=meta.offer_ids,
+        primary_offer_id=meta.primary_offer_id,
     )
     await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta, drive_file))
     return record

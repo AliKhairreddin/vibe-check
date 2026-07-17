@@ -18,6 +18,47 @@ def normalize_result_status(value):
 class JobStatus(str, Enum):
     queued='queued'; downloading_from_drive='downloading_from_drive'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
 
+class OfferOverride(BaseModel):
+    override_id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=160)
+    guidance: str = Field(min_length=1, max_length=10_000)
+    rationale: str = Field(default='', max_length=5_000)
+    enabled: bool = True
+
+class AppliedOverride(BaseModel):
+    override_id: str
+    title: str = ''
+    disposition: Literal['accepted','partial','uncertain'] = 'uncertain'
+    rationale: str = ''
+
+class OverrideAnnotation(BaseModel):
+    finding_index: int = Field(ge=0)
+    internal_override: AppliedOverride
+
+class OverrideAnnotationSet(BaseModel):
+    annotations: list[OverrideAnnotation] = Field(default_factory=list)
+
+class OfferProfile(BaseModel):
+    offer_id: str = Field(min_length=1, max_length=80)
+    display_name: str = Field(min_length=1, max_length=160)
+    official_guidelines: str = Field(min_length=1, max_length=200_000)
+    internal_overrides: list[OfferOverride] = Field(default_factory=list)
+    enabled: bool = True
+    is_default: bool = False
+    version: int = Field(default=1, ge=1)
+    created_at: int | None = None
+    updated_at: int | None = None
+
+class OfferProfileInput(BaseModel):
+    display_name: str = Field(min_length=1, max_length=160)
+    official_guidelines: str = Field(min_length=1, max_length=200_000)
+    internal_overrides: list[OfferOverride] = Field(default_factory=list)
+    enabled: bool = True
+    is_default: bool = False
+
+class OfferProfileList(BaseModel):
+    offers: list[OfferProfile] = Field(default_factory=list)
+
 class Finding(BaseModel):
     severity: Literal['low','medium','high']
     source: Literal['audio','onscreen_text','visual','ad_copy','policy']
@@ -27,6 +68,7 @@ class Finding(BaseModel):
     policy_reason: str
     suggested_fix: str
     confidence: Literal['low','medium','high']
+    internal_override: AppliedOverride | None = None
 
 class SafeRewrite(BaseModel):
     ad_copy: str = ''
@@ -45,18 +87,33 @@ class SourceResults(BaseModel):
     creative: SourceResult | None = None
     ad_copy: SourceResult | None = None
 
-class ComplianceReport(BaseModel):
+class OfferComplianceResult(BaseModel):
+    offer_id: str = 'acp'
+    offer_name: str = 'ACP'
+    guideline_version: int | None = None
     overall_status: ResultStatus
     summary: str
     source_results: SourceResults = Field(default_factory=SourceResults)
     findings: list[Finding] = Field(default_factory=list)
     safe_rewrite: SafeRewrite = Field(default_factory=SafeRewrite)
     limitations: list[str] = Field(default_factory=list)
+    policy_sources: list[str] = Field(default_factory=list)
+    internal_disposition: Literal[
+        'clear',
+        'accepted_with_override',
+        'action_required',
+        'human_review',
+    ] = 'clear'
 
     @field_validator('overall_status', mode='before')
     @classmethod
     def normalize_legacy_status(cls, value):
         return normalize_result_status(value)
+
+class ComplianceReport(OfferComplianceResult):
+    schema_version: int = 1
+    primary_offer_id: str | None = None
+    offer_results: list[OfferComplianceResult] = Field(default_factory=list)
 
 class JobRecord(BaseModel):
     job_id: str
@@ -70,6 +127,8 @@ class JobRecord(BaseModel):
     has_ad_copy: bool = True
     batch_id: str | None = None
     batch_item_id: str | None = None
+    offer_ids: list[str] = Field(default_factory=lambda: ['acp'])
+    primary_offer_id: str = 'acp'
     source_kind: ReviewSourceKind | None = None
     source_status: ReviewSourceStatus | None = None
     source_url: str | None = None
@@ -111,6 +170,7 @@ class ReviewRequestMeta(BaseModel):
     scene_detection: bool = False
     batch_id: str | None = None
     batch_item_id: str | None = None
+    offer_profiles: list[OfferProfile] = Field(default_factory=list)
 
     @property
     def has_ad_copy(self) -> bool:
@@ -120,6 +180,14 @@ class ReviewRequestMeta(BaseModel):
     def has_batch(self) -> bool:
         return bool(self.batch_id and self.batch_item_id)
 
+    @property
+    def offer_ids(self) -> list[str]:
+        return [profile.offer_id for profile in self.offer_profiles] or ['acp']
+
+    @property
+    def primary_offer_id(self) -> str:
+        return self.offer_ids[0]
+
 class DriveCreativeFile(BaseModel):
     file_id: str
     name: str
@@ -127,6 +195,29 @@ class DriveCreativeFile(BaseModel):
     size: int | None = None
     modified_time: str | None = None
     web_view_link: str
+
+class DriveBrowserItem(DriveCreativeFile):
+    kind: Literal['folder','creative']
+    selectable: bool = True
+    disabled_reason: str | None = None
+
+class DriveFolder(BaseModel):
+    folder_id: str
+    name: str
+    web_view_link: str
+
+class DriveBrowserList(BaseModel):
+    current_folder: DriveFolder
+    items: list[DriveBrowserItem] = Field(default_factory=list)
+    max_selection: int = 100
+
+class ResolveDriveSelection(BaseModel):
+    folder_ids: list[str] = Field(default_factory=list, max_length=100)
+    file_ids: list[str] = Field(default_factory=list, max_length=100)
+
+class DriveSelectionResult(BaseModel):
+    files: list[DriveCreativeFile] = Field(default_factory=list)
+    max_selection: int = 100
 
 class DriveCreativeList(BaseModel):
     files: list[DriveCreativeFile] = Field(default_factory=list)
@@ -142,6 +233,28 @@ class CreateDriveReview(BaseModel):
     scene_detection: bool = False
     batch_id: str | None = None
     batch_item_id: str | None = None
+    offer_ids: list[str] = Field(default_factory=lambda: ['acp'], min_length=1, max_length=10)
+
+class ReviewOutcomeCounts(BaseModel):
+    green: int = 0
+    yellow: int = 0
+    orange: int = 0
+    red: int = 0
+
+class ReviewStats(BaseModel):
+    offer_id: str = 'acp'
+    total_reviews: int = 0
+    completed_reviews: int = 0
+    creative_reviews: int = 0
+    copy_only_reviews: int = 0
+    in_progress_reviews: int = 0
+    failed_reviews: int = 0
+    accepted_overrides: int = 0
+    outcomes: ReviewOutcomeCounts = Field(default_factory=ReviewOutcomeCounts)
+
+class DeletedReview(BaseModel):
+    job_id: str
+    deleted_at: int
 
 class CreateBatchItem(BaseModel):
     item_id: str

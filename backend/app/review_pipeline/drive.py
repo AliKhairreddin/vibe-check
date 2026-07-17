@@ -4,7 +4,7 @@ import json
 import os
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -18,6 +18,8 @@ from google.oauth2 import service_account
 DRIVE_API_BASE_URL = 'https://www.googleapis.com/drive/v3'
 DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
+MAX_DRIVE_SELECTION_FILES = 100
+MAX_DRIVE_SELECTION_FOLDERS = 1000
 
 
 class DriveLookupError(RuntimeError):
@@ -113,6 +115,8 @@ class GoogleDriveClient:
         return file
 
     def _is_within_root(self, file: DriveFile) -> bool:
+        if file.file_id == self.root_folder_id:
+            return True
         pending = list(file.parents)
         visited: set[str] = set()
         parent_cache: dict[str, tuple[str, ...]] = {}
@@ -129,6 +133,117 @@ class GoogleDriveClient:
                 parent_cache[parent_id] = parents
             pending.extend(parents)
         return False
+
+    def _list_direct_children(self, folder_id: str) -> list[DriveFile]:
+        params = {
+            'corpora': 'user',
+            'fields': 'nextPageToken,incompleteSearch,files(id,name,mimeType,parents,webViewLink,resourceKey,size,modifiedTime,capabilities(canDownload))',
+            'includeItemsFromAllDrives': 'true',
+            'orderBy': 'name_natural',
+            'pageSize': '1000',
+            'q': f"'{escape_drive_query_value(folder_id)}' in parents and trashed = false",
+            'spaces': 'drive',
+            'supportsAllDrives': 'true',
+        }
+        children: list[DriveFile] = []
+        while True:
+            payload = self._get_json('/files', params)
+            if payload.get('incompleteSearch') is True:
+                raise DriveLookupError('Google Drive returned incomplete folder contents.')
+            files = payload.get('files')
+            if isinstance(files, list):
+                for raw_file in files:
+                    parsed = self._parse_file(raw_file)
+                    if parsed is not None and folder_id in parsed.parents:
+                        children.append(parsed)
+            page_token = payload.get('nextPageToken')
+            if not isinstance(page_token, str) or not page_token:
+                break
+            params['pageToken'] = page_token
+
+        return sorted(
+            children,
+            key=lambda file: (
+                file.mime_type != FOLDER_MIME_TYPE,
+                file.name.casefold(),
+                file.file_id,
+            ),
+        )
+
+    def list_folder_children(self, folder_id: str | None = None) -> list[DriveFile]:
+        selected_folder_id = folder_id or self.root_folder_id
+        selected_folder = self.get_file(selected_folder_id)
+        if selected_folder.mime_type != FOLDER_MIME_TYPE:
+            raise DriveLookupError('The selected Google Drive item is not a folder.')
+        return [
+            child
+            for child in self._list_direct_children(selected_folder_id)
+            if child.mime_type == FOLDER_MIME_TYPE
+            or (child.can_download and self._is_supported_creative(child))
+        ]
+
+    def resolve_selection(
+        self,
+        folder_ids: Sequence[str] = (),
+        file_ids: Sequence[str] = (),
+        max_file_size: int | None = None,
+    ) -> list[DriveFile]:
+        pending_folders: deque[str] = deque()
+        requested_folders: set[str] = set()
+        requested_files: set[str] = set()
+        resolved_files: dict[str, DriveFile] = {}
+
+        for folder_id in folder_ids:
+            if folder_id in requested_folders:
+                continue
+            requested_folders.add(folder_id)
+            folder = self.get_file(folder_id)
+            if folder.mime_type != FOLDER_MIME_TYPE:
+                raise DriveLookupError('The selected Google Drive item is not a folder.')
+            pending_folders.append(folder.file_id)
+
+        def add_creative(file: DriveFile) -> None:
+            if (
+                file.file_id in resolved_files
+                or not file.can_download
+                or not self._is_supported_creative(file)
+                or (
+                    max_file_size is not None
+                    and file.size is not None
+                    and file.size > max_file_size
+                )
+            ):
+                return
+            resolved_files[file.file_id] = file
+            if len(resolved_files) > MAX_DRIVE_SELECTION_FILES:
+                raise DriveLookupError(
+                    f'A Drive selection can contain at most {MAX_DRIVE_SELECTION_FILES} creatives.'
+                )
+
+        for file_id in file_ids:
+            if file_id in requested_files:
+                continue
+            requested_files.add(file_id)
+            file = self.get_file(file_id)
+            if file.mime_type == FOLDER_MIME_TYPE:
+                raise DriveLookupError('The selected Google Drive file is a folder.')
+            add_creative(file)
+
+        visited_folders: set[str] = set()
+        while pending_folders:
+            folder_id = pending_folders.popleft()
+            if folder_id in visited_folders:
+                continue
+            visited_folders.add(folder_id)
+            if len(visited_folders) > MAX_DRIVE_SELECTION_FOLDERS:
+                raise DriveLookupError('The selected Drive folders contain too many nested folders.')
+            for child in self._list_direct_children(folder_id):
+                if child.mime_type == FOLDER_MIME_TYPE:
+                    pending_folders.append(child.file_id)
+                else:
+                    add_creative(child)
+
+        return list(resolved_files.values())
 
     def find_files_by_exact_name(self, file_name: str) -> list[DriveFile]:
         escaped_name = escape_drive_query_value(file_name)
@@ -273,7 +388,10 @@ class GoogleDriveClient:
         resource_key = raw_file.get('resourceKey')
         web_view_link = raw_file.get('webViewLink')
         if not isinstance(web_view_link, str) or not web_view_link:
-            web_view_link = f'https://drive.google.com/file/d/{quote(file_id, safe="")}/view'
+            if mime_type == FOLDER_MIME_TYPE:
+                web_view_link = f'https://drive.google.com/drive/folders/{quote(file_id, safe="")}'
+            else:
+                web_view_link = f'https://drive.google.com/file/d/{quote(file_id, safe="")}/view'
             if isinstance(resource_key, str) and resource_key:
                 web_view_link = f'{web_view_link}?resourcekey={quote(resource_key, safe="")}'
         raw_size = raw_file.get('size')

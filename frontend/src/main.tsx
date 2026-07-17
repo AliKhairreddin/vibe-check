@@ -4,6 +4,7 @@ import {
   QueryClient,
   QueryClientProvider,
   useInfiniteQuery,
+  useMutation,
   useQueries,
   useQuery,
 } from '@tanstack/react-query';
@@ -30,9 +31,10 @@ import {
   ExternalLink,
   FileImage,
   FileJson,
-  FolderOpen,
   HardDrive,
+  History,
   Laptop,
+  LayoutDashboard,
   LoaderCircle,
   Moon,
   RefreshCw,
@@ -40,7 +42,9 @@ import {
   Settings,
   SlidersHorizontal,
   Sun,
+  Trash2,
   Upload,
+  Plus,
 } from 'lucide-react';
 import './index.css';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -73,14 +77,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { DashboardPage } from '@/components/dashboard';
+import { DriveBrowser } from '@/components/drive-browser';
+import { AdminAccessGate } from '@/components/admin-access-gate';
+import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import {
+  deleteReview,
   createDriveReview,
   createReviewBatch,
   createReview,
@@ -89,11 +92,12 @@ import {
   getReport,
   getReviewSources,
   getStatus,
-  listDriveCreatives,
+  listOfferCatalog,
   listReviewHistoryPage,
-  listReviews,
+  resolveDriveSelection,
   reportBatchUploadFailure,
   type OverallStatus,
+  type OfferResult,
   type ResultStatus,
   type ReviewBatch,
   type ReviewHistoryItem,
@@ -124,6 +128,8 @@ const OPENROUTER_MODEL_KEY = 'vibe-check-openrouter-model';
 const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-flash';
 const AD_COPY_PREVIEW_LENGTH = 56;
 const UPLOAD_CONCURRENCY = 4;
+const MAX_BATCH_ITEMS = 100;
+const MAX_OFFERS_PER_REVIEW = 10;
 const SOURCE_LABELS: Record<Finding['source'], string> = {
   ad_copy: 'Ad Copy',
   audio: 'Audio Transcript',
@@ -219,55 +225,62 @@ function AppShell() {
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-4 sm:px-6 lg:px-8">
-        <header className="sticky top-0 z-20 -mx-4 mb-5 border-b bg-background/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-          <nav className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-            <Link to="/" className="flex min-w-0 items-center gap-2">
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg border bg-card">
+    <div className="min-h-screen bg-background text-foreground md:flex">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-sidebar p-4 md:flex">
+        <Link to="/" className="mb-7 flex items-center gap-2 px-2">
+          <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-card shadow-sm">
+            <FileImage className="size-4" />
+          </span>
+          <span className="font-heading text-base font-semibold">Vibe Check</span>
+        </Link>
+        <nav className="grid gap-1" aria-label="Primary navigation">
+          <ShellLink to="/" label="Dashboard" icon={<LayoutDashboard />} />
+          <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
+          <ShellLink to="/history" label="History" icon={<History />} />
+          <ShellLink to="/settings" label="Settings" icon={<Settings />} />
+        </nav>
+        <div className="mt-auto grid gap-3">
+          <div className="rounded-lg border bg-card/60 p-3 text-xs leading-5 text-muted-foreground">
+            Official policy results stay separate from offer-scoped internal overrides.
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            className="justify-start"
+            onClick={toggleTheme}
+          >
+            {theme === 'dark' ? <Sun /> : <Moon />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </Button>
+        </div>
+      </aside>
+      <div className="min-w-0 flex-1">
+        <header className="sticky top-0 z-20 border-b bg-background/90 px-4 py-3 backdrop-blur md:hidden">
+          <div className="flex items-center justify-between gap-3">
+            <Link to="/" className="flex items-center gap-2 font-heading font-semibold">
+              <span className="grid size-8 place-items-center rounded-lg border bg-card">
                 <FileImage className="size-4" />
               </span>
-              <span className="truncate font-heading text-base font-medium">
-                Vibe Check
-              </span>
+              Vibe Check
             </Link>
-            <div className="flex items-center gap-2">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      onClick={toggleTheme}
-                      aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                    />
-                  }
-                >
-                  {theme === 'dark' ? <Sun /> : <Moon />}
-                </TooltipTrigger>
-                <TooltipContent>
-                  {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Link
-                      to="/settings"
-                      className={buttonVariants({ variant: 'outline', size: 'icon' })}
-                      aria-label="Settings"
-                    />
-                  }
-                >
-                  <Settings />
-                </TooltipTrigger>
-                <TooltipContent>Settings</TooltipContent>
-              </Tooltip>
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              {theme === 'dark' ? <Sun /> : <Moon />}
+            </Button>
+          </div>
+          <nav className="mt-3 grid grid-cols-4 gap-1" aria-label="Primary navigation">
+            <ShellLink compact to="/" label="Dashboard" icon={<LayoutDashboard />} />
+            <ShellLink compact to="/reviews/new" label="Review" icon={<Plus />} />
+            <ShellLink compact to="/history" label="History" icon={<History />} />
+            <ShellLink compact to="/settings" label="Settings" icon={<Settings />} />
           </nav>
         </header>
-        <main className="flex-1">
+        <main className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
           <Outlet />
         </main>
       </div>
@@ -275,35 +288,87 @@ function AppShell() {
   );
 }
 
+function ShellLink({
+  compact = false,
+  icon,
+  label,
+  to,
+}: {
+  compact?: boolean;
+  icon: React.ReactNode;
+  label: string;
+  to: '/' | '/reviews/new' | '/history' | '/settings';
+}) {
+  return (
+    <Link
+      to={to}
+      activeOptions={{ exact: to === '/' }}
+      className={cn(
+        'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&_svg]:size-4',
+        compact && 'flex-col gap-1 px-1 py-1.5 text-[11px]'
+      )}
+      activeProps={{
+        className: cn(
+          'bg-sidebar-accent text-sidebar-accent-foreground',
+          compact && 'flex-col gap-1 px-1 py-1.5 text-[11px]'
+        ),
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </Link>
+  );
+}
+
 const rootRoute = createRootRoute({ component: AppShell });
 
-function Home() {
+function ReviewWorkspace() {
   const [sceneDetection, setSceneDetection] = useState(false);
   const [creativeSource, setCreativeSource] = useState<CreativeSource>('drive');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [selectedDriveIds, setSelectedDriveIds] = useState<Set<string>>(new Set());
-  const [driveSearch, setDriveSearch] = useState('');
+  const [selectedDriveFolderIds, setSelectedDriveFolderIds] = useState<Set<string>>(new Set());
+  const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<Set<string>>(new Set());
+  const [selectedOfferIds, setSelectedOfferIds] = useState<Set<string>>(new Set(['acp']));
+  const offerSelectionInitialized = React.useRef(false);
   const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const adCopyLines = useMemo(() => splitAdCopyLines(adCopyText), [adCopyText]);
 
-  const driveFilesQuery = useQuery({
-    queryKey: ['drive', 'creatives'],
-    queryFn: listDriveCreatives,
-    enabled: creativeSource === 'drive',
+  const selectedFolderList = useMemo(
+    () => Array.from(selectedDriveFolderIds).sort(),
+    [selectedDriveFolderIds]
+  );
+  const selectedFileList = useMemo(
+    () => Array.from(selectedDriveFileIds).sort(),
+    [selectedDriveFileIds]
+  );
+  const driveSelectionQuery = useQuery({
+    queryKey: ['drive', 'selection', selectedFolderList, selectedFileList],
+    queryFn: () => resolveDriveSelection(selectedFolderList, selectedFileList),
+    enabled:
+      creativeSource === 'drive' &&
+      (selectedFolderList.length > 0 || selectedFileList.length > 0),
     staleTime: 60_000,
   });
-  const filteredDriveFiles = useMemo(() => {
-    const query = driveSearch.trim().toLocaleLowerCase();
-    const files = driveFilesQuery.data ?? [];
-    return query ? files.filter((file) => file.name.toLocaleLowerCase().includes(query)) : files;
-  }, [driveFilesQuery.data, driveSearch]);
-  const selectedDriveFiles = useMemo(
-    () => (driveFilesQuery.data ?? []).filter((file) => selectedDriveIds.has(file.file_id)),
-    [driveFilesQuery.data, selectedDriveIds]
-  );
+  const offersQuery = useQuery({
+    queryKey: ['offers'],
+    queryFn: listOfferCatalog,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (offerSelectionInitialized.current || !offersQuery.data) return;
+    const enabledOffers = offersQuery.data.filter((offer) => offer.enabled);
+    const defaultOffer = enabledOffers.find((offer) => offer.is_default)
+      ?? enabledOffers.find((offer) => offer.offer_id === 'acp')
+      ?? enabledOffers[0];
+    if (defaultOffer) setSelectedOfferIds(new Set([defaultOffer.offer_id]));
+    offerSelectionInitialized.current = true;
+  }, [offersQuery.data]);
+
+  const selectedDriveFiles = driveSelectionQuery.data?.files ?? [];
   const creativeCount = creativeSource === 'drive' ? selectedDriveFiles.length : selectedFiles.length;
 
   useEffect(() => {
@@ -315,17 +380,6 @@ function Home() {
     }
     window.localStorage.removeItem(ACTIVE_BATCH_KEY);
   }, [batchItems]);
-
-  const historyQuery = useQuery({
-    queryKey: ['reviews', 'history'],
-    queryFn: () => listReviews(50),
-    refetchInterval: (query) => {
-      const reviews = query.state.data;
-      return reviews?.some((review) => !review.report_ready && review.status !== 'failed')
-        ? 3000
-        : false;
-    },
-  });
 
   const submittedItems = batchItems.filter(
     (item): item is BatchItem & { jobId: string } => Boolean(item.jobId)
@@ -383,13 +437,39 @@ function Home() {
     const creatives = creativeSource === 'drive' ? driveFiles : files;
     const copyOnly = creatives.length === 0;
 
+    if (
+      creativeSource === 'drive' &&
+      (selectedDriveFolderIds.size || selectedDriveFileIds.size) &&
+      driveSelectionQuery.isFetching
+    ) {
+      setSubmitError('The selected Drive folders are still being resolved. Try again in a moment.');
+      return;
+    }
+    if (creativeSource === 'drive' && driveSelectionQuery.error) {
+      setSubmitError(errorMessage(driveSelectionQuery.error));
+      return;
+    }
+    if (!selectedOfferIds.size) {
+      setSubmitError('Select at least one offer to review against.');
+      return;
+    }
+    if (selectedOfferIds.size > MAX_OFFERS_PER_REVIEW) {
+      setSubmitError(`Select no more than ${MAX_OFFERS_PER_REVIEW} offers per review.`);
+      return;
+    }
+
     if (!creatives.length && !adCopyLines.length) {
       setSubmitError('Choose at least one creative or enter ad copy to review.');
+      return;
+    }
+    if ((copyOnly ? adCopyLines.length : creatives.length) > MAX_BATCH_ITEMS) {
+      setSubmitError(`Select no more than ${MAX_BATCH_ITEMS} creatives or copy lines per batch.`);
       return;
     }
 
     const sharedFields = new FormData(form);
     sharedFields.set('model', loadOpenRouterModel());
+    sharedFields.set('offer_ids', JSON.stringify(Array.from(selectedOfferIds)));
     const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
     const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
@@ -493,7 +573,7 @@ function Home() {
       })));
     } finally {
       setIsSubmitting(false);
-      void queryClient.invalidateQueries({ queryKey: ['reviews', 'history'] });
+      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
     }
   }
 
@@ -502,7 +582,7 @@ function Home() {
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
         <Card>
         <CardHeader>
-          <CardTitle as="h1" className="text-xl">Review workspace</CardTitle>
+          <CardTitle as="h1" className="text-xl">New review</CardTitle>
           <CardDescription>
             Select creatives from Google Drive, upload from your computer, or review copy by itself.
           </CardDescription>
@@ -515,13 +595,75 @@ function Home() {
         <CardContent>
           <form onSubmit={submit} className="grid gap-5">
             <div className="grid gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label>Offers to evaluate</Label>
+                <Badge variant="outline">
+                  {selectedOfferIds.size} / {MAX_OFFERS_PER_REVIEW} selected
+                </Badge>
+              </div>
+              {offersQuery.isLoading ? (
+                <Skeleton className="h-16" />
+              ) : offersQuery.error ? (
+                <Alert variant="destructive">
+                  <AlertCircle />
+                  <AlertTitle>Offers unavailable</AlertTitle>
+                  <AlertDescription>{errorMessage(offersQuery.error)}</AlertDescription>
+                </Alert>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(offersQuery.data ?? []).filter((offer) => offer.enabled).map((offer) => {
+                    const selected = selectedOfferIds.has(offer.offer_id);
+                    const atOfferLimit = !selected && selectedOfferIds.size >= MAX_OFFERS_PER_REVIEW;
+                    return (
+                      <button
+                        key={offer.offer_id}
+                        type="button"
+                        aria-pressed={selected}
+                        disabled={atOfferLimit}
+                        title={atOfferLimit ? `A review can include up to ${MAX_OFFERS_PER_REVIEW} offers.` : undefined}
+                        className={cn(
+                          'flex items-center gap-3 rounded-lg border bg-background p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                          selected && 'border-primary/50 bg-primary/5'
+                        )}
+                        onClick={() => setSelectedOfferIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(offer.offer_id)) {
+                            if (next.size > 1) next.delete(offer.offer_id);
+                          } else if (next.size < MAX_OFFERS_PER_REVIEW) {
+                            next.add(offer.offer_id);
+                          }
+                          return next;
+                        })}
+                      >
+                        <span className={cn(
+                          'grid size-5 shrink-0 place-items-center rounded border',
+                          selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'
+                        )}>
+                          {selected ? <Check className="size-3.5" /> : null}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium">{offer.display_name}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Guidelines v{offer.version} · {offer.override_count} overrides
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs leading-5 text-muted-foreground">
+                Evidence is extracted once, then evaluated independently for up to {MAX_OFFERS_PER_REVIEW} selected offers.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
               <Label>Ad creatives</Label>
-              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="tablist" aria-label="Creative source">
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative source">
                 <Button
                   type="button"
                   variant={creativeSource === 'drive' ? 'secondary' : 'ghost'}
-                  aria-selected={creativeSource === 'drive'}
-                  role="tab"
+                  aria-pressed={creativeSource === 'drive'}
                   onClick={() => {
                     setCreativeSource('drive');
                     setSelectedFiles([]);
@@ -533,11 +675,11 @@ function Home() {
                 <Button
                   type="button"
                   variant={creativeSource === 'computer' ? 'secondary' : 'ghost'}
-                  aria-selected={creativeSource === 'computer'}
-                  role="tab"
+                  aria-pressed={creativeSource === 'computer'}
                   onClick={() => {
                     setCreativeSource('computer');
-                    setSelectedDriveIds(new Set());
+                    setSelectedDriveFolderIds(new Set());
+                    setSelectedDriveFileIds(new Set());
                   }}
                 >
                   <Laptop />
@@ -546,126 +688,28 @@ function Home() {
               </div>
 
               {creativeSource === 'drive' ? (
-                <div className="grid gap-3 rounded-lg border bg-muted/10 p-3" role="tabpanel">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <div className="relative flex-1">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={driveSearch}
-                        onChange={(event) => setDriveSearch(event.currentTarget.value)}
-                        className="pl-8"
-                        placeholder="Search creative names"
-                        aria-label="Search Google Drive creatives"
-                      />
+                <div>
+                  <DriveBrowser
+                    selectedFolderIds={selectedDriveFolderIds}
+                    selectedFileIds={selectedDriveFileIds}
+                    onSelectionChange={(folders, files) => {
+                      setSelectedDriveFolderIds(folders);
+                      setSelectedDriveFileIds(files);
+                    }}
+                  />
+                  {(selectedDriveFolderIds.size || selectedDriveFileIds.size) ? (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+                      {driveSelectionQuery.isFetching ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                      {driveSelectionQuery.isFetching
+                        ? 'Resolving selected folders…'
+                        : driveSelectionQuery.error
+                          ? errorMessage(driveSelectionQuery.error)
+                          : `${selectedDriveFiles.length} deduplicated creative${selectedDriveFiles.length === 1 ? '' : 's'} ready`}
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={!filteredDriveFiles.length}
-                        onClick={() => setSelectedDriveIds((current) => {
-                          const next = new Set(current);
-                          filteredDriveFiles.forEach((file) => next.add(file.file_id));
-                          return next;
-                        })}
-                      >
-                        Select shown
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={!selectedDriveIds.size}
-                        onClick={() => setSelectedDriveIds(new Set())}
-                      >
-                        Clear
-                      </Button>
-                    </div>
-                  </div>
-
-                  {driveFilesQuery.isLoading ? (
-                    <div className="flex min-h-28 items-center justify-center gap-2 text-sm text-muted-foreground">
-                      <LoaderCircle className="size-4 animate-spin" />
-                      Loading shared Drive creatives…
-                    </div>
-                  ) : driveFilesQuery.error ? (
-                    <Alert variant="destructive">
-                      <AlertCircle />
-                      <AlertTitle>Could not load Google Drive</AlertTitle>
-                      <AlertDescription>{errorMessage(driveFilesQuery.error)}</AlertDescription>
-                      <AlertAction>
-                        <Button type="button" size="xs" variant="outline" onClick={() => void driveFilesQuery.refetch()}>
-                          <RefreshCw />
-                          Retry
-                        </Button>
-                      </AlertAction>
-                    </Alert>
-                  ) : filteredDriveFiles.length ? (
-                    <div className="grid max-h-72 gap-1 overflow-y-auto pr-1" aria-label="Google Drive creative files">
-                      {filteredDriveFiles.map((file) => {
-                        const selected = selectedDriveIds.has(file.file_id);
-                        return (
-                          <div
-                            key={file.file_id}
-                            className={cn(
-                              'flex items-center gap-2 rounded-lg border bg-background transition-colors',
-                              selected && 'border-primary/50 bg-primary/5'
-                            )}
-                          >
-                            <button
-                              type="button"
-                              aria-pressed={selected}
-                              className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
-                              onClick={() => setSelectedDriveIds((current) => {
-                                const next = new Set(current);
-                                if (next.has(file.file_id)) next.delete(file.file_id);
-                                else next.add(file.file_id);
-                                return next;
-                              })}
-                            >
-                              <span className={cn(
-                                'grid size-5 shrink-0 place-items-center rounded border',
-                                selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'
-                              )}>
-                                {selected ? <Check className="size-3.5" /> : null}
-                              </span>
-                              <FileImage className="size-4 shrink-0 text-muted-foreground" />
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-sm font-medium">{file.name}</span>
-                                <span className="block text-xs text-muted-foreground">
-                                  {file.size ? formatBytes(file.size) : 'Size unavailable'}
-                                  {file.modified_time ? ` · ${formatDriveDate(file.modified_time)}` : ''}
-                                </span>
-                              </span>
-                            </button>
-                            <a
-                              href={file.web_view_link}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label={`Open ${file.name} in Google Drive`}
-                              className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'mr-1')}
-                            >
-                              <ExternalLink />
-                            </a>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="grid min-h-28 place-items-center rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-                      <div className="grid gap-1">
-                        <FolderOpen className="mx-auto size-5" />
-                        <p>{driveSearch ? 'No creatives match this search.' : 'No supported creatives were found in this Drive folder.'}</p>
-                      </div>
-                    </div>
-                  )}
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    Select MP4, JPG, PNG, or WebP files. The service imports them directly and keeps their exact Drive links.
-                  </p>
+                  ) : null}
                 </div>
               ) : (
-                <div role="tabpanel" className="grid gap-2">
+                <div className="grid gap-2">
                   <Input
                     id="creative"
                     multiple
@@ -872,12 +916,6 @@ function Home() {
         </Card>
       </div>
 
-      <HistoryCard
-        error={historyQuery.error}
-        isLoading={historyQuery.isLoading}
-        onRetry={() => void historyQuery.refetch()}
-        reviews={historyQuery.data ?? []}
-      />
     </div>
   );
 }
@@ -1007,6 +1045,24 @@ function HistoryCard({
   reviews: ReviewHistoryItem[];
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
+  const deleteMutation = useMutation({
+    mutationFn: deleteReview,
+    onSuccess: (deleted) => {
+      setDeleteCandidate(null);
+      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+      queryClient.removeQueries({ queryKey: ['status', deleted.job_id] });
+      queryClient.removeQueries({ queryKey: ['report', deleted.job_id] });
+      queryClient.removeQueries({ queryKey: ['source', deleted.job_id] });
+      try {
+        const active = loadActiveBatch().filter((item) => item.jobId !== deleted.job_id);
+        if (active.length) window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(active));
+        else window.localStorage.removeItem(ACTIVE_BATCH_KEY);
+      } catch {
+        // History removal still succeeded if local progress cleanup is unavailable.
+      }
+    },
+  });
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
   const filteredReviews = useMemo(() => {
     if (!normalizedSearch) return reviews;
@@ -1023,6 +1079,7 @@ function HistoryCard({
         review.creative_result ? formatStatus(review.creative_result) : null,
         review.ad_copy_result,
         review.ad_copy_result ? formatStatus(review.ad_copy_result) : null,
+        ...(review.offer_ids ?? []),
         formatDateTime(review.created_at),
       ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch))
     );
@@ -1061,6 +1118,27 @@ function HistoryCard({
         </CardAction>
       </CardHeader>
       <CardContent>
+        {deleteMutation.error ? (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle />
+            <AlertTitle>Could not remove review</AlertTitle>
+            <AlertDescription>
+              {errorMessage(deleteMutation.error)}{' '}
+              <Link to="/settings" className="font-medium underline underline-offset-4">
+                Unlock admin access in Settings.
+              </Link>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {deleteCandidate ? (
+          <Alert className="mb-4">
+            <Trash2 />
+            <AlertTitle>Remove this review from Vibe Check?</AlertTitle>
+            <AlertDescription>
+              It will disappear from history and dashboard stats. The original Google Drive file or uploaded source is not deleted.
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {!error && !isLoading && reviews.length ? (
           <div className="mb-4 flex items-center gap-2">
             <div className="relative w-full max-w-md">
@@ -1111,7 +1189,8 @@ function HistoryCard({
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead>Creative</TableHead>
+                  <TableHead>Review</TableHead>
+                  <TableHead>Offers</TableHead>
                   <TableHead>Uploaded</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Creative Result</TableHead>
@@ -1126,6 +1205,18 @@ function HistoryCard({
                       <span className="block truncate font-medium">
                         {review.file_name || review.job_id}
                       </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex min-w-max items-center gap-1">
+                        <Badge variant="outline">
+                          {(review.primary_offer_id ?? review.offer_ids?.[0] ?? 'acp').toUpperCase()}
+                        </Badge>
+                        {(review.offer_ids?.length ?? 0) > 1 ? (
+                          <span className="text-xs text-muted-foreground">
+                            +{(review.offer_ids?.length ?? 1) - 1}
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="min-w-40 text-muted-foreground">
                       {formatDateTime(review.created_at)}
@@ -1158,24 +1249,64 @@ function HistoryCard({
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      {review.report_ready ? (
-                        <Link
-                          to="/reviews/$jobId/report"
-                          params={{ jobId: review.job_id }}
-                          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
-                        >
-                          <FileJson data-icon="inline-start" />
-                          Open report
-                        </Link>
-                      ) : (
-                        <Link
-                          to="/reviews/$jobId"
-                          params={{ jobId: review.job_id }}
-                          className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
-                        >
-                          View job
-                        </Link>
-                      )}
+                      <div className="flex min-w-max justify-end gap-1">
+                        {deleteCandidate === review.job_id ? (
+                          <>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={deleteMutation.isPending}
+                              onClick={() => setDeleteCandidate(null)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="sm"
+                              disabled={deleteMutation.isPending}
+                              onClick={() => deleteMutation.mutate(review.job_id)}
+                            >
+                              {deleteMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
+                              Remove
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            {review.report_ready ? (
+                              <Link
+                                to="/reviews/$jobId/report"
+                                params={{ jobId: review.job_id }}
+                                className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                              >
+                                <FileJson data-icon="inline-start" />
+                                Open report
+                              </Link>
+                            ) : (
+                              <Link
+                                to="/reviews/$jobId"
+                                params={{ jobId: review.job_id }}
+                                className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
+                              >
+                                View job
+                              </Link>
+                            )}
+                            {allHistory && (review.report_ready || review.status === 'failed') ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`Remove ${review.file_name || review.job_id} from history`}
+                                title="Remove from history and dashboard stats"
+                                onClick={() => setDeleteCandidate(review.job_id)}
+                              >
+                                <Trash2 />
+                              </Button>
+                            ) : null}
+                          </>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1300,15 +1431,23 @@ function ProgressPage() {
 
 function ReportPage() {
   const { jobId } = useParams({ from: '/reviews/$jobId/report' });
+  const [selectedOfferId, setSelectedOfferId] = useState('');
   const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId) });
   const sourceQuery = useQuery({
     queryKey: ['source', jobId],
     queryFn: () => getReviewSources(jobId),
     enabled: Boolean(query.data),
   });
+  const offerResults: OfferResult[] = query.data
+    ? query.data.offer_results?.length
+      ? query.data.offer_results
+      : [query.data]
+    : [];
+  const activeOffer = offerResults.find((result) => result.offer_id === selectedOfferId)
+    ?? offerResults[0];
   const column = createColumnHelper<Finding>();
   const table = useReactTable({
-    data: query.data?.findings ?? [],
+    data: activeOffer?.findings ?? [],
     columns: [
       column.accessor('severity', {
         header: 'Severity',
@@ -1325,6 +1464,23 @@ function ReportPage() {
       }),
       column.accessor('evidence', { header: 'Evidence' }),
       column.accessor('policy_reason', { header: 'Policy reason' }),
+      column.accessor('internal_override', {
+        header: 'Internal treatment',
+        cell: (info) => {
+          const override = info.getValue();
+          return override ? (
+            <div className="grid min-w-48 gap-1">
+              <Badge variant="secondary" className="w-fit">
+                {formatStatus(override.disposition)}
+              </Badge>
+              <span className="text-xs font-medium">{override.title || override.override_id}</span>
+              {override.rationale ? (
+                <span className="text-xs text-muted-foreground">{override.rationale}</span>
+              ) : null}
+            </div>
+          ) : <span className="text-sm text-muted-foreground">No override</span>;
+        },
+      }),
       column.accessor('suggested_fix', { header: 'Suggested fix' }),
     ],
     getCoreRowModel: getCoreRowModel(),
@@ -1362,9 +1518,19 @@ function ReportPage() {
     );
   }
 
+  if (!activeOffer) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle />
+        <AlertTitle>Offer results unavailable</AlertTitle>
+        <AlertDescription>This report does not contain a readable offer result.</AlertDescription>
+      </Alert>
+    );
+  }
+
   const sourceResults = [
-    { label: 'Creative', result: query.data.source_results?.creative },
-    { label: 'Ad copy', result: query.data.source_results?.ad_copy },
+    { label: 'Creative', result: activeOffer.source_results?.creative },
+    { label: 'Ad copy', result: activeOffer.source_results?.ad_copy },
   ].filter((item): item is {
     label: string;
     result: NonNullable<typeof item.result>;
@@ -1378,21 +1544,52 @@ function ReportPage() {
 
   return (
     <div className="grid gap-4">
+      {offerResults.length > 1 ? (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Offer result selection">
+          {offerResults.map((result) => (
+            <Button
+              key={result.offer_id}
+              type="button"
+              size="sm"
+              variant={result.offer_id === activeOffer.offer_id ? 'default' : 'outline'}
+              aria-pressed={result.offer_id === activeOffer.offer_id}
+              onClick={() => setSelectedOfferId(result.offer_id)}
+            >
+              {result.offer_name}
+              <StatusBadge status={result.overall_status} />
+            </Button>
+          ))}
+        </div>
+      ) : null}
       <Card>
         <CardHeader>
-          <CardTitle as="h1" className="text-xl">Review summary</CardTitle>
-          <CardDescription>Review job {jobId}</CardDescription>
+          <CardTitle as="h1" className="text-xl">{activeOffer.offer_name} review summary</CardTitle>
+          <CardDescription>
+            Review job {jobId}{activeOffer.guideline_version ? ` · guidelines v${activeOffer.guideline_version}` : ''}
+          </CardDescription>
           <CardAction>
-            <StatusBadge status={query.data.overall_status} />
+            <div className="flex flex-wrap justify-end gap-2">
+              <StatusBadge status={activeOffer.overall_status} />
+              <InternalDispositionBadge disposition={activeOffer.internal_disposition} />
+            </div>
           </CardAction>
         </CardHeader>
         <CardContent className="grid gap-4">
           <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-            {query.data.summary}
+            {activeOffer.summary}
           </p>
           <p className="text-sm font-medium">
-            {resultDescription(query.data.overall_status)}
+            {resultDescription(activeOffer.overall_status)}
           </p>
+          {activeOffer.internal_disposition === 'accepted_with_override' ? (
+            <Alert>
+              <CheckCircle2 />
+              <AlertTitle>Accepted internally for {activeOffer.offer_name}</AlertTitle>
+              <AlertDescription>
+                The official guideline finding remains in this report. Every accepted exception is identified in the Internal treatment column below.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {sourceResults.length ? (
             <div className="grid gap-3 sm:grid-cols-2">
               {sourceResults.map(({ label, result }) => (
@@ -1456,7 +1653,7 @@ function ReportPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-xl">Findings</CardTitle>
-          <CardDescription>{query.data.findings.length} findings returned</CardDescription>
+          <CardDescription>{activeOffer.findings.length} official-policy findings returned</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
@@ -1505,10 +1702,10 @@ function ReportPage() {
             <CardTitle className="text-xl">Safer rewrites</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 text-sm leading-6 text-muted-foreground">
-            <p>{query.data.safe_rewrite.ad_copy || 'No copy rewrite returned.'}</p>
-            {query.data.safe_rewrite.onscreen_text.length ? (
+            <p>{activeOffer.safe_rewrite.ad_copy || 'No copy rewrite returned.'}</p>
+            {activeOffer.safe_rewrite.onscreen_text.length ? (
               <ul className="grid list-disc gap-2 pl-5">
-                {query.data.safe_rewrite.onscreen_text.map((text, index) => (
+                {activeOffer.safe_rewrite.onscreen_text.map((text, index) => (
                   <li key={`${text}-${index}`}>{text}</li>
                 ))}
               </ul>
@@ -1522,7 +1719,7 @@ function ReportPage() {
           </CardHeader>
           <CardContent>
             <ul className="grid list-disc gap-2 pl-5 text-sm leading-6 text-muted-foreground">
-              {query.data.limitations.map((limitation, index) => (
+              {activeOffer.limitations.map((limitation, index) => (
                 <li key={`${limitation}-${index}`}>{limitation}</li>
               ))}
             </ul>
@@ -1570,7 +1767,7 @@ function BatchPage() {
           {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
         </CardDescription>
         <CardAction>
-          <Link to="/" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+          <Link to="/reviews/new" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
             Back to workspace
           </Link>
         </CardAction>
@@ -1642,11 +1839,20 @@ function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto grid max-w-3xl gap-4">
+    <div className="mx-auto grid max-w-6xl gap-4">
+      <section className="grid gap-1">
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
+        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          Manage offer-specific official guidelines, internal overrides, and review runtime defaults.
+        </p>
+      </section>
+      <AdminAccessGate>
+        <OfferSettingsPanel />
+      </AdminAccessGate>
       <Card>
         <CardHeader>
-          <CardTitle as="h1" className="text-xl">Settings</CardTitle>
-          <CardDescription>Runtime configuration for deployed reviews.</CardDescription>
+          <CardTitle className="text-xl">Runtime configuration</CardTitle>
+          <CardDescription>Model selection for reviews started from this browser.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-5 text-sm leading-6 text-muted-foreground">
           <form className="grid gap-3" onSubmit={saveSettings}>
@@ -1716,6 +1922,24 @@ function ResultBadge({ status }: { status: OverallStatus }) {
   );
 }
 
+function InternalDispositionBadge({
+  disposition,
+}: {
+  disposition?: OfferResult['internal_disposition'];
+}) {
+  if (!disposition || disposition === 'clear') return null;
+  if (disposition === 'accepted_with_override') {
+    return (
+      <Badge variant="secondary" title="Official findings are accepted under saved internal guidance.">
+        <CheckCircle2 />
+        Accepted internally
+      </Badge>
+    );
+  }
+  if (disposition === 'human_review') return <Badge variant="outline">Internal review needed</Badge>;
+  return <Badge variant="destructive">Action required</Badge>;
+}
+
 function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
   if (severity === 'high') return <Badge variant="destructive">High</Badge>;
   if (severity === 'medium') return <Badge variant="secondary">Medium</Badge>;
@@ -1747,6 +1971,7 @@ function buildReviewForm(
     'notes',
     'manual_transcript',
     'model',
+    'offer_ids',
     'frame_interval_seconds',
   ]) {
     if (key === 'ad_copy' && adCopyOverride !== undefined) {
@@ -1777,6 +2002,15 @@ function buildDriveReviewInput(
     return typeof field === 'string' ? field : '';
   };
   const frameInterval = Number(value('frame_interval_seconds'));
+  let offerIds = ['acp'];
+  try {
+    const parsed = JSON.parse(value('offer_ids'));
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+      offerIds = parsed;
+    }
+  } catch {
+    // The backend also defaults legacy submissions to ACP.
+  }
   return {
     file_id: fileId,
     ad_copy: value('ad_copy'),
@@ -1786,6 +2020,7 @@ function buildDriveReviewInput(
     model: value('model'),
     frame_interval_seconds: Number.isFinite(frameInterval) ? frameInterval : 1,
     scene_detection: sceneDetection,
+    offer_ids: offerIds,
     ...(batchId && batchItemId ? { batch_id: batchId, batch_item_id: batchItemId } : {}),
   };
 }
@@ -1865,12 +2100,6 @@ function phaseMessage(phase: UploadPhase, kind: BatchItem['kind']) {
   return kind === 'ad_copy' ? 'Pending submission' : 'Pending upload';
 }
 
-function formatDriveDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Modified date unavailable';
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
 function formatStatus(status: string) {
   if (status in STATUS_LABELS) return STATUS_LABELS[status as keyof typeof STATUS_LABELS];
   return status
@@ -1945,7 +2174,12 @@ function batchTypeLabel(mediaKind: 'video' | 'image' | 'copy_only') {
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: Home,
+  component: DashboardPage,
+});
+const newReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reviews/new',
+  component: ReviewWorkspace,
 });
 const progressRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1975,6 +2209,7 @@ const settingsRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
+    newReviewRoute,
     historyRoute,
     batchRoute,
     progressRoute,
@@ -1985,8 +2220,6 @@ const router = createRouter({
 
 createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <RouterProvider router={router} />
-    </TooltipProvider>
+    <RouterProvider router={router} />
   </QueryClientProvider>
 );

@@ -12,6 +12,8 @@ export type Status = {
   batch_item_id?: string | null;
   created_at?: number | null;
   updated_at?: number | null;
+  offer_ids?: string[];
+  primary_offer_id?: string | null;
 };
 
 export type ReviewSource = {
@@ -37,6 +39,29 @@ export type DriveCreativeFile = {
   web_view_link: string;
 };
 
+export type DriveBrowserItem = DriveCreativeFile & {
+  kind: 'folder' | 'creative';
+  selectable: boolean;
+  disabled_reason?: string | null;
+};
+
+export type DriveFolder = {
+  folder_id: string;
+  name: string;
+  web_view_link: string;
+};
+
+export type DriveBrowserResult = {
+  current_folder: DriveFolder;
+  items: DriveBrowserItem[];
+  max_selection: number;
+};
+
+export type DriveSelectionResult = {
+  files: DriveCreativeFile[];
+  max_selection: number;
+};
+
 export type CreateDriveReviewInput = {
   file_id: string;
   ad_copy: string;
@@ -48,6 +73,39 @@ export type CreateDriveReviewInput = {
   scene_detection: boolean;
   batch_id?: string;
   batch_item_id?: string;
+  offer_ids: string[];
+};
+
+export type OfferOverride = {
+  override_id: string;
+  title: string;
+  guidance: string;
+  rationale: string;
+  enabled: boolean;
+};
+
+export type OfferProfile = {
+  offer_id: string;
+  display_name: string;
+  official_guidelines: string;
+  internal_overrides: OfferOverride[];
+  enabled: boolean;
+  is_default: boolean;
+  version: number;
+  created_at?: number | null;
+  updated_at?: number | null;
+};
+
+export type OfferProfileInput = Pick<
+  OfferProfile,
+  'display_name' | 'official_guidelines' | 'internal_overrides' | 'enabled' | 'is_default'
+>;
+
+export type OfferCatalogItem = Pick<
+  OfferProfile,
+  'offer_id' | 'display_name' | 'enabled' | 'is_default' | 'version'
+> & {
+  override_count: number;
 };
 
 export type Finding = {
@@ -59,13 +117,22 @@ export type Finding = {
   policy_reason: string;
   suggested_fix: string;
   confidence: 'low' | 'medium' | 'high';
+  internal_override?: {
+    override_id: string;
+    title: string;
+    disposition: 'accepted' | 'partial' | 'uncertain';
+    rationale: string;
+  } | null;
 };
 
 export type OverallStatus = 'green' | 'yellow' | 'orange' | 'red';
 export type LegacyOverallStatus = 'pass' | 'needs_review' | 'likely_violation';
 export type ResultStatus = OverallStatus | LegacyOverallStatus;
 
-export type Report = {
+export type OfferResult = {
+  offer_id: string;
+  offer_name: string;
+  guideline_version?: number | null;
   overall_status: ResultStatus;
   summary: string;
   source_results?: {
@@ -81,6 +148,14 @@ export type Report = {
   findings: Finding[];
   safe_rewrite: { ad_copy: string; onscreen_text: string[] };
   limitations: string[];
+  policy_sources?: string[];
+  internal_disposition?: 'clear' | 'accepted_with_override' | 'action_required' | 'human_review';
+};
+
+export type Report = OfferResult & {
+  schema_version?: number;
+  primary_offer_id?: string | null;
+  offer_results?: OfferResult[];
 };
 
 export type ReviewHistoryItem = Status & {
@@ -119,6 +194,23 @@ export type CreateReviewBatchInput = {
   items: Array<Pick<ReviewBatchItem, 'item_id' | 'file_name' | 'media_kind'>>;
 };
 
+export type ReviewStats = {
+  offer_id: string;
+  total_reviews: number;
+  completed_reviews: number;
+  creative_reviews: number;
+  copy_only_reviews: number;
+  in_progress_reviews: number;
+  failed_reviews: number;
+  accepted_overrides: number;
+  outcomes: Record<OverallStatus, number>;
+};
+
+export type DeletedReview = {
+  job_id: string;
+  deleted_at: number;
+};
+
 type ChunkedUpload = {
   upload_id: string;
   chunk_size: number;
@@ -127,6 +219,25 @@ type ChunkedUpload = {
 
 const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 const MAX_CHUNK_ATTEMPTS = 3;
+const ADMIN_PASSWORD_KEY = 'vibe-check-admin-password';
+
+export function getAdminPassword(): string {
+  if (typeof window === 'undefined') return '';
+  return window.sessionStorage.getItem(ADMIN_PASSWORD_KEY) ?? '';
+}
+
+export function setAdminPassword(password: string): void {
+  if (typeof window === 'undefined') return;
+  const normalized = password.trim();
+  if (normalized) window.sessionStorage.setItem(ADMIN_PASSWORD_KEY, normalized);
+  else window.sessionStorage.removeItem(ADMIN_PASSWORD_KEY);
+}
+
+function adminHeaders(headers?: HeadersInit, password = getAdminPassword()): Headers {
+  const result = new Headers(headers);
+  if (password) result.set('x-admin-password', password);
+  return result;
+}
 
 function apiErrorMessage(body: string, status: number): string {
   const fallback = `Request failed with status ${status}`;
@@ -216,6 +327,24 @@ export async function listDriveCreatives(): Promise<DriveCreativeFile[]> {
   return response.files;
 }
 
+export async function browseDriveFolder(folderId?: string): Promise<DriveBrowserResult> {
+  const params = new URLSearchParams();
+  if (folderId) params.set('folder_id', folderId);
+  const query = params.toString();
+  return requestJson<DriveBrowserResult>(`/api/drive/browse${query ? `?${query}` : ''}`);
+}
+
+export async function resolveDriveSelection(
+  folderIds: string[],
+  fileIds: string[]
+): Promise<DriveSelectionResult> {
+  return requestJson<DriveSelectionResult>('/api/drive/selection/resolve', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ folder_ids: folderIds, file_ids: fileIds }),
+  });
+}
+
 export async function createDriveReview(input: CreateDriveReviewInput): Promise<Status> {
   return requestJson<Status>('/api/drive/reviews', {
     method: 'POST',
@@ -300,6 +429,54 @@ export async function getStatus(id: string): Promise<Status> {
 
 export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
   return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
+}
+
+export async function getReviewStats(offerId = 'acp'): Promise<ReviewStats> {
+  const params = new URLSearchParams({ offer_id: offerId });
+  return requestJson<ReviewStats>(`/api/reviews/stats?${params}`);
+}
+
+export async function deleteReview(id: string): Promise<DeletedReview> {
+  return requestJson<DeletedReview>(`/api/reviews/${id}`, {
+    method: 'DELETE',
+    headers: adminHeaders(),
+  });
+}
+
+export async function verifyAdminPassword(password: string): Promise<void> {
+  await requestJson<{ authorized: boolean }>('/api/admin/check', {
+    headers: adminHeaders(undefined, password),
+  });
+}
+
+export async function listOfferCatalog(): Promise<OfferCatalogItem[]> {
+  const response = await requestJson<{ offers: OfferCatalogItem[] }>('/api/offers/catalog');
+  return response.offers;
+}
+
+export async function listOfferProfiles(): Promise<OfferProfile[]> {
+  const response = await requestJson<{ offers: OfferProfile[] }>('/api/offers', {
+    headers: adminHeaders(),
+  });
+  return response.offers;
+}
+
+export async function saveOfferProfile(
+  offerId: string,
+  input: OfferProfileInput
+): Promise<OfferProfile> {
+  return requestJson<OfferProfile>(`/api/offers/${encodeURIComponent(offerId)}`, {
+    method: 'PUT',
+    headers: adminHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function disableOfferProfile(offerId: string): Promise<OfferProfile> {
+  return requestJson<OfferProfile>(`/api/offers/${encodeURIComponent(offerId)}`, {
+    method: 'DELETE',
+    headers: adminHeaders(),
+  });
 }
 
 export async function listReviewHistoryPage(

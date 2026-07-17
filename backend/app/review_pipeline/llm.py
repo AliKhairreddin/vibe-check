@@ -3,8 +3,8 @@ import json, os, re
 from typing import Any
 
 import httpx
-from .models import ComplianceReport
-from .prompts import SYSTEM_PROMPT, build_user_prompt
+from .models import ComplianceReport, OverrideAnnotationSet
+from .prompts import OVERRIDE_SYSTEM_PROMPT, SYSTEM_PROMPT, build_override_user_prompt, build_user_prompt
 
 STATUS_ALIASES = {
     'green': 'green',
@@ -282,6 +282,25 @@ def _optional_str(value: Any) -> str | None:
     return str(value)
 
 
+def _internal_override(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    override_id = _first_present(value, ('override_id', 'overrideId', 'id'))
+    if not isinstance(override_id, str) or not override_id.strip():
+        return None
+    disposition = _clean_token(
+        _first_present(value, ('disposition', 'treatment', 'status')) or 'uncertain'
+    )
+    if disposition not in {'accepted', 'partial', 'uncertain'}:
+        disposition = 'uncertain'
+    return {
+        'override_id': override_id.strip(),
+        'title': str(_first_present(value, ('title', 'name')) or ''),
+        'disposition': disposition,
+        'rationale': str(_first_present(value, ('rationale', 'reason', 'explanation')) or ''),
+    }
+
+
 def _finding_from_item(item: Any, default_status: str | None = None) -> dict[str, Any] | None:
     if isinstance(item, str):
         text = item.strip()
@@ -356,6 +375,9 @@ def _finding_from_item(item: Any, default_status: str | None = None) -> dict[str
         'policy_reason': str(policy_reason or evidence or 'Potential policy issue needs human review.'),
         'suggested_fix': str(suggested_fix or 'Review the claim against the applicable policy before publishing.'),
         'confidence': _confidence(_first_present(item, ('confidence', 'certainty'))),
+        'internal_override': _internal_override(
+            _first_present(item, ('internal_override', 'internalOverride', 'override'))
+        ),
     }
 
 
@@ -460,6 +482,13 @@ def parse_report_json(text:str)->ComplianceReport:
     return ComplianceReport.model_validate(_normalize_report(_load_json(text)))
 
 
+def parse_override_annotations_json(text:str)->OverrideAnnotationSet:
+    data=_load_json(text)
+    if not isinstance(data, dict):
+        raise TypeError('Internal override annotations JSON must be an object')
+    return OverrideAnnotationSet.model_validate(data)
+
+
 async def review_with_openrouter(evidence:dict, model:str|None=None)->ComplianceReport:
     key=os.getenv('OPENROUTER_API_KEY')
     if not key:
@@ -469,3 +498,30 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
         r=await client.post('https://openrouter.ai/api/v1/chat/completions', headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}, json=payload)
         r.raise_for_status(); content=r.json()['choices'][0]['message']['content']
     return parse_report_json(content)
+
+
+async def review_internal_overrides_with_openrouter(
+    context:dict,
+    model:str|None=None,
+)->OverrideAnnotationSet:
+    key=os.getenv('OPENROUTER_API_KEY')
+    if not key:
+        return OverrideAnnotationSet()
+    payload={
+        'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'),
+        'messages':[
+            {'role':'system','content':OVERRIDE_SYSTEM_PROMPT},
+            {'role':'user','content':build_override_user_prompt(context)},
+        ],
+        'response_format': {'type':'json_object'},
+        'temperature': 0,
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        r=await client.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},
+            json=payload,
+        )
+        r.raise_for_status()
+        content=r.json()['choices'][0]['message']['content']
+    return parse_override_annotations_json(content)

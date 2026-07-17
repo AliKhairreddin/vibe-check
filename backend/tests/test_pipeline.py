@@ -7,17 +7,19 @@ import httpx
 import pytest
 
 from app.main import app, copy_review_file_name
+from app.review_pipeline import jobs as review_jobs
 from app.review_pipeline import queue as review_queue
+from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
-from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, ReviewRequestMeta
+from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOverride, OfferProfile, OfferProfileInput, OverrideAnnotationSet, ReviewRequestMeta
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
-from app.review_pipeline.guidelines import build_policy_context, load_default_guidelines
+from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import parse_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import create_batch, get_batch, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page
+from app.review_pipeline.storage import create_batch, delete_review, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
 from app.review_pipeline.source_links import resolve_review_sources
 from app.review_pipeline.telegram import build_batch_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
@@ -76,6 +78,7 @@ def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
     assert evidence['onscreen_text_ocr'][0]['text'] == 'On-screen words.'
     assert evidence['visual_observations']['observations'][0]['scene'] == 'Person holding paperwork.'
     assert 'platform caption/body' in evidence['source_definitions']['ad_copy']
+    assert 'internal_overrides' not in evidence
 
 def test_review_evidence_supports_copy_only_jobs():
     meta=ReviewRequestMeta(ad_copy='Standalone ad copy.', notes='Brand note.')
@@ -226,6 +229,177 @@ def test_drive_browser_lists_supported_creatives_recursively(monkeypatch):
     assert [file.file_id for file in files] == ['video', 'image']
     assert files[0].size == 200
     assert files[0].modified_time == '2026-07-10T12:00:00Z'
+
+def test_drive_folder_browser_lists_only_direct_selectable_children_across_pages(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+    list_calls=[]
+
+    def fake_get_json(path, params):
+        if path == '/files/root-folder':
+            return {
+                'id':'root-folder',
+                'name':'Creative root',
+                'mimeType':'application/vnd.google-apps.folder',
+                'parents':[],
+            }
+        if path != '/files':
+            raise AssertionError(path)
+        list_calls.append(params.copy())
+        assert params['q'] == "'root-folder' in parents and trashed = false"
+        if params.get('pageToken') == 'next-page':
+            return {'files':[
+                {'id':'video','name':'A video.mp4','mimeType':'video/mp4','parents':['root-folder']},
+            ]}
+        return {
+            'nextPageToken':'next-page',
+            'files':[
+                {'id':'image','name':'Z image.png','mimeType':'image/png','parents':['root-folder']},
+                {'id':'nested','name':'Nested','mimeType':'application/vnd.google-apps.folder','parents':['root-folder']},
+                {'id':'sheet','name':'Copy','mimeType':'application/vnd.google-apps.spreadsheet','parents':['root-folder']},
+                {'id':'blocked','name':'Blocked.jpg','mimeType':'image/jpeg','parents':['root-folder'],'capabilities':{'canDownload':False}},
+                {'id':'wrong-parent','name':'Elsewhere.mp4','mimeType':'video/mp4','parents':['other-folder']},
+            ],
+        }
+
+    monkeypatch.setattr(client, '_get_json', fake_get_json)
+    children=client.list_folder_children()
+
+    assert [child.file_id for child in children] == ['nested', 'video', 'image']
+    assert len(list_calls) == 2
+    assert list_calls[1]['pageToken'] == 'next-page'
+
+def test_drive_folder_browser_rejects_nonfolder_and_outside_root(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+
+    def fake_get_json(path, params):
+        if path == '/files/not-folder':
+            return {'id':'not-folder','name':'creative.mp4','mimeType':'video/mp4','parents':['root-folder']}
+        if path == '/files/outside-folder':
+            return {'id':'outside-folder','name':'Outside','mimeType':'application/vnd.google-apps.folder','parents':['other-root']}
+        if path == '/files/other-root':
+            return {'id':'other-root','parents':[]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(client, '_get_json', fake_get_json)
+    with pytest.raises(DriveLookupError, match='not a folder'):
+        client.list_folder_children('not-folder')
+    with pytest.raises(DriveLookupError, match='outside the configured Drive folder'):
+        client.list_folder_children('outside-folder')
+
+def test_drive_selection_expands_folders_and_deduplicates_exact_files(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+    root=DriveFile('root-folder','Root','application/vnd.google-apps.folder',(), 'https://drive.google.com/root')
+    nested=DriveFile('nested','Nested','application/vnd.google-apps.folder',('root-folder',), 'https://drive.google.com/nested')
+    first=DriveFile('first','first.mp4','video/mp4',('root-folder','nested'), 'https://drive.google.com/first')
+    second=DriveFile('second','second.png','image/png',('nested',), 'https://drive.google.com/second')
+    blocked=DriveFile('blocked','blocked.jpg','image/jpeg',('root-folder',), 'https://drive.google.com/blocked', can_download=False)
+    unsupported=DriveFile('copy','Copy','application/vnd.google-apps.spreadsheet',('root-folder',), 'https://drive.google.com/copy')
+    files={file.file_id:file for file in (root,nested,first,second)}
+    get_calls=[]
+    list_calls=[]
+
+    def fake_get_file(file_id, *, require_within_root=True):
+        get_calls.append(file_id)
+        return files[file_id]
+
+    def fake_list_children(folder_id):
+        list_calls.append(folder_id)
+        if folder_id == 'root-folder':
+            return [nested, first, blocked, unsupported]
+        if folder_id == 'nested':
+            return [first, second]
+        raise AssertionError(folder_id)
+
+    monkeypatch.setattr(client, 'get_file', fake_get_file)
+    monkeypatch.setattr(client, '_list_direct_children', fake_list_children)
+    resolved=client.resolve_selection(
+        folder_ids=['root-folder','nested','root-folder'],
+        file_ids=['first','first'],
+    )
+
+    assert [file.file_id for file in resolved] == ['first', 'second']
+    assert get_calls == ['root-folder', 'nested', 'first']
+    assert list_calls == ['root-folder', 'nested']
+
+def test_drive_selection_rejects_wrong_item_kinds(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+    folder=DriveFile('folder','Folder','application/vnd.google-apps.folder',('root-folder',), 'https://drive.google.com/folder')
+    creative=DriveFile('creative','creative.mp4','video/mp4',('root-folder',), 'https://drive.google.com/creative')
+    monkeypatch.setattr(client, 'get_file', lambda file_id: {'folder':folder,'creative':creative}[file_id])
+
+    with pytest.raises(DriveLookupError, match='not a folder'):
+        client.resolve_selection(folder_ids=['creative'])
+    with pytest.raises(DriveLookupError, match='file is a folder'):
+        client.resolve_selection(file_ids=['folder'])
+
+def test_drive_selection_rejects_outside_root_folder(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+
+    def fake_get_json(path, params):
+        if path == '/files/outside-folder':
+            return {'id':'outside-folder','name':'Outside','mimeType':'application/vnd.google-apps.folder','parents':['other-root']}
+        if path == '/files/other-root':
+            return {'id':'other-root','parents':[]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(client, '_get_json', fake_get_json)
+    with pytest.raises(DriveLookupError, match='outside the configured Drive folder'):
+        client.resolve_selection(folder_ids=['outside-folder'])
+
+def test_drive_selection_enforces_one_hundred_creative_limit(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+    root=DriveFile('root-folder','Root','application/vnd.google-apps.folder',(), 'https://drive.google.com/root')
+    creatives=[
+        DriveFile(
+            f'creative-{index}',
+            f'creative-{index}.mp4',
+            'video/mp4',
+            ('root-folder',),
+            f'https://drive.google.com/creative-{index}',
+        )
+        for index in range(101)
+    ]
+    monkeypatch.setattr(client, 'get_file', lambda file_id: root)
+    monkeypatch.setattr(client, '_list_direct_children', lambda folder_id: creatives)
+
+    with pytest.raises(DriveLookupError, match='at most 100 creatives'):
+        client.resolve_selection(folder_ids=['root-folder'])
+
+def test_drive_selection_counts_only_creatives_within_upload_limit(monkeypatch):
+    client=object.__new__(GoogleDriveClient)
+    client.root_folder_id='root-folder'
+    root=DriveFile('root-folder','Root','application/vnd.google-apps.folder',(), 'https://drive.google.com/root')
+    oversized=[
+        DriveFile(
+            f'oversized-{index}',
+            f'oversized-{index}.mp4',
+            'video/mp4',
+            ('root-folder',),
+            f'https://drive.google.com/oversized-{index}',
+            size=101,
+        )
+        for index in range(101)
+    ]
+    eligible=DriveFile(
+        'eligible',
+        'eligible.mp4',
+        'video/mp4',
+        ('root-folder',),
+        'https://drive.google.com/eligible',
+        size=100,
+    )
+    monkeypatch.setattr(client, 'get_file', lambda file_id: root)
+    monkeypatch.setattr(client, '_list_direct_children', lambda folder_id: [*oversized, eligible])
+
+    resolved=client.resolve_selection(folder_ids=['root-folder'], max_file_size=100)
+
+    assert [file.file_id for file in resolved] == ['eligible']
 
 def test_drive_get_file_rejects_files_outside_root(monkeypatch):
     client=object.__new__(GoogleDriveClient)
@@ -448,6 +622,226 @@ def test_default_guidelines_are_loaded_and_combined():
     assert 'Extra rule.' in policy_text
     assert sources == ['Saved General Publisher Ad Copy & Creative Guidelines', 'Additional pasted policy/guidelines']
 
+def test_offer_profiles_persist_guidelines_and_offer_scoped_overrides(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+
+    assert [profile.offer_id for profile in list_offer_profiles()] == ['acp']
+    saved=upsert_offer_profile('kissterra', OfferProfileInput(
+        display_name='Kissterra',
+        official_guidelines='Kissterra official policy.',
+        internal_overrides=[OfferOverride(
+            override_id='cash-imagery',
+            title='Cash imagery exception',
+            guidance='Cash may appear when it is incidental and not a guaranteed payout claim.',
+            rationale='Approved internally for this offer.',
+        )],
+    ))
+
+    assert saved.version == 1
+    resolved=resolve_offer_profiles(['acp','kissterra'])
+    assert [profile.offer_id for profile in resolved] == ['acp','kissterra']
+    assert resolved[1].internal_overrides[0].override_id == 'cash-imagery'
+    policy_text,_=build_policy_context('', resolved[1])
+    assert 'Kissterra official policy.' in policy_text
+    assert 'Cash may appear' not in policy_text
+    assert build_internal_override_context(resolved[1])[0]['guidance'].startswith('Cash may appear')
+
+    acp=upsert_offer_profile('acp', OfferProfileInput(
+        display_name='ACP',
+        official_guidelines='Updated ACP official policy.',
+        internal_overrides=[],
+        is_default=True,
+    ))
+    assert acp.version == 2
+    assert get_offer_profile_revision('acp', 1).official_guidelines == load_default_guidelines()
+    assert get_offer_profile_revision('acp', 2).official_guidelines == 'Updated ACP official policy.'
+
+def test_offer_profile_and_report_size_guards_run_before_persistence(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.setattr(review_storage, 'MAX_OFFER_PROFILE_BYTES', 100)
+
+    with pytest.raises(ValueError, match='too large to save'):
+        upsert_offer_profile('large-offer', OfferProfileInput(
+            display_name='Large offer',
+            official_guidelines='x' * 90,
+        ))
+
+    monkeypatch.setattr(review_storage, 'MAX_REPORT_RESULT_BYTES', 100)
+    with pytest.raises(ValueError, match='too large to save'):
+        set_report('large-report', {
+            'overall_status':'red',
+            'summary':'x' * 120,
+            'findings':[],
+        })
+    assert not (tmp_path/'large-report'/'report.json').exists()
+
+def test_openrouter_report_preserves_internal_override_annotation():
+    report=parse_report_json(json.dumps({
+        'overall_status':'red',
+        'summary':'Official policy issue with an internal exception.',
+        'findings':[{
+            'severity':'high',
+            'source':'visual',
+            'evidence':'Visible cash.',
+            'policy_reason':'Official guidance restricts money imagery.',
+            'suggested_fix':'Remove the cash.',
+            'confidence':'high',
+            'internal_override':{
+                'override_id':'cash-imagery',
+                'title':'Cash imagery exception',
+                'disposition':'accepted',
+                'rationale':'Incidental only.',
+            },
+        }],
+    }))
+
+    assert report.overall_status == 'red'
+    assert report.findings[0].policy_reason.startswith('Official guidance')
+    assert report.findings[0].internal_override is not None
+    assert report.findings[0].internal_override.override_id == 'cash-imagery'
+
+
+def offer_with_cash_override()->OfferProfile:
+    return OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Official ACP policy prohibits money imagery.',
+        internal_overrides=[OfferOverride(
+            override_id='cash-imagery',
+            title='Cash imagery exception',
+            guidance='Cash may appear when incidental and not tied to a guaranteed payout.',
+            rationale='Approved operationally for ACP.',
+        )],
+    )
+
+
+def red_cash_report()->ComplianceReport:
+    return ComplianceReport.model_validate({
+        'overall_status':'red',
+        'summary':'Money imagery violates official policy.',
+        'findings':[{
+            'severity':'high',
+            'source':'visual',
+            'evidence':'Visible cash beside the offer.',
+            'policy_reason':'Official ACP policy prohibits money imagery.',
+            'suggested_fix':'Remove the cash.',
+            'confidence':'high',
+        }],
+    })
+
+
+@pytest.mark.anyio
+async def test_two_pass_override_annotation_cannot_change_official_red_finding(monkeypatch):
+    profile=offer_with_cash_override()
+    official_calls=[]
+    override_calls=[]
+
+    async def fake_official_review(evidence, model):
+        official_calls.append(evidence)
+        assert 'internal_overrides' not in evidence
+        return red_cash_report()
+
+    async def fake_override_review(context, model):
+        override_calls.append(context)
+        return OverrideAnnotationSet.model_validate({
+            'annotations':[{
+                'finding_index':0,
+                'internal_override':{
+                    'override_id':'cash-imagery',
+                    'title':'Model-provided title is ignored',
+                    'disposition':'accepted',
+                    'rationale':'The image is incidental and does not promise a payout.',
+                },
+            }],
+        })
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', fake_official_review)
+    monkeypatch.setattr(review_jobs, 'review_internal_overrides_with_openrouter', fake_override_review)
+    result=await review_jobs._review_offer(
+        profile,
+        'image',
+        ReviewRequestMeta(),
+        {'source':'not_applicable','chunks':[]},
+        [],
+        [],
+        {'source':'openrouter_vision','observations':[]},
+        'Evidence note.',
+    )
+
+    assert len(official_calls) == 1 and len(override_calls) == 1
+    assert override_calls[0]['internal_overrides'][0]['override_id'] == 'cash-imagery'
+    assert result.overall_status == 'red'
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == 'high'
+    assert result.findings[0].evidence == 'Visible cash beside the offer.'
+    assert result.findings[0].policy_reason == 'Official ACP policy prohibits money imagery.'
+    assert result.findings[0].internal_override is not None
+    assert result.findings[0].internal_override.override_id == 'cash-imagery'
+    assert result.findings[0].internal_override.title == 'Cash imagery exception'
+    assert result.internal_disposition == 'accepted_with_override'
+
+
+@pytest.mark.anyio
+async def test_two_pass_override_annotation_removes_unknown_override_ids(monkeypatch):
+    async def fake_official_review(evidence, model):
+        return red_cash_report()
+
+    async def fake_override_review(context, model):
+        return OverrideAnnotationSet.model_validate({
+            'annotations':[{
+                'finding_index':0,
+                'internal_override':{
+                    'override_id':'invented-exception',
+                    'disposition':'accepted',
+                    'rationale':'Not actually configured.',
+                },
+            }],
+        })
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', fake_official_review)
+    monkeypatch.setattr(review_jobs, 'review_internal_overrides_with_openrouter', fake_override_review)
+    result=await review_jobs._review_offer(
+        offer_with_cash_override(),
+        'image',
+        ReviewRequestMeta(),
+        {'source':'not_applicable','chunks':[]},
+        [],
+        [],
+        {'source':'openrouter_vision','observations':[]},
+        'Evidence note.',
+    )
+
+    assert result.overall_status == 'red'
+    assert result.findings[0].internal_override is None
+    assert result.internal_disposition == 'action_required'
+    assert any('invented-exception' in limitation for limitation in result.limitations)
+
+
+@pytest.mark.anyio
+async def test_offer_review_error_is_orange_and_requires_human_review(monkeypatch):
+    async def failing_official_review(evidence, model):
+        raise RuntimeError('upstream unavailable')
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', failing_official_review)
+    result=await review_jobs._review_offer(
+        offer_with_cash_override(),
+        'copy_only',
+        ReviewRequestMeta(ad_copy='Save today.'),
+        {'source':'not_applicable','chunks':[]},
+        [],
+        [],
+        {'source':'not_applicable','observations':[]},
+        'No creative submitted.',
+    )
+
+    assert result.overall_status == 'orange'
+    assert result.findings == []
+    assert result.internal_disposition == 'human_review'
+
 def test_ocr_normalization_deduping():
     items=dedupe_ocr([{'text':' Big   Sale ','timestamp':0},{'text':'big sale','timestamp':1},{'text':'','timestamp':2}])
     assert len(items)==1 and items[0]['text']=='Big Sale'
@@ -470,6 +864,73 @@ def test_review_history_lists_local_jobs(tmp_path, monkeypatch):
     assert history[0].file_name=='creative.mp4'
     assert history[0].overall_status=='green'
     assert history[0].created_at is not None
+
+def test_review_stats_are_offer_aware_and_keep_override_counts_separate(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status(
+        'multi-offer',
+        JobStatus.queued,
+        0,
+        'Queued',
+        'creative.png',
+        offer_ids=['acp','kissterra'],
+        primary_offer_id='acp',
+    )
+    set_report('multi-offer', {
+        'schema_version':2,
+        'primary_offer_id':'acp',
+        'overall_status':'red',
+        'summary':'ACP issue.',
+        'offer_results':[
+            {
+                'offer_id':'acp',
+                'offer_name':'ACP',
+                'overall_status':'red',
+                'summary':'ACP issue.',
+                'internal_disposition':'accepted_with_override',
+                'findings':[],
+                'safe_rewrite':{},
+                'limitations':[],
+            },
+            {
+                'offer_id':'kissterra',
+                'offer_name':'Kissterra',
+                'overall_status':'green',
+                'summary':'Clear.',
+                'internal_disposition':'clear',
+                'findings':[],
+                'safe_rewrite':{},
+                'limitations':[],
+            },
+        ],
+    })
+    set_status('multi-offer', JobStatus.complete, 100, 'Complete')
+
+    acp=get_review_stats('acp')
+    kissterra=get_review_stats('kissterra')
+    assert acp.total_reviews == 1 and acp.outcomes.red == 1
+    assert acp.accepted_overrides == 1
+    assert kissterra.total_reviews == 1 and kissterra.outcomes.green == 1
+    assert kissterra.accepted_overrides == 0
+
+def test_delete_review_tombstones_history_report_and_stats(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('delete-me', JobStatus.queued, 0, 'Queued', 'test.png')
+    set_report('delete-me', {'overall_status':'green','summary':'Clear.','findings':[]})
+    set_status('delete-me', JobStatus.complete, 100, 'Complete')
+
+    deleted=delete_review('delete-me')
+    assert deleted.job_id == 'delete-me'
+    assert (tmp_path/'delete-me'/'deleted.json').exists()
+    assert list_reviews() == []
+    assert get_report('delete-me') is None
+    assert get_review_stats('acp').total_reviews == 0
+    with pytest.raises(FileNotFoundError):
+        get_status('delete-me')
 
 def test_review_history_pages_through_all_local_jobs(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -504,6 +965,58 @@ async def test_full_history_api_returns_cursor_page(tmp_path, monkeypatch):
     assert len(response.json()['reviews']) == 2
     assert response.json()['has_more']
     assert response.json()['next_cursor'] == '2'
+
+@pytest.mark.anyio
+async def test_review_delete_api_rejects_active_then_removes_terminal_job(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-admin-password')
+    job_id='a' * 32
+    set_status(job_id, JobStatus.queued, 0, 'Queued', 'test.png')
+    transport=httpx.ASGITransport(app=app)
+    headers={'x-admin-password':'test-admin-password'}
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        active=await client.delete(f'/api/reviews/{job_id}', headers=headers)
+        set_report(job_id, {'overall_status':'green','summary':'Clear.','findings':[]})
+        set_status(job_id, JobStatus.complete, 100, 'Complete')
+        removed=await client.delete(f'/api/reviews/{job_id}', headers=headers)
+        status=await client.get(f'/api/reviews/{job_id}')
+        stats=await client.get('/api/reviews/stats?offer_id=acp')
+
+    assert active.status_code == 409
+    assert removed.status_code == 200
+    assert removed.json()['job_id'] == job_id
+    assert status.status_code == 404
+    assert stats.json()['total_reviews'] == 0
+
+@pytest.mark.anyio
+async def test_offer_admin_routes_require_password_and_catalog_is_sanitized(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.delenv('ADMIN_PASSWORD', raising=False)
+    transport=httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        unavailable=await client.get('/api/offers')
+        catalog=await client.get('/api/offers/catalog')
+        monkeypatch.setenv('ADMIN_PASSWORD', 'test-admin-password')
+        unauthorized=await client.get('/api/offers')
+        authorized=await client.get(
+            '/api/offers',
+            headers={'x-admin-password':'test-admin-password'},
+        )
+
+    assert unavailable.status_code == 503
+    assert catalog.status_code == 200
+    assert catalog.json()['offers'][0]['offer_id'] == 'acp'
+    assert 'official_guidelines' not in catalog.json()['offers'][0]
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.json()['offers'][0]['official_guidelines']
 
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -594,6 +1107,8 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     assert status.report_ready
     assert not status.has_creative
     assert report is not None
+    assert report['overall_status'] == 'orange'
+    assert report['internal_disposition'] == 'human_review'
     assert 'No creative was submitted' in report['limitations'][-1]
 
 def test_queue_uses_bounded_parallel_workers(monkeypatch):

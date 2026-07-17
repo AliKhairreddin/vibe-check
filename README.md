@@ -25,13 +25,15 @@ The system is intentionally hybrid:
 - Extracts media metadata with `ffprobe`, audio and frames with `ffmpeg`, and OCR-ready imagery with Pillow/OpenCV.
 - Runs Tesseract OCR, timestamped speech-to-text, and a capped sampled-frame vision pass.
 - Produces strict JSON reports with separate creative and ad-copy results.
+- Evaluates one evidence bundle against one or more independently configured offers.
+- Keeps official guideline findings separate from offer-scoped internal overrides.
 - Uses a four-level verdict model: green, yellow, orange, and red.
 - Handles files up to 200 MB through retryable 8 MB chunks.
 - Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.
-- Supports folder-scoped Google Drive browsing/import with exact file IDs and safe duplicate handling.
+- Supports folder-first Google Drive browsing, whole-folder selection, drill-down file selection, and exact-ID deduplication.
 - Sends one Telegram summary after every item in a batch reaches a terminal state.
-- Provides cursor-paginated review history and direct report/source links.
+- Provides an offer-filtered dashboard, cursor-paginated history, recoverable history removal, and direct report/source links.
 
 ## Architecture
 
@@ -80,7 +82,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 55 backend tests covering pipeline behavior, chunked upload rules, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 72 backend tests covering pipeline behavior, two-pass offer isolation, internal overrides, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -137,9 +139,11 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
 - `CONVEX_URL`, `CONVEX_DEPLOYMENT`, and `CONVEX_HTTP_SECRET` for durable state;
 - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` and `GOOGLE_DRIVE_FOLDER_ID` for folder-scoped import;
 - `TELEGRAM_*` for batch completion notifications;
+- `ADMIN_PASSWORD` for protected guideline, override, revision, and history-removal actions;
 - `MAX_UPLOAD_MB` and `JOB_WORKER_CONCURRENCY` for resource limits.
 
 Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository.
+The public offer catalog contains names and version counts only. Full official guidelines and internal overrides require an admin password, which the Settings page keeps in browser session storage after it verifies the password with the backend. Configure production with `pnpm exec wrangler secret put ADMIN_PASSWORD` before using Settings or removing history.
 
 ## API Overview
 
@@ -149,11 +153,19 @@ Secrets belong in Convex or Cloudflare runtime configuration, never in the brows
 | `POST /api/batches` | Register a durable multi-item batch |
 | `GET /api/batches/{batch_id}` | Read aggregate and item progress |
 | `GET /api/reviews/history` | Browse cursor-paginated history |
+| `GET /api/reviews/stats` | Read offer-filtered dashboard totals |
+| `DELETE /api/reviews/{job_id}` | Admin-only soft removal of a terminal review from history and stats |
 | `GET /api/reviews/{job_id}` | Read job state |
 | `GET /api/reviews/{job_id}/report` | Read structured report JSON |
 | `GET /api/reviews/{job_id}/source` | Resolve safe creative/copy source links |
+| `GET /api/drive/browse` | Browse direct Drive folder children |
+| `POST /api/drive/selection/resolve` | Expand and deduplicate selected folders/files |
+| `GET /api/offers/catalog` | List safe offer metadata for review selection and dashboard filters |
+| `GET /api/offers` | Admin-only list of complete saved offer profiles |
+| `GET /api/offers/{offer_id}/versions/{version}` | Admin-only immutable policy revision lookup |
+| `PUT /api/offers/{offer_id}` | Admin-only save of official guidelines and scoped overrides |
 
-Default publisher guidance lives in `backend/app/review_pipeline/guidelines/` and is combined with optional policy text submitted for a review.
+The bundled publisher guidance in `backend/app/review_pipeline/guidelines/` is the ACP fallback. Settings can persist ACP updates and additional offer profiles in Convex. Official guideline text, internal overrides, and optional per-review policy supplements remain separate inputs in every report.
 
 ## Verification
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.request
 from pathlib import Path
@@ -9,18 +10,30 @@ from typing import Any
 
 from .models import (
     CreateBatchItem,
+    DeletedReview,
     JobRecord,
     JobStatus,
+    OfferProfile,
+    OfferProfileInput,
     ReviewBatch,
     ReviewBatchItem,
     ReviewHistoryItem,
     ReviewHistoryPage,
+    ReviewOutcomeCounts,
+    ReviewStats,
     ReviewSource,
 )
+from .guidelines import built_in_acp_profile
 
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
 CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
 CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
+OFFER_SETTINGS_FILE = 'offer_profiles.json'
+OFFER_REVISIONS_FILE = 'offer_profile_revisions.json'
+MAX_OFFER_PROFILE_BYTES = 850_000
+MAX_REPORT_RESULT_BYTES = 800_000
+MAX_OFFER_OVERRIDES = 100
+OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 RESULT_STATUSES = {'green','yellow','orange','red'}
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
@@ -72,13 +85,15 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
 
-def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None)->JobRecord:
+def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None)->JobRecord:
     current_file_name=file_name
     current_file_size=file_size
     current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
     current_has_creative=True if has_creative is None else has_creative
     current_batch_id=batch_id
     current_batch_item_id=batch_item_id
+    current_offer_ids=offer_ids or ['acp']
+    current_primary_offer_id=primary_offer_id or current_offer_ids[0]
     source_values:dict[str, Any]={}
     local_path=job_dir(job_id)/'status.json'
     created_at=now_ms()
@@ -96,6 +111,10 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
             current_batch_id=current.batch_id
         if current_batch_item_id is None:
             current_batch_item_id=current.batch_item_id
+        if offer_ids is None:
+            current_offer_ids=current.offer_ids
+        if primary_offer_id is None:
+            current_primary_offer_id=current.primary_offer_id
         source_values={
             'source_kind':current.source_kind,
             'source_status':current.source_status,
@@ -106,7 +125,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         }
         created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,created_at=created_at,updated_at=now_ms(),**source_values)
+    rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,offer_ids=current_offer_ids,primary_offer_id=current_primary_offer_id,created_at=created_at,updated_at=now_ms(),**source_values)
     write_json(local_path, rec.model_dump(mode='json'))
     review_args = {
         'fileName': rec.file_name,
@@ -117,6 +136,8 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         'progress': rec.progress,
         'reportReady': rec.report_ready,
         'status': rec.status.value,
+        'offerIds': rec.offer_ids,
+        'primaryOfferId': rec.primary_offer_id,
     }
     if rec.batch_id:
         review_args['batchId'] = rec.batch_id
@@ -163,20 +184,38 @@ def set_review_source(job_id:str, source:ReviewSource)->None:
 
 def get_status(job_id:str)->JobRecord:
     remote=_convex_call('query', 'reviews:getStatus', {'jobId': job_id})
-    if remote:
-        return JobRecord.model_validate(remote)
+    if convex_enabled():
+        if remote:
+            return JobRecord.model_validate(remote)
+        raise FileNotFoundError(job_id)
+    if (JOB_DATA_DIR/job_id/'deleted.json').exists():
+        raise FileNotFoundError(job_id)
     p=job_dir(job_id)/'status.json'
     if not p.exists(): raise FileNotFoundError(job_id)
     return JobRecord.model_validate(read_json(p))
 
 def set_report(job_id:str, report:dict[str, Any])->None:
+    offer_results=report.get('offer_results')
+    results=offer_results if isinstance(offer_results, list) and offer_results else [report]
+    for result in results:
+        if not isinstance(result, dict):
+            raise ValueError('Offer report results must be JSON objects.')
+        result_size=len(json.dumps(result, ensure_ascii=False).encode('utf-8'))
+        if result_size > MAX_REPORT_RESULT_BYTES:
+            offer_id=result.get('offer_id') or 'unknown offer'
+            raise ValueError(
+                f'The generated report for {offer_id} is too large to save. '
+                'Run the review again with shorter policy supplements or fewer findings.'
+            )
     write_json(job_dir(job_id)/'report.json', report)
     _convex_call('mutation', 'reviews:setReport', {'jobId': job_id, 'report': report})
 
 def get_report(job_id:str)->dict[str, Any]|None:
     remote=_convex_call('query', 'reviews:getReport', {'jobId': job_id})
-    if remote is not None:
+    if convex_enabled():
         return remote
+    if (JOB_DATA_DIR/job_id/'deleted.json').exists():
+        return None
     p=job_dir(job_id)/'report.json'
     if not p.exists():
         return None
@@ -353,6 +392,8 @@ def _local_reviews()->list[ReviewHistoryItem]:
 
     items=[]
     for status_path in JOB_DATA_DIR.glob('*/status.json'):
+        if (status_path.parent/'deleted.json').exists():
+            continue
         try:
             rec=JobRecord.model_validate(read_json(status_path))
         except (OSError, ValueError):
@@ -404,3 +445,260 @@ def list_reviews_page(limit:int=50, cursor:str|None=None)->ReviewHistoryPage:
         next_cursor=str(next_offset) if has_more else None,
         has_more=has_more,
     )
+
+
+def _offer_settings_path()->Path:
+    return JOB_DATA_DIR/'settings'/OFFER_SETTINGS_FILE
+
+
+def _read_local_offer_profiles()->list[OfferProfile]:
+    path=_offer_settings_path()
+    if not path.exists():
+        return []
+    try:
+        payload=read_json(path)
+        return [OfferProfile.model_validate(item) for item in payload]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _write_local_offer_profiles(profiles:list[OfferProfile])->None:
+    write_json(_offer_settings_path(), [profile.model_dump(mode='json') for profile in profiles])
+
+
+def _offer_revisions_path()->Path:
+    return JOB_DATA_DIR/'settings'/OFFER_REVISIONS_FILE
+
+
+def _read_local_offer_revisions()->list[OfferProfile]:
+    path=_offer_revisions_path()
+    if not path.exists():
+        return []
+    try:
+        payload=read_json(path)
+        return [OfferProfile.model_validate(item) for item in payload]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _write_local_offer_revision(profile:OfferProfile)->None:
+    revisions=_read_local_offer_revisions()
+    revisions=[
+        revision
+        for revision in revisions
+        if not (
+            revision.offer_id == profile.offer_id
+            and revision.version == profile.version
+        )
+    ]
+    revisions.append(profile)
+    revisions.sort(key=lambda revision:(revision.offer_id, revision.version))
+    write_json(_offer_revisions_path(), [revision.model_dump(mode='json') for revision in revisions])
+
+
+def _validate_offer_payload(args:dict[str, Any])->None:
+    overrides=args['internalOverrides']
+    if len(overrides) > MAX_OFFER_OVERRIDES:
+        raise ValueError(f'An offer can have at most {MAX_OFFER_OVERRIDES} internal overrides.')
+    seen:set[str]=set()
+    for override in overrides:
+        override_id=str(override['overrideId']).strip()
+        if not OFFER_ID_PATTERN.fullmatch(override_id):
+            raise ValueError('Internal override IDs must be lowercase slugs.')
+        if override_id in seen:
+            raise ValueError(f'Duplicate internal override ID: {override_id}.')
+        seen.add(override_id)
+    payload_size=len(json.dumps(args, ensure_ascii=False).encode('utf-8'))
+    if payload_size > MAX_OFFER_PROFILE_BYTES:
+        raise ValueError(
+            'This offer profile is too large to save. Shorten the guidelines or internal overrides.'
+        )
+
+
+def list_offer_profiles(*, include_disabled:bool=True)->list[OfferProfile]:
+    remote=_convex_call('query', 'offers:list', {'includeDisabled': include_disabled})
+    if remote is not None:
+        profiles=[OfferProfile.model_validate(item) for item in remote]
+    else:
+        profiles=_read_local_offer_profiles()
+
+    if not any(profile.offer_id == 'acp' for profile in profiles):
+        acp=built_in_acp_profile()
+        if any(profile.is_default for profile in profiles):
+            acp=acp.model_copy(update={'is_default':False})
+        profiles.append(acp)
+    if not include_disabled:
+        profiles=[profile for profile in profiles if profile.enabled]
+    return sorted(profiles, key=lambda profile: (not profile.is_default, profile.display_name.casefold()))
+
+
+def get_offer_profile(offer_id:str)->OfferProfile:
+    for profile in list_offer_profiles(include_disabled=True):
+        if profile.offer_id == offer_id:
+            return profile
+    raise KeyError(offer_id)
+
+
+def upsert_offer_profile(offer_id:str, payload:OfferProfileInput)->OfferProfile:
+    args={
+        'offerId':offer_id,
+        'displayName':payload.display_name.strip(),
+        'officialGuidelines':payload.official_guidelines.strip(),
+        'internalOverrides':[
+            {
+                'overrideId':override.override_id,
+                'title':override.title,
+                'guidance':override.guidance,
+                'rationale':override.rationale,
+                'enabled':override.enabled,
+            }
+            for override in payload.internal_overrides
+        ],
+        'enabled':payload.enabled,
+        'isDefault':payload.is_default,
+    }
+    _validate_offer_payload(args)
+    remote=_convex_call('mutation', 'offers:upsert', args)
+    if remote is not None:
+        profile=OfferProfile.model_validate(remote)
+        return profile
+
+    existing={profile.offer_id:profile for profile in _read_local_offer_profiles()}
+    try:
+        previous=get_offer_profile(offer_id)
+    except KeyError:
+        previous=None
+    timestamp=now_ms()
+    profile=OfferProfile(
+        offer_id=offer_id,
+        display_name=payload.display_name.strip(),
+        official_guidelines=payload.official_guidelines.strip(),
+        internal_overrides=payload.internal_overrides,
+        enabled=payload.enabled,
+        is_default=payload.is_default,
+        version=(previous.version + 1) if previous else 1,
+        created_at=previous.created_at if previous else timestamp,
+        updated_at=timestamp,
+    )
+    if profile.is_default:
+        for current_id,current in list(existing.items()):
+            if current.is_default:
+                existing[current_id]=current.model_copy(update={'is_default':False})
+    existing[offer_id]=profile
+    _write_local_offer_profiles(list(existing.values()))
+    _write_local_offer_revision(profile)
+    return profile
+
+
+def get_offer_profile_revision(offer_id:str, version:int)->OfferProfile:
+    if version < 1:
+        raise KeyError(f'{offer_id}@{version}')
+    remote=_convex_call(
+        'query',
+        'offers:getRevision',
+        {'offerId':offer_id, 'version':version},
+    )
+    if remote is not None:
+        return OfferProfile.model_validate(remote)
+    if offer_id == 'acp' and version == 1:
+        return built_in_acp_profile()
+    for revision in _read_local_offer_revisions():
+        if revision.offer_id == offer_id and revision.version == version:
+            return revision
+    raise KeyError(f'{offer_id}@{version}')
+
+
+def disable_offer_profile(offer_id:str)->OfferProfile:
+    if offer_id == 'acp':
+        raise ValueError('ACP is the built-in fallback and cannot be disabled.')
+    remote=_convex_call('mutation', 'offers:disable', {'offerId':offer_id})
+    if remote is not None:
+        return OfferProfile.model_validate(remote)
+    existing=get_offer_profile(offer_id)
+    return upsert_offer_profile(
+        offer_id,
+        OfferProfileInput(
+            display_name=existing.display_name,
+            official_guidelines=existing.official_guidelines,
+            internal_overrides=existing.internal_overrides,
+            enabled=False,
+            is_default=False,
+        ),
+    )
+
+
+def resolve_offer_profiles(offer_ids:list[str])->list[OfferProfile]:
+    unique_ids=list(dict.fromkeys(offer_id.strip().lower() for offer_id in offer_ids if offer_id.strip()))
+    if not unique_ids:
+        unique_ids=['acp']
+    if len(unique_ids) > 10:
+        raise ValueError('Select no more than 10 offers per review.')
+    available={profile.offer_id:profile for profile in list_offer_profiles(include_disabled=False)}
+    missing=[offer_id for offer_id in unique_ids if offer_id not in available]
+    if missing:
+        raise KeyError(', '.join(missing))
+    return [available[offer_id].model_copy(deep=True) for offer_id in unique_ids]
+
+
+def _report_offer_result(report:dict[str, Any]|None, offer_id:str)->dict[str, Any]|None:
+    if not isinstance(report, dict):
+        return None
+    results=report.get('offer_results')
+    if isinstance(results, list):
+        for result in results:
+            if isinstance(result, dict) and result.get('offer_id') == offer_id:
+                return result
+    primary=report.get('primary_offer_id') or report.get('offer_id') or 'acp'
+    return report if primary == offer_id else None
+
+
+def get_review_stats(offer_id:str='acp')->ReviewStats:
+    remote=_convex_call('query', 'reviews:getStats', {'offerId':offer_id})
+    if remote is not None:
+        return ReviewStats.model_validate(remote)
+
+    stats=ReviewStats(offer_id=offer_id)
+    outcomes=stats.outcomes.model_dump()
+    if not JOB_DATA_DIR.exists():
+        return stats
+    for status_path in JOB_DATA_DIR.glob('*/status.json'):
+        if (status_path.parent/'deleted.json').exists():
+            continue
+        try:
+            record=JobRecord.model_validate(read_json(status_path))
+        except (OSError, ValueError):
+            continue
+        if offer_id not in record.offer_ids:
+            continue
+        stats.total_reviews += 1
+        if record.has_creative:
+            stats.creative_reviews += 1
+        else:
+            stats.copy_only_reviews += 1
+        if record.status == JobStatus.failed:
+            stats.failed_reviews += 1
+            continue
+        if record.status != JobStatus.complete:
+            stats.in_progress_reviews += 1
+            continue
+        stats.completed_reviews += 1
+        report_path=status_path.parent/'report.json'
+        report=read_json(report_path) if report_path.exists() else None
+        result=_report_offer_result(report, offer_id)
+        status=_overall_status(result)
+        if status:
+            outcomes[status] += 1
+        if isinstance(result, dict) and result.get('internal_disposition') == 'accepted_with_override':
+            stats.accepted_overrides += 1
+    stats.outcomes=ReviewOutcomeCounts(**outcomes)
+    return stats
+
+
+def delete_review(job_id:str)->DeletedReview:
+    record=get_status(job_id)
+    if record.status not in {JobStatus.complete, JobStatus.failed}:
+        raise ValueError('Only completed or failed reviews can be removed from history.')
+    remote=_convex_call('mutation', 'reviews:softDelete', {'jobId':job_id})
+    deleted_at=int(remote.get('deleted_at')) if isinstance(remote, dict) else now_ms()
+    write_json(JOB_DATA_DIR/job_id/'deleted.json', {'job_id':job_id, 'deleted_at':deleted_at})
+    return DeletedReview(job_id=job_id, deleted_at=deleted_at)

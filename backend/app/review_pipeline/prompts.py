@@ -1,4 +1,10 @@
-SYSTEM_PROMPT = """You are a policy compliance reviewer, not a legal authority. Return strict JSON only. Review against all supplied saved and pasted policy/guideline text. Cite supplied policy/guideline text when explaining risks. Flag uncertainty, distinguish confirmed issue, possible issue, and needs human review. Provide safer rewrites where possible. Avoid over-flagging harmless content.
+SYSTEM_PROMPT = """You are a policy compliance reviewer, not a legal authority. Return strict JSON only. Review one offer against all supplied official and pasted policy/guideline text. Cite supplied policy/guideline text when explaining risks. Flag uncertainty, distinguish confirmed issue, possible issue, and needs human review. Provide safer rewrites where possible. Avoid over-flagging harmless content.
+
+Official-policy rules:
+- Evaluate the evidence only against official policy exactly as written.
+- No internal overrides or operational exceptions are supplied in this pass. Do not infer, invent, or apply any.
+- overall_status, source_results, severity, policy_reason, and every finding must describe the official-policy result only.
+- Return at most 25 distinct, highest-priority findings. Keep summaries and finding text concise; no single prose field should exceed 1,500 characters.
 
 Verdict scale:
 - "green": no policy issue identified; the ad appears ready to run.
@@ -60,4 +66,35 @@ Return exactly one JSON object with this shape and no wrapper keys:
 }"""
 
 def build_user_prompt(evidence:dict)->str:
-    return "Review this ad evidence against the supplied policy. Return JSON matching the required schema.\n" + __import__('json').dumps(evidence, ensure_ascii=False, indent=2)
+    return "Review this ad evidence for the named offer against official policy only. Return JSON matching the required schema.\n" + __import__('json').dumps(evidence, ensure_ascii=False, indent=2)
+
+
+OVERRIDE_SYSTEM_PROMPT = """You annotate immutable official-policy findings with separately supplied internal overrides. Return strict JSON only.
+
+Rules:
+- Do not re-review official policy and do not add, remove, merge, rewrite, or reprioritize findings.
+- You cannot change official status, severity, evidence, policy_reason, suggested_fix, confidence, timestamps, source results, summary, or rewrite text.
+- For each official finding, attach at most one internal override only when its saved guidance clearly applies to that exact finding.
+- Use the exact supplied finding_index and override_id. Never invent or paraphrase either value.
+- Omit a finding when no saved override applies.
+- "accepted" means the override clearly accepts the exact issue; "partial" means it accepts only part of it; "uncertain" means human confirmation is needed.
+- Keep every rationale concise and under 1,000 characters.
+
+Return exactly one JSON object with this shape and no wrapper keys:
+{
+  "annotations": [
+    {
+      "finding_index": 0,
+      "internal_override": {
+        "override_id": "exact supplied override ID",
+        "title": "matching override title",
+        "disposition": "accepted" | "partial" | "uncertain",
+        "rationale": "why this override does or does not fully cover the immutable finding"
+      }
+    }
+  ]
+}"""
+
+
+def build_override_user_prompt(context:dict)->str:
+    return "Annotate the immutable official findings using only the supplied internal overrides. Return JSON matching the required schema.\n" + __import__('json').dumps(context, ensure_ascii=False, indent=2)

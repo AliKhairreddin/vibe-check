@@ -1,16 +1,16 @@
 from __future__ import annotations
-import logging, shutil, anyio
+import asyncio, logging, shutil, anyio
 from pathlib import Path
 from .media import MediaKind, image_metadata, prepare_image_frame
-from .models import JobStatus, ReviewRequestMeta
+from .models import ComplianceReport, JobStatus, OfferComplianceResult, OfferProfile, ReviewRequestMeta
 from .storage import job_dir, set_report, set_status, write_json
 from .telegram import finish_batch_item_and_notify, send_review_message
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
-from .guidelines import build_policy_context
+from .guidelines import build_internal_override_context, build_policy_context, built_in_acp_profile
 from .ocr import run_ocr
 from .vision import observe_frames_with_openrouter
-from .llm import review_with_openrouter
+from .llm import review_internal_overrides_with_openrouter, review_with_openrouter
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 logger = logging.getLogger(__name__)
@@ -25,8 +25,15 @@ def build_review_evidence(
     frames: list[dict],
     visual_observations: dict | None,
     evidence_note: str,
+    offer_profile: OfferProfile | None = None,
 ) -> dict:
+    profile=offer_profile or built_in_acp_profile()
     return {
+        'offer': {
+            'offer_id': profile.offer_id,
+            'display_name': profile.display_name,
+            'guideline_version': profile.version,
+        },
         'source_definitions': {
             'ad_copy': 'Submitted platform caption/body text from the form only.',
             'audio': 'Spoken words from the extracted or manually supplied audio transcript only.',
@@ -48,6 +55,166 @@ def build_review_evidence(
         'notes': meta.notes,
         'cost_saving_note': evidence_note,
     }
+
+
+def _internal_disposition(report:ComplianceReport)->str:
+    if not report.findings:
+        return 'clear' if report.overall_status == 'green' else 'human_review'
+    treatments=[
+        finding.internal_override.disposition
+        for finding in report.findings
+        if finding.internal_override is not None
+    ]
+    if len(treatments) == len(report.findings) and all(value == 'accepted' for value in treatments):
+        return 'accepted_with_override'
+    if any(value in {'partial','uncertain'} for value in treatments):
+        return 'human_review'
+    return 'action_required'
+
+
+def _validate_internal_overrides(report:ComplianceReport, profile:OfferProfile)->None:
+    available={override.override_id:override for override in profile.internal_overrides if override.enabled}
+    invalid_ids:set[str]=set()
+    for finding in report.findings:
+        applied=finding.internal_override
+        if applied is None:
+            continue
+        configured=available.get(applied.override_id)
+        if configured is None:
+            invalid_ids.add(applied.override_id)
+            finding.internal_override=None
+            continue
+        applied.title=configured.title
+    if invalid_ids:
+        report.limitations.append(
+            'The model referenced unknown internal override IDs; those annotations were removed: '
+            + ', '.join(sorted(invalid_ids))
+        )
+    report.internal_disposition=_internal_disposition(report)
+
+
+def _override_review_context(report:ComplianceReport, profile:OfferProfile)->dict:
+    return {
+        'offer': {
+            'offer_id': profile.offer_id,
+            'display_name': profile.display_name,
+            'guideline_version': profile.version,
+        },
+        'official_findings': [
+            {
+                'finding_index': index,
+                'severity': finding.severity,
+                'source': finding.source,
+                'timestamp_start': finding.timestamp_start,
+                'timestamp_end': finding.timestamp_end,
+                'evidence': finding.evidence,
+                'policy_reason': finding.policy_reason,
+                'suggested_fix': finding.suggested_fix,
+                'confidence': finding.confidence,
+            }
+            for index,finding in enumerate(report.findings)
+        ],
+        'internal_overrides': build_internal_override_context(profile),
+    }
+
+
+async def _annotate_internal_overrides(
+    report:ComplianceReport,
+    profile:OfferProfile,
+    model:str|None,
+)->None:
+    for finding in report.findings:
+        finding.internal_override=None
+
+    configured=build_internal_override_context(profile)
+    if not report.findings or not configured:
+        _validate_internal_overrides(report, profile)
+        return
+
+    try:
+        annotation_set=await review_internal_overrides_with_openrouter(
+            _override_review_context(report, profile),
+            model,
+        )
+    except Exception as exc:
+        logger.exception('Internal override annotation failed for %s', profile.offer_id)
+        report.limitations.append(
+            f'Internal overrides could not be evaluated: {type(exc).__name__}. Review saved exceptions manually.'
+        )
+        _validate_internal_overrides(report, profile)
+        report.internal_disposition='human_review'
+        return
+
+    invalid_indexes:set[int]=set()
+    duplicate_indexes:set[int]=set()
+    annotated_indexes:set[int]=set()
+    for annotation in annotation_set.annotations:
+        index=annotation.finding_index
+        if index >= len(report.findings):
+            invalid_indexes.add(index)
+            continue
+        if index in annotated_indexes:
+            duplicate_indexes.add(index)
+            continue
+        annotated_indexes.add(index)
+        report.findings[index].internal_override=annotation.internal_override.model_copy(deep=True)
+
+    if invalid_indexes:
+        report.limitations.append(
+            'The model referenced unknown finding indexes; those internal override annotations were removed: '
+            + ', '.join(str(index) for index in sorted(invalid_indexes))
+        )
+    if duplicate_indexes:
+        report.limitations.append(
+            'The model returned duplicate internal override annotations; only the first was kept for finding indexes: '
+            + ', '.join(str(index) for index in sorted(duplicate_indexes))
+        )
+    _validate_internal_overrides(report, profile)
+
+
+async def _review_offer(
+    profile:OfferProfile,
+    media_kind:MediaKind,
+    meta:ReviewRequestMeta,
+    transcript:dict,
+    ocr:list[dict],
+    frames:list[dict],
+    visual_observations:dict | None,
+    evidence_note:str,
+)->OfferComplianceResult:
+    policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
+    evidence=build_review_evidence(
+        media_kind,
+        meta,
+        policy_text,
+        policy_sources,
+        transcript,
+        ocr,
+        frames,
+        visual_observations,
+        evidence_note,
+        profile,
+    )
+    try:
+        report=await review_with_openrouter(evidence, meta.model)
+    except Exception as exc:
+        logger.exception('Offer review failed for %s', profile.offer_id)
+        report=ComplianceReport(
+            overall_status='orange',
+            summary=f'{profile.display_name} could not be reviewed automatically.',
+            limitations=[f'Offer review failed: {type(exc).__name__}. Run this review again or review manually.'],
+            internal_disposition='human_review',
+        )
+    report.offer_id=profile.offer_id
+    report.offer_name=profile.display_name
+    report.guideline_version=profile.version
+    report.policy_sources=policy_sources
+    if evidence_note not in report.limitations:
+        report.limitations.append(evidence_note)
+    await _annotate_internal_overrides(report, profile, meta.model)
+    return OfferComplianceResult.model_validate(
+        report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
+    )
 
 async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, meta:ReviewRequestMeta):
     jd=job_dir(job_id)
@@ -92,11 +259,27 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             transcript=await anyio.to_thread.run_sync(transcribe, audio_path, meta.manual_transcript)
             write_json(jd/'transcript.json', transcript)
             set_status(job_id, JobStatus.reviewing_with_llm, 90, 'Reviewing with LLM')
-        policy_text, policy_sources=build_policy_context(meta.policy_text)
-        evidence=build_review_evidence(media_kind, meta, policy_text, policy_sources, transcript, ocr, frames, visual_observations, evidence_note)
-        report=await review_with_openrouter(evidence, meta.model)
-        if evidence_note not in report.limitations:
-            report.limitations.append(evidence_note)
+        profiles=meta.offer_profiles or [built_in_acp_profile()]
+        offer_results=await asyncio.gather(*[
+            _review_offer(
+                profile,
+                media_kind,
+                meta,
+                transcript,
+                ocr,
+                frames,
+                visual_observations,
+                evidence_note,
+            )
+            for profile in profiles
+        ])
+        primary=offer_results[0]
+        report=ComplianceReport(
+            **primary.model_dump(),
+            schema_version=2,
+            primary_offer_id=primary.offer_id,
+            offer_results=offer_results,
+        )
         report_json=report.model_dump(mode='json')
         set_report(job_id, report_json)
         rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
