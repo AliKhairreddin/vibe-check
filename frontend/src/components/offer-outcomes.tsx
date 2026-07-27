@@ -170,8 +170,13 @@ export function OfferOutcomeCell({
     );
   }
 
+  const compactDetails = compact ? outcomeDetails(outcome) : undefined;
+
   return (
-    <div className={cn('grid min-w-24 gap-1', compact && 'min-w-0')}>
+    <div
+      className={cn('grid min-w-24 gap-1', compact && 'min-w-0')}
+      title={compactDetails}
+    >
       {outcome.overall_status ? (
         <OfferResultBadge className="w-fit" status={outcome.overall_status} />
       ) : (
@@ -229,6 +234,26 @@ function unavailableMessage(state: OfferOutcome['evaluation_state'] | undefined)
   if (state === 'disabled') return 'Offer was turned off for this review.';
   if (state === 'missing_guidelines') return 'No guidelines were available for this review.';
   return 'No offer result was saved for this review.';
+}
+
+function outcomeDetails(outcome: OfferOutcome) {
+  const details = outcome.overall_status
+    ? [`Overall: ${STATUS_META[outcome.overall_status].label}`]
+    : ['Overall result not ready'];
+  if (outcome.creative_result) {
+    details.push(`Creative: ${STATUS_META[outcome.creative_result].label}`);
+  }
+  if (outcome.ad_copy_result) {
+    details.push(`Copy: ${STATUS_META[outcome.ad_copy_result].label}`);
+  }
+  if (
+    outcome.overall_status &&
+    !outcome.creative_result &&
+    !outcome.ad_copy_result
+  ) {
+    details.push('Source breakdown not available');
+  }
+  return details.join(' · ');
 }
 
 function normalizeStatus(status: unknown): OverallStatus | null {

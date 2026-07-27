@@ -1092,9 +1092,12 @@ function HistoryCard({
   );
 
   return (
-    <Card>
+    <Card size={allHistory ? 'sm' : 'default'}>
       <CardHeader>
-        <CardTitle as={allHistory ? 'h1' : 'h2'} className="text-xl">
+        <CardTitle
+          as={allHistory ? 'h1' : 'h2'}
+          className={cn('text-xl', allHistory && 'group-data-[size=sm]/card:text-lg')}
+        >
           {allHistory ? 'All review history' : 'Review history'}
         </CardTitle>
         <CardDescription>
@@ -1145,8 +1148,8 @@ function HistoryCard({
           </Alert>
         ) : null}
         {!error && !isLoading && reviews.length ? (
-          <div className="mb-4 flex items-center gap-2">
-            <div className="relative w-full max-w-md">
+          <div className="mb-3 flex items-center gap-2">
+            <div className="relative w-full max-w-sm">
               <Search
                 aria-hidden="true"
                 className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -1191,50 +1194,56 @@ function HistoryCard({
           </div>
         ) : filteredReviews.length ? (
           <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
-            <Table>
+            <Table className="table-fixed">
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead>Review</TableHead>
-                  <TableHead>Uploaded</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead className="h-8 w-56 text-xs text-muted-foreground">Review</TableHead>
+                  <TableHead className="h-8 w-32 text-xs text-muted-foreground">Uploaded</TableHead>
+                  <TableHead className="h-8 w-20 text-xs text-muted-foreground">Status</TableHead>
                   {offerColumns.map((offer) => (
-                    <TableHead key={offer.offer_id} className="min-w-36">
+                    <TableHead key={offer.offer_id} className="h-8 w-28 text-xs text-muted-foreground">
                       {offer.offer_name}
                     </TableHead>
                   ))}
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead className="h-8 w-28 text-right text-xs text-muted-foreground">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredReviews.map((review) => (
                   <TableRow key={review.job_id}>
-                    <TableCell className="min-w-48 max-w-80">
-                      <span className="block truncate font-medium">
+                    <TableCell className="px-2 py-1.5">
+                      <span
+                        className="block truncate font-medium"
+                        title={review.file_name || review.job_id}
+                      >
                         {review.file_name || review.job_id}
                       </span>
                     </TableCell>
-                    <TableCell className="min-w-40 text-muted-foreground">
-                      {formatDateTime(review.created_at)}
+                    <TableCell
+                      className="px-2 py-1.5 text-xs text-muted-foreground"
+                      title={formatDateTime(review.created_at)}
+                    >
+                      {formatHistoryDateTime(review.created_at)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="px-2 py-1.5">
                       <StatusBadge status={review.status} />
                     </TableCell>
                     {offerColumns.map((offer) => (
-                      <TableCell key={offer.offer_id}>
+                      <TableCell key={offer.offer_id} className="px-2 py-1.5">
                         <OfferOutcomeCell
                           outcome={reviewOutcomeForOffer(review, offer)}
-                          showSources
+                          compact
                         />
                       </TableCell>
                     ))}
-                    <TableCell className="text-right">
+                    <TableCell className="px-2 py-1.5 text-right">
                       <div className="flex min-w-max justify-end gap-1">
                         {deleteCandidate === review.job_id ? (
                           <>
                             <Button
                               type="button"
                               variant="ghost"
-                              size="sm"
+                              size="xs"
                               disabled={deleteMutation.isPending}
                               onClick={() => setDeleteCandidate(null)}
                             >
@@ -1243,7 +1252,7 @@ function HistoryCard({
                             <Button
                               type="button"
                               variant="destructive"
-                              size="sm"
+                              size="xs"
                               disabled={deleteMutation.isPending}
                               onClick={() => deleteMutation.mutate(review.job_id)}
                             >
@@ -1257,25 +1266,27 @@ function HistoryCard({
                               <Link
                                 to="/reviews/$jobId/report"
                                 params={{ jobId: review.job_id }}
-                                className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                                aria-label={`Open report for ${review.file_name || review.job_id}`}
+                                className={cn(buttonVariants({ variant: 'outline', size: 'xs' }))}
                               >
                                 <FileJson data-icon="inline-start" />
-                                Open report
+                                Report
                               </Link>
                             ) : (
                               <Link
                                 to="/reviews/$jobId"
                                 params={{ jobId: review.job_id }}
-                                className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
+                                aria-label={`View job for ${review.file_name || review.job_id}`}
+                                className={cn(buttonVariants({ variant: 'ghost', size: 'xs' }))}
                               >
-                                View job
+                                Job
                               </Link>
                             )}
                             {allHistory && (review.report_ready || review.status === 'failed') ? (
                               <Button
                                 type="button"
                                 variant="ghost"
-                                size="icon-sm"
+                                size="icon-xs"
                                 aria-label={`Remove ${review.file_name || review.job_id} from history`}
                                 title="Remove from history and dashboard stats"
                                 onClick={() => setDeleteCandidate(review.job_id)}
@@ -2185,6 +2196,16 @@ function formatDateTime(value?: number | null) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
+  }).format(new Date(value));
+}
+
+function formatHistoryDateTime(value?: number | null) {
+  if (!value) return 'Unknown';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   }).format(new Date(value));
 }
 
