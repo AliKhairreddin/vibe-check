@@ -20,22 +20,29 @@ const CANONICAL_OFFERS: OfferColumn[] = [
   { offer_id: 'smart-financial', offer_name: 'Smart Financial' },
 ];
 
-const STATUS_META: Record<OverallStatus, { label: string; className: string }> = {
+const STATUS_META: Record<
+  OverallStatus,
+  { label: string; className: string; railClassName: string }
+> = {
   green: {
     label: 'Green',
     className: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
+    railClassName: 'bg-emerald-500 dark:bg-emerald-400',
   },
   yellow: {
     label: 'Yellow',
     className: 'border-yellow-600/30 bg-yellow-400/20 text-yellow-800 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-200',
+    railClassName: 'bg-yellow-400 dark:bg-yellow-300',
   },
   orange: {
     label: 'Orange',
     className: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
+    railClassName: 'bg-orange-500 dark:bg-orange-400',
   },
   red: {
     label: 'Red',
     className: 'border-red-600/30 bg-red-500/15 text-red-700 dark:border-red-400/30 dark:bg-red-400/15 dark:text-red-300',
+    railClassName: 'bg-red-500 dark:bg-red-400',
   },
 };
 
@@ -193,6 +200,70 @@ export function OfferOutcomeCell({
   );
 }
 
+export function OfferResultsHeader({ offers }: { offers: OfferColumn[] }) {
+  return (
+    <div className="grid gap-1 py-1">
+      <span>Offer results</span>
+      <div
+        className="grid gap-px"
+        style={{
+          gridTemplateColumns: `repeat(${Math.max(offers.length, 1)}, minmax(0, 1fr))`,
+        }}
+      >
+        {offers.map((offer) => (
+          <span
+            key={offer.offer_id}
+            className="truncate pr-1 text-[10px] leading-3 font-normal text-muted-foreground"
+            title={offer.offer_name}
+          >
+            {offer.offer_name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ReviewOfferResultsRail({
+  offers,
+  review,
+}: {
+  offers: OfferColumn[];
+  review: ReviewHistoryItem;
+}) {
+  const segments = offers.map((offer) => {
+    const outcome = reviewOutcomeForOffer(review, offer);
+    const meta = railOutcomeMeta(outcome);
+    return { ...meta, offer };
+  });
+  const accessibleLabel = segments
+    .map(({ label, offer }) => `${offer.offer_name}: ${label}`)
+    .join(', ');
+
+  return (
+    <div
+      className="grid h-2.5 min-w-64 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10"
+      style={{
+        gridTemplateColumns: `repeat(${Math.max(segments.length, 1)}, minmax(0, 1fr))`,
+      }}
+      role="img"
+      aria-label={accessibleLabel || 'No offer results'}
+    >
+      {segments.map(({ className, label, offer }, index) => (
+        <span
+          key={offer.offer_id}
+          className={cn(
+            'h-full',
+            index > 0 && 'border-l border-card/90',
+            className
+          )}
+          title={`${offer.offer_name}: ${label}`}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function OfferEligibilityGrid({ offers }: { offers: OfferCatalogItem[] }) {
   const columns = getOfferColumns(offers);
   return (
@@ -234,6 +305,25 @@ function unavailableMessage(state: OfferOutcome['evaluation_state'] | undefined)
   if (state === 'disabled') return 'Offer was turned off for this review.';
   if (state === 'missing_guidelines') return 'No guidelines were available for this review.';
   return 'No offer result was saved for this review.';
+}
+
+function railOutcomeMeta(outcome: OfferOutcome | null) {
+  if (!outcome || outcome.evaluation_state !== 'evaluated') {
+    return {
+      className: 'bg-muted-foreground/15',
+      label: 'N/A',
+    };
+  }
+  if (!outcome.overall_status) {
+    return {
+      className: 'bg-muted-foreground/30',
+      label: 'Not ready',
+    };
+  }
+  return {
+    className: STATUS_META[outcome.overall_status].railClassName,
+    label: STATUS_META[outcome.overall_status].label,
+  };
 }
 
 function outcomeDetails(outcome: OfferOutcome) {

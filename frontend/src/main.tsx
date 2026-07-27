@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertDialog } from '@base-ui/react/alert-dialog';
 import { createRoot } from 'react-dom/client';
 import {
   QueryClient,
@@ -89,6 +90,8 @@ import {
   getOfferColumns,
   OfferEligibilityGrid,
   OfferOutcomeCell,
+  OfferResultsHeader,
+  ReviewOfferResultsRail,
   reviewOutcomeForOffer,
 } from '@/components/offer-outcomes';
 import {
@@ -1010,6 +1013,13 @@ function BatchRow({
   );
 }
 
+type HistoryResultFilter = 'all' | OverallStatus | 'na';
+type HistoryTypeFilter = 'all' | 'creative' | 'copy_only';
+type HistoryDeleteRequest = {
+  ids: string[];
+  label: string;
+};
+
 function HistoryCard({
   allHistory = false,
   error,
@@ -1030,22 +1040,43 @@ function HistoryCard({
   reviews: ReviewHistoryItem[];
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
+  const [offerFilter, setOfferFilter] = useState('all');
+  const [resultFilter, setResultFilter] = useState<HistoryResultFilter>('all');
+  const [typeFilter, setTypeFilter] = useState<HistoryTypeFilter>('all');
+  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(new Set());
+  const [deleteRequest, setDeleteRequest] = useState<HistoryDeleteRequest | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const offerCatalogQuery = useQuery({
     queryKey: ['offers'],
     queryFn: listOfferCatalog,
     staleTime: 60_000,
   });
+  const offerColumns = useMemo(
+    () => getOfferColumns(
+      offerCatalogQuery.data ?? [],
+      reviews.map((review) => review.offer_outcomes)
+    ),
+    [offerCatalogQuery.data, reviews]
+  );
   const deleteMutation = useMutation({
-    mutationFn: deleteReview,
-    onSuccess: (deleted) => {
-      setDeleteCandidate(null);
+    mutationFn: deleteReviewSelection,
+    onSuccess: ({ deletedIds, failedIds, firstError }) => {
+      setDeleteRequest(null);
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
-      queryClient.removeQueries({ queryKey: ['status', deleted.job_id] });
-      queryClient.removeQueries({ queryKey: ['report', deleted.job_id] });
-      queryClient.removeQueries({ queryKey: ['source', deleted.job_id] });
+      for (const jobId of deletedIds) {
+        queryClient.removeQueries({ queryKey: ['status', jobId] });
+        queryClient.removeQueries({ queryKey: ['report', jobId] });
+        queryClient.removeQueries({ queryKey: ['source', jobId] });
+      }
+      setSelectedReviewIds(new Set(failedIds));
+      setDeleteError(
+        failedIds.length
+          ? `${deletedIds.length ? `Removed ${deletedIds.length}. ` : ''}Could not remove ${failedIds.length} selected review${failedIds.length === 1 ? '' : 's'}: ${errorMessage(firstError)}`
+          : null
+      );
       try {
-        const active = loadActiveBatch().filter((item) => item.jobId !== deleted.job_id);
+        const deleted = new Set(deletedIds);
+        const active = loadActiveBatch().filter((item) => !item.jobId || !deleted.has(item.jobId));
         if (active.length) window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(active));
         else window.localStorage.removeItem(ACTIVE_BATCH_KEY);
       } catch {
@@ -1055,213 +1086,299 @@ function HistoryCard({
   });
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
   const filteredReviews = useMemo(() => {
-    if (!normalizedSearch) return reviews;
-
-    return reviews.filter((review) =>
-      [
-        review.file_name,
-        review.job_id,
-        review.status,
-        formatStatus(review.status),
-        review.overall_status,
-        review.overall_status ? formatStatus(review.overall_status) : null,
-        review.creative_result,
-        review.creative_result ? formatStatus(review.creative_result) : null,
-        review.ad_copy_result,
-        review.ad_copy_result ? formatStatus(review.ad_copy_result) : null,
-        ...(review.offer_ids ?? []),
-        ...(review.offer_outcomes ?? []).flatMap((outcome) => [
-          outcome.offer_id,
-          outcome.offer_name,
-          outcome.overall_status,
-          outcome.creative_result,
-          outcome.ad_copy_result,
-          outcome.message,
-        ]),
-        formatDateTime(review.created_at),
-      ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch))
-    );
-  }, [normalizedSearch, reviews]);
-  const isSearching = normalizedSearch.length > 0;
-  const offerColumns = useMemo(
-    () => getOfferColumns(
-      offerCatalogQuery.data ?? [],
-      reviews.map((review) => review.offer_outcomes)
-    ),
-    [offerCatalogQuery.data, reviews]
+    return reviews.filter((review) => {
+      if (normalizedSearch && !reviewMatchesSearch(review, normalizedSearch)) return false;
+      if (typeFilter === 'creative' && review.has_creative === false) return false;
+      if (typeFilter === 'copy_only' && review.has_creative !== false) return false;
+      return reviewMatchesResultFilter(
+        review,
+        offerColumns,
+        offerFilter,
+        resultFilter
+      );
+    });
+  }, [
+    normalizedSearch,
+    offerColumns,
+    offerFilter,
+    resultFilter,
+    reviews,
+    typeFilter,
+  ]);
+  const filtersActive = Boolean(
+    normalizedSearch ||
+    offerFilter !== 'all' ||
+    resultFilter !== 'all' ||
+    typeFilter !== 'all'
+  );
+  const selectableVisibleIds = filteredReviews
+    .filter(isReviewDeletable)
+    .map((review) => review.job_id);
+  const allVisibleSelected = selectableVisibleIds.length > 0 &&
+    selectableVisibleIds.every((jobId) => selectedReviewIds.has(jobId));
+  const someVisibleSelected = !allVisibleSelected &&
+    selectableVisibleIds.some((jobId) => selectedReviewIds.has(jobId));
+  const selectedCount = selectedReviewIds.size;
+  const selectedReviews = reviews.filter((review) =>
+    selectedReviewIds.has(review.job_id)
   );
 
+  useEffect(() => {
+    setSelectedReviewIds(new Set());
+  }, [normalizedSearch, offerFilter, resultFilter, typeFilter]);
+
+  function resetFilters() {
+    setSearchQuery('');
+    setOfferFilter('all');
+    setResultFilter('all');
+    setTypeFilter('all');
+  }
+
+  function toggleReviewSelection(jobId: string) {
+    setSelectedReviewIds((current) => {
+      const next = new Set(current);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  }
+
+  function toggleVisibleSelection() {
+    setSelectedReviewIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        for (const jobId of selectableVisibleIds) next.delete(jobId);
+      } else {
+        for (const jobId of selectableVisibleIds) next.add(jobId);
+      }
+      return next;
+    });
+  }
+
   return (
-    <Card size={allHistory ? 'sm' : 'default'}>
-      <CardHeader>
-        <CardTitle
-          as={allHistory ? 'h1' : 'h2'}
-          className={cn('text-xl', allHistory && 'group-data-[size=sm]/card:text-lg')}
-        >
-          {allHistory ? 'All review history' : 'Review history'}
-        </CardTitle>
-        <CardDescription>
-          {allHistory
-            ? 'Browse every saved review, loading older records as needed.'
-            : 'Your 50 most recent reviews, with split creative and copy results.'}
-        </CardDescription>
-        <CardAction>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline">
-              {isSearching
-                ? `${filteredReviews.length} of ${reviews.length}`
-                : allHistory
-                  ? `${reviews.length}${hasMore ? '+' : ''} loaded`
-                  : `${reviews.length} recent`}
-            </Badge>
-            {!allHistory ? (
-              <Link
-                to="/history"
-                className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
-              >
-                View all
-              </Link>
-            ) : null}
-          </div>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {deleteMutation.error ? (
-          <Alert variant="destructive" className="mb-4">
-            <AlertCircle />
-            <AlertTitle>Could not remove review</AlertTitle>
-            <AlertDescription>
-              {errorMessage(deleteMutation.error)}{' '}
-              <Link to="/settings" className="font-medium underline underline-offset-4">
-                Unlock admin access in Settings.
-              </Link>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        {deleteCandidate ? (
-          <Alert className="mb-4">
-            <Trash2 />
-            <AlertTitle>Remove this review from Vibe Check?</AlertTitle>
-            <AlertDescription>
-              It will disappear from history and dashboard stats. The original Google Drive file or uploaded source is not deleted.
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        {!error && !isLoading && reviews.length ? (
-          <div className="mb-3 flex items-center gap-2">
-            <div className="relative w-full max-w-sm">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                type="search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search reviews"
-                aria-label="Search review history"
-                className="pl-8"
-              />
+    <>
+      <Card size={allHistory ? 'sm' : 'default'}>
+        <CardHeader>
+          <CardTitle
+            as={allHistory ? 'h1' : 'h2'}
+            className={cn('text-xl', allHistory && 'group-data-[size=sm]/card:text-lg')}
+          >
+            {allHistory ? 'All review history' : 'Review history'}
+          </CardTitle>
+          <CardDescription>
+            {allHistory
+              ? 'Browse every saved review, loading older records as needed.'
+              : 'Your 50 most recent reviews, with results across every offer.'}
+          </CardDescription>
+          <CardAction>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">
+                {filtersActive
+                  ? `${filteredReviews.length} of ${reviews.length}`
+                  : allHistory
+                    ? `${reviews.length}${hasMore ? '+' : ''} loaded`
+                    : `${reviews.length} recent`}
+              </Badge>
+              {!allHistory ? (
+                <Link
+                  to="/history"
+                  className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                >
+                  View all
+                </Link>
+              ) : null}
             </div>
-            {isSearching ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setSearchQuery('')}
-              >
-                Clear
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-        {error ? (
-          <Alert variant="destructive">
-            <AlertCircle />
-            <AlertTitle>History unavailable</AlertTitle>
-            <AlertDescription>{errorMessage(error)}</AlertDescription>
-            <AlertAction>
-              <Button type="button" variant="outline" size="xs" onClick={onRetry}>
-                <RefreshCw />
-                Retry
-              </Button>
-            </AlertAction>
-          </Alert>
-        ) : isLoading ? (
-          <div className="grid gap-3">
-            <Skeleton className="h-10" />
-            <Skeleton className="h-24" />
-          </div>
-        ) : filteredReviews.length ? (
-          <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
-            <Table className="table-fixed">
-              <TableHeader className="sticky top-0 z-10 bg-card">
-                <TableRow>
-                  <TableHead className="h-8 w-56 text-xs text-muted-foreground">Review</TableHead>
-                  <TableHead className="h-8 w-32 text-xs text-muted-foreground">Uploaded</TableHead>
-                  <TableHead className="h-8 w-20 text-xs text-muted-foreground">Status</TableHead>
-                  {offerColumns.map((offer) => (
-                    <TableHead key={offer.offer_id} className="h-8 w-28 text-xs text-muted-foreground">
-                      {offer.offer_name}
-                    </TableHead>
-                  ))}
-                  <TableHead className="h-8 w-28 text-right text-xs text-muted-foreground">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredReviews.map((review) => (
-                  <TableRow key={review.job_id}>
-                    <TableCell className="px-2 py-1.5">
-                      <span
-                        className="block truncate font-medium"
-                        title={review.file_name || review.job_id}
-                      >
-                        {review.file_name || review.job_id}
-                      </span>
-                    </TableCell>
-                    <TableCell
-                      className="px-2 py-1.5 text-xs text-muted-foreground"
-                      title={formatDateTime(review.created_at)}
-                    >
-                      {formatHistoryDateTime(review.created_at)}
-                    </TableCell>
-                    <TableCell className="px-2 py-1.5">
-                      <StatusBadge status={review.status} />
-                    </TableCell>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {deleteError ? (
+            <Alert variant="destructive" className="mb-3">
+              <AlertCircle />
+              <AlertTitle>Could not remove every review</AlertTitle>
+              <AlertDescription>
+                {deleteError}{' '}
+                <Link to="/settings" className="font-medium underline underline-offset-4">
+                  Check admin access in Settings.
+                </Link>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {!error && !isLoading && reviews.length ? (
+            <>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <div className="relative min-w-56 flex-1 sm:max-w-sm">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search reviews"
+                    aria-label="Search review history"
+                    className="pl-8"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2" aria-label="History filters">
+                  <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden="true" />
+                  <select
+                    value={offerFilter}
+                    onChange={(event) => setOfferFilter(event.target.value)}
+                    aria-label="Filter by offer"
+                    className={historyFilterClassName}
+                  >
+                    <option value="all">All offers</option>
                     {offerColumns.map((offer) => (
-                      <TableCell key={offer.offer_id} className="px-2 py-1.5">
-                        <OfferOutcomeCell
-                          outcome={reviewOutcomeForOffer(review, offer)}
-                          compact
-                        />
-                      </TableCell>
+                      <option key={offer.offer_id} value={offer.offer_id}>
+                        {offer.offer_name}
+                      </option>
                     ))}
-                    <TableCell className="px-2 py-1.5 text-right">
-                      <div className="flex min-w-max justify-end gap-1">
-                        {deleteCandidate === review.job_id ? (
-                          <>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              disabled={deleteMutation.isPending}
-                              onClick={() => setDeleteCandidate(null)}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="xs"
-                              disabled={deleteMutation.isPending}
-                              onClick={() => deleteMutation.mutate(review.job_id)}
-                            >
-                              {deleteMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
-                              Remove
-                            </Button>
-                          </>
-                        ) : (
-                          <>
+                  </select>
+                  <select
+                    value={resultFilter}
+                    onChange={(event) => setResultFilter(event.target.value as HistoryResultFilter)}
+                    aria-label="Filter by result"
+                    className={historyFilterClassName}
+                  >
+                    <option value="all">All results</option>
+                    <option value="red">Red</option>
+                    <option value="orange">Orange</option>
+                    <option value="yellow">Yellow</option>
+                    <option value="green">Green</option>
+                    <option value="na">N/A</option>
+                  </select>
+                  <select
+                    value={typeFilter}
+                    onChange={(event) => setTypeFilter(event.target.value as HistoryTypeFilter)}
+                    aria-label="Filter by review type"
+                    className={historyFilterClassName}
+                  >
+                    <option value="all">All types</option>
+                    <option value="creative">Creative</option>
+                    <option value="copy_only">Copy only</option>
+                  </select>
+                  {filtersActive ? (
+                    <Button type="button" variant="ghost" size="xs" onClick={resetFilters}>
+                      Reset
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              {selectedCount ? (
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{selectedCount} selected</Badge>
+                    {allVisibleSelected ? (
+                      <span className="text-xs text-muted-foreground">
+                        All visible reviews selected
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setSelectedReviewIds(new Set())}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => setDeleteRequest({
+                        ids: selectedReviews.map((review) => review.job_id),
+                        label: selectedReviews.length === 1
+                          ? selectedReviews[0].file_name || selectedReviews[0].job_id
+                          : `${selectedReviews.length} selected reviews`,
+                      })}
+                    >
+                      <Trash2 />
+                      Delete {selectedCount}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {error ? (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertTitle>History unavailable</AlertTitle>
+              <AlertDescription>{errorMessage(error)}</AlertDescription>
+              <AlertAction>
+                <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+                  <RefreshCw />
+                  Retry
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : isLoading ? (
+            <div className="grid gap-3">
+              <Skeleton className="h-10" />
+              <Skeleton className="h-24" />
+            </div>
+          ) : filteredReviews.length ? (
+            <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
+              <Table className="min-w-[60rem] table-fixed">
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow>
+                    <TableHead className="h-11 w-8 px-2">
+                      <HistoryCheckbox
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected}
+                        disabled={!selectableVisibleIds.length}
+                        ariaLabel="Select all visible reviews"
+                        onChange={toggleVisibleSelection}
+                      />
+                    </TableHead>
+                    <TableHead className="h-11 w-72 text-xs text-muted-foreground">Review</TableHead>
+                    <TableHead className="h-11 w-32 text-xs text-muted-foreground">Uploaded</TableHead>
+                    <TableHead className="h-11 w-20 text-xs text-muted-foreground">Status</TableHead>
+                    <TableHead className="h-11 w-80 text-xs text-muted-foreground">
+                      <OfferResultsHeader offers={offerColumns} />
+                    </TableHead>
+                    <TableHead className="h-11 w-28 text-right text-xs text-muted-foreground">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredReviews.map((review) => {
+                    const selected = selectedReviewIds.has(review.job_id);
+                    const deletable = isReviewDeletable(review);
+                    return (
+                      <TableRow key={review.job_id} data-state={selected ? 'selected' : undefined}>
+                        <TableCell className="px-2 py-1.5">
+                          <HistoryCheckbox
+                            checked={selected}
+                            disabled={!deletable}
+                            ariaLabel={`Select ${review.file_name || review.job_id}`}
+                            onChange={() => toggleReviewSelection(review.job_id)}
+                          />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <span
+                            className="block truncate font-medium"
+                            title={review.file_name || review.job_id}
+                          >
+                            {review.file_name || review.job_id}
+                          </span>
+                        </TableCell>
+                        <TableCell
+                          className="px-2 py-1.5 text-xs text-muted-foreground"
+                          title={formatDateTime(review.created_at)}
+                        >
+                          {formatHistoryDateTime(review.created_at)}
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <StatusBadge status={review.status} />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <ReviewOfferResultsRail offers={offerColumns} review={review} />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5 text-right">
+                          <div className="flex min-w-max justify-end gap-1">
                             {review.report_ready ? (
                               <Link
                                 to="/reviews/$jobId/report"
@@ -1282,59 +1399,242 @@ function HistoryCard({
                                 Job
                               </Link>
                             )}
-                            {allHistory && (review.report_ready || review.status === 'failed') ? (
+                            {allHistory && deletable ? (
                               <Button
                                 type="button"
                                 variant="ghost"
                                 size="icon-xs"
                                 aria-label={`Remove ${review.file_name || review.job_id} from history`}
                                 title="Remove from history and dashboard stats"
-                                onClick={() => setDeleteCandidate(review.job_id)}
+                                onClick={() => setDeleteRequest({
+                                  ids: [review.job_id],
+                                  label: review.file_name || review.job_id,
+                                })}
                               >
                                 <Trash2 />
                               </Button>
                             ) : null}
-                          </>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : reviews.length ? (
-          <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
-            <div className="grid max-w-sm gap-1">
-              <p className="text-sm font-medium">No matching reviews</p>
-              <p className="text-sm text-muted-foreground">
-                Try a creative name, job ID, status, result, or upload date.
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          ) : reviews.length ? (
+            <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+              <div className="grid max-w-sm gap-1">
+                <p className="text-sm font-medium">No matching reviews</p>
+                <p className="text-sm text-muted-foreground">
+                  Adjust the search or reset one of the active filters.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
+              <p className="max-w-sm text-sm text-muted-foreground">
+                Completed and in-progress reviews will appear here after the first upload.
               </p>
             </div>
-          </div>
-        ) : (
-          <div className="grid min-h-36 place-items-center rounded-lg border border-dashed bg-muted/20 p-6 text-center">
-            <p className="max-w-sm text-sm text-muted-foreground">
-              Completed and in-progress reviews will appear here after the first upload.
-            </p>
-          </div>
-        )}
-        {allHistory && hasMore && !error ? (
-          <div className="mt-4 flex justify-center border-t pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onLoadMore}
-              disabled={isFetchingMore}
-            >
-              {isFetchingMore ? <LoaderCircle className="animate-spin" /> : null}
-              {isFetchingMore ? 'Loading older reviews' : 'Load older reviews'}
-            </Button>
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
+          )}
+          {allHistory && hasMore && !error ? (
+            <div className="mt-4 flex justify-center border-t pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onLoadMore}
+                disabled={isFetchingMore}
+              >
+                {isFetchingMore ? <LoaderCircle className="animate-spin" /> : null}
+                {isFetchingMore ? 'Loading older reviews' : 'Load older reviews'}
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <AlertDialog.Root
+        open={Boolean(deleteRequest)}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setDeleteRequest(null);
+        }}
+      >
+        <AlertDialog.Portal>
+          <AlertDialog.Backdrop className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px]" />
+          <AlertDialog.Viewport className="fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4">
+            <AlertDialog.Popup className="w-full max-w-md rounded-xl bg-popover p-5 text-popover-foreground shadow-xl ring-1 ring-foreground/10">
+              <div className="grid gap-4">
+                <div className="grid size-9 place-items-center rounded-lg bg-destructive/10 text-destructive">
+                  <Trash2 className="size-4" />
+                </div>
+                <div className="grid gap-1">
+                  <AlertDialog.Title className="text-base font-semibold">
+                    {deleteRequest?.ids.length === 1
+                      ? 'Remove this review?'
+                      : `Remove ${deleteRequest?.ids.length ?? 0} reviews?`}
+                  </AlertDialog.Title>
+                  <AlertDialog.Description className="text-sm leading-5 text-muted-foreground">
+                    {deleteRequest?.ids.length === 1 ? (
+                      <>
+                        <span className="font-medium text-foreground">{deleteRequest.label}</span>{' '}
+                        will disappear from history and dashboard stats.
+                      </>
+                    ) : (
+                      `${deleteRequest?.ids.length ?? 0} selected reviews will disappear from history and dashboard stats.`
+                    )}{' '}
+                    Original Google Drive files and uploaded sources are not deleted.
+                  </AlertDialog.Description>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <AlertDialog.Close
+                    disabled={deleteMutation.isPending}
+                    className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                  >
+                    Cancel
+                  </AlertDialog.Close>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    disabled={deleteMutation.isPending || !deleteRequest}
+                    onClick={() => {
+                      if (deleteRequest) deleteMutation.mutate(deleteRequest.ids);
+                    }}
+                  >
+                    {deleteMutation.isPending ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Trash2 />
+                    )}
+                    {deleteMutation.isPending
+                      ? 'Removing'
+                      : deleteRequest?.ids.length === 1
+                        ? 'Remove review'
+                        : `Remove ${deleteRequest?.ids.length ?? 0}`}
+                  </Button>
+                </div>
+              </div>
+            </AlertDialog.Popup>
+          </AlertDialog.Viewport>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
+    </>
   );
+}
+
+const historyFilterClassName =
+  'h-8 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30';
+
+function HistoryCheckbox({
+  ariaLabel,
+  checked,
+  disabled = false,
+  indeterminate = false,
+  onChange,
+}: {
+  ariaLabel: string;
+  checked: boolean;
+  disabled?: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={inputRef}
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={onChange}
+      className="size-4 cursor-pointer rounded border-input accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+    />
+  );
+}
+
+function isReviewDeletable(review: ReviewHistoryItem) {
+  return review.report_ready || review.status === 'failed';
+}
+
+function reviewMatchesSearch(review: ReviewHistoryItem, normalizedSearch: string) {
+  return [
+    review.file_name,
+    review.job_id,
+    review.status,
+    formatStatus(review.status),
+    review.overall_status,
+    review.overall_status ? formatStatus(review.overall_status) : null,
+    review.creative_result,
+    review.creative_result ? formatStatus(review.creative_result) : null,
+    review.ad_copy_result,
+    review.ad_copy_result ? formatStatus(review.ad_copy_result) : null,
+    ...(review.offer_ids ?? []),
+    ...(review.offer_outcomes ?? []).flatMap((outcome) => [
+      outcome.offer_id,
+      outcome.offer_name,
+      outcome.overall_status,
+      outcome.creative_result,
+      outcome.ad_copy_result,
+      outcome.message,
+    ]),
+    formatDateTime(review.created_at),
+  ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch));
+}
+
+function reviewMatchesResultFilter(
+  review: ReviewHistoryItem,
+  offerColumns: ReturnType<typeof getOfferColumns>,
+  offerFilter: string,
+  resultFilter: HistoryResultFilter
+) {
+  if (offerFilter === 'all' && resultFilter === 'all') return true;
+  const relevantOffers = offerFilter === 'all'
+    ? offerColumns
+    : offerColumns.filter((offer) => offer.offer_id === offerFilter);
+  const outcomes = relevantOffers.map((offer) => reviewOutcomeForOffer(review, offer));
+
+  if (resultFilter === 'na') {
+    return outcomes.some(
+      (outcome) => !outcome || outcome.evaluation_state !== 'evaluated'
+    );
+  }
+  if (resultFilter !== 'all') {
+    return outcomes.some(
+      (outcome) =>
+        outcome?.evaluation_state === 'evaluated' &&
+        outcome.overall_status === resultFilter
+    );
+  }
+  return outcomes.some((outcome) => outcome?.evaluation_state === 'evaluated');
+}
+
+async function deleteReviewSelection(ids: string[]) {
+  const queue = [...ids];
+  const deletedIds: string[] = [];
+  const failedIds: string[] = [];
+  let firstError: unknown;
+  const workerCount = Math.min(4, queue.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (queue.length) {
+      const jobId = queue.shift();
+      if (!jobId) return;
+      try {
+        await deleteReview(jobId);
+        deletedIds.push(jobId);
+      } catch (error) {
+        failedIds.push(jobId);
+        firstError ??= error;
+      }
+    }
+  }));
+
+  return { deletedIds, failedIds, firstError };
 }
 
 function AllHistoryPage() {
