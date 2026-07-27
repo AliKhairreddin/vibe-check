@@ -3,7 +3,8 @@ import json, os, re
 from typing import Any
 
 import httpx
-from .models import ComplianceReport, OverrideAnnotationSet
+from pydantic import ValidationError
+from .models import ComplianceReport, LLMComplianceResult, OverrideAnnotationSet
 from .prompts import OVERRIDE_SYSTEM_PROMPT, SYSTEM_PROMPT, build_override_user_prompt, build_user_prompt
 
 STATUS_ALIASES = {
@@ -110,6 +111,19 @@ MISSING_VERDICT_LIMITATION = (
     'The model response did not include a recognized explicit compliance verdict '
     'or any findings; the result was set to orange for human review.'
 )
+REVIEW_RESPONSE_SCHEMA = {
+    'type': 'json_schema',
+    'json_schema': {
+        'name': 'offer_policy_compliance_result',
+        'strict': True,
+        'schema': LLMComplianceResult.model_json_schema(),
+    },
+}
+MAX_REVIEW_ATTEMPTS = 2
+
+
+class ComplianceResponseError(ValueError):
+    pass
 
 
 def _load_json(text: str) -> Any:
@@ -482,6 +496,17 @@ def parse_report_json(text:str)->ComplianceReport:
     return ComplianceReport.model_validate(_normalize_report(_load_json(text)))
 
 
+def parse_strict_report_json(text:str)->ComplianceReport:
+    try:
+        payload=json.loads(text)
+        result=LLMComplianceResult.model_validate(payload)
+    except (json.JSONDecodeError, TypeError, ValidationError, ValueError) as exc:
+        raise ComplianceResponseError(
+            f'The policy reviewer returned an invalid structured result: {exc}'
+        ) from exc
+    return ComplianceReport.model_validate(result.model_dump())
+
+
 def parse_override_annotations_json(text:str)->OverrideAnnotationSet:
     data=_load_json(text)
     if not isinstance(data, dict):
@@ -492,12 +517,68 @@ def parse_override_annotations_json(text:str)->OverrideAnnotationSet:
 async def review_with_openrouter(evidence:dict, model:str|None=None)->ComplianceReport:
     key=os.getenv('OPENROUTER_API_KEY')
     if not key:
-        return ComplianceReport(overall_status='orange', summary='OpenRouter API key is not configured; generated placeholder report.', limitations=['Set OPENROUTER_API_KEY to enable LLM compliance review.'])
-    payload={'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'), 'messages':[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':build_user_prompt(evidence)}], 'response_format': {'type':'json_object'}, 'temperature': 0}
+        raise RuntimeError('OPENROUTER_API_KEY is required for policy review.')
+
+    selected_model=model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash')
+    messages=[
+        {'role':'system','content':SYSTEM_PROMPT},
+        {'role':'user','content':build_user_prompt(evidence)},
+    ]
+    last_error:ComplianceResponseError|None=None
     async with httpx.AsyncClient(timeout=120) as client:
-        r=await client.post('https://openrouter.ai/api/v1/chat/completions', headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'}, json=payload)
-        r.raise_for_status(); content=r.json()['choices'][0]['message']['content']
-    return parse_report_json(content)
+        for attempt in range(1, MAX_REVIEW_ATTEMPTS + 1):
+            payload={
+                'model':selected_model,
+                'messages':messages,
+                'response_format':REVIEW_RESPONSE_SCHEMA,
+                'provider':{'require_parameters':True},
+                'plugins':[{'id':'response-healing'}],
+                'temperature':0,
+            }
+            response=await client.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                headers={
+                    'Authorization':f'Bearer {key}',
+                    'Content-Type':'application/json',
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            content=response.json()['choices'][0]['message']['content']
+            if not isinstance(content, str):
+                last_error=ComplianceResponseError(
+                    'The policy reviewer returned a non-text structured result.'
+                )
+            else:
+                try:
+                    return parse_strict_report_json(content)
+                except ComplianceResponseError as exc:
+                    last_error=exc
+
+            if attempt < MAX_REVIEW_ATTEMPTS:
+                messages=[
+                    *messages,
+                    {
+                        'role':'assistant',
+                        'content':content[:20_000] if isinstance(content, str) else '',
+                    },
+                    {
+                        'role':'user',
+                        'content':(
+                            'Your previous response did not satisfy the required schema and '
+                            f'verdict rules: {last_error}. Return the complete corrected JSON '
+                            'object only. Green must have zero findings. Yellow, orange, and red '
+                            'must include findings whose highest severity is low, medium, and '
+                            'high respectively.'
+                        ),
+                    },
+                ]
+
+    raise ComplianceResponseError(
+        'The policy reviewer did not return a valid structured verdict with '
+        f'supporting findings after {MAX_REVIEW_ATTEMPTS} attempts. '
+        'No policy color was assigned.'
+    ) from last_error
 
 
 async def review_internal_overrides_with_openrouter(

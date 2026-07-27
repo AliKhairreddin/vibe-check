@@ -12,6 +12,7 @@ from app.main import app, copy_review_file_name, review_meta
 from app.review_pipeline import automation_storage as review_automation_storage
 from app.review_pipeline import automations as review_automations
 from app.review_pipeline import jobs as review_jobs
+from app.review_pipeline import llm as review_llm
 from app.review_pipeline import queue as review_queue
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
@@ -21,7 +22,7 @@ from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
 from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
-from app.review_pipeline.llm import parse_report_json
+from app.review_pipeline.llm import ComplianceResponseError, parse_report_json, parse_strict_report_json
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
@@ -546,11 +547,33 @@ def test_creative_with_ad_copy_returns_drive_and_spreadsheet_links(tmp_path, mon
     assert [source.kind for source in resolved] == ['google_drive_file', 'google_sheet']
     assert [source.status for source in resolved] == ['linked', 'linked']
 
-def test_openrouter_json_repair_fallback():
+def strict_report_payload(
+    *,
+    overall_status='green',
+    findings=None,
+):
+    return {
+        'overall_status':overall_status,
+        'summary':'No policy issues were identified.' if overall_status == 'green' else 'Policy issue identified.',
+        'source_results':{
+            'creative':None,
+            'ad_copy':None,
+        },
+        'findings':findings or [],
+        'safe_rewrite':{
+            'ad_copy':'',
+            'onscreen_text':[],
+        },
+        'limitations':[],
+    }
+
+
+def test_legacy_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
     assert parse_report_json(text).overall_status=='orange'
 
-def test_openrouter_report_without_verdict_or_findings_fails_closed():
+
+def test_legacy_openrouter_report_without_verdict_or_findings_fails_closed():
     report=parse_report_json(json.dumps({
         'summary':'The response omitted a verdict.',
         'findings':[],
@@ -558,6 +581,176 @@ def test_openrouter_report_without_verdict_or_findings_fails_closed():
     }))
     assert report.overall_status=='orange'
     assert any('did not include a recognized explicit compliance verdict' in item for item in report.limitations)
+
+
+def test_strict_openrouter_report_requires_complete_schema():
+    with pytest.raises(ComplianceResponseError, match='invalid structured result'):
+        parse_strict_report_json(json.dumps({
+            'summary':'The response omitted a verdict.',
+            'findings':[],
+        }))
+
+
+@pytest.mark.parametrize(
+    ('overall_status','severity'),
+    [
+        ('yellow','low'),
+        ('orange','medium'),
+        ('red','high'),
+    ],
+)
+def test_strict_openrouter_report_requires_findings_for_non_green_verdicts(
+    overall_status,
+    severity,
+):
+    with pytest.raises(ComplianceResponseError, match='overall_status must be'):
+        parse_strict_report_json(json.dumps(strict_report_payload(
+            overall_status=overall_status,
+        )))
+
+    report=parse_strict_report_json(json.dumps(strict_report_payload(
+        overall_status=overall_status,
+        findings=[{
+            'severity':severity,
+            'source':'policy',
+            'timestamp_start':None,
+            'timestamp_end':None,
+            'evidence':'Observed policy concern.',
+            'policy_reason':'The supplied guideline requires review.',
+            'suggested_fix':'Revise the claim.',
+            'confidence':'high',
+        }],
+    )))
+    assert report.overall_status == overall_status
+    assert len(report.findings) == 1
+
+
+def test_strict_openrouter_report_accepts_green_with_no_findings():
+    report=parse_strict_report_json(json.dumps(strict_report_payload()))
+    assert report.overall_status == 'green'
+    assert report.findings == []
+
+
+@pytest.mark.anyio
+async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semantic_mismatch(
+    monkeypatch,
+):
+    calls=[]
+    responses=[
+        strict_report_payload(overall_status='orange'),
+        strict_report_payload(
+            overall_status='yellow',
+            findings=[{
+                'severity':'low',
+                'source':'ad_copy',
+                'timestamp_start':None,
+                'timestamp_end':None,
+                'evidence':'A minor wording concern.',
+                'policy_reason':'The wording could be clearer.',
+                'suggested_fix':'Use more precise wording.',
+                'confidence':'medium',
+            }],
+        ),
+    ]
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload=payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices':[{
+                    'message':{
+                        'content':json.dumps(self.payload),
+                    },
+                }],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            assert timeout == 120
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append({
+                'url':url,
+                'headers':headers,
+                'json':json,
+            })
+            return FakeResponse(responses.pop(0))
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
+
+    report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+
+    assert report.overall_status == 'yellow'
+    assert len(calls) == 2
+    initial=calls[0]['json']
+    assert initial['response_format']['type'] == 'json_schema'
+    assert initial['response_format']['json_schema']['strict'] is True
+    assert initial['response_format']['json_schema']['schema']['additionalProperties'] is False
+    assert initial['provider'] == {'require_parameters':True}
+    assert initial['plugins'] == [{'id':'response-healing'}]
+    assert len(initial['messages']) == 2
+    assert len(calls[1]['json']['messages']) == 4
+    assert 'Green must have zero findings' in calls[1]['json']['messages'][-1]['content']
+
+
+@pytest.mark.anyio
+async def test_openrouter_raises_after_invalid_structured_results(monkeypatch):
+    calls=[]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices':[{
+                    'message':{
+                        'content':json.dumps(strict_report_payload(overall_status='orange')),
+                    },
+                }],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append(json)
+            return FakeResponse()
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
+
+    with pytest.raises(ComplianceResponseError, match='No policy color was assigned'):
+        await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+    assert len(calls) == 2
+
+
+@pytest.mark.anyio
+async def test_openrouter_requires_api_key_instead_of_returning_placeholder(monkeypatch):
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+
+    with pytest.raises(RuntimeError, match='OPENROUTER_API_KEY'):
+        await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+
 
 def test_openrouter_report_maps_legacy_pass_to_green_without_findings():
     report=parse_report_json(json.dumps({
@@ -1494,25 +1687,22 @@ async def test_two_pass_override_annotation_removes_unknown_override_ids(monkeyp
 
 
 @pytest.mark.anyio
-async def test_offer_review_error_is_orange_and_requires_human_review(monkeypatch):
+async def test_offer_review_error_propagates_without_fake_policy_result(monkeypatch):
     async def failing_official_review(evidence, model):
         raise RuntimeError('upstream unavailable')
 
     monkeypatch.setattr(review_jobs, 'review_with_openrouter', failing_official_review)
-    result=await review_jobs._review_offer(
-        offer_with_cash_override(),
-        'copy_only',
-        ReviewRequestMeta(ad_copy='Save today.'),
-        {'source':'not_applicable','chunks':[]},
-        [],
-        [],
-        {'source':'not_applicable','observations':[]},
-        'No creative submitted.',
-    )
-
-    assert result.overall_status == 'orange'
-    assert result.findings == []
-    assert result.internal_disposition == 'human_review'
+    with pytest.raises(RuntimeError, match='upstream unavailable'):
+        await review_jobs._review_offer(
+            offer_with_cash_override(),
+            'copy_only',
+            ReviewRequestMeta(ad_copy='Save today.'),
+            {'source':'not_applicable','chunks':[]},
+            [],
+            [],
+            {'source':'not_applicable','observations':[]},
+            'No creative submitted.',
+        )
 
 def test_ocr_normalization_deduping():
     items=dedupe_ocr([{'text':' Big   Sale ','timestamp':0},{'text':'big sale','timestamp':1},{'text':'','timestamp':2}])
@@ -1849,7 +2039,21 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
-    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    async def green_review(evidence, model):
+        return ComplianceReport(
+            overall_status='green',
+            summary='No policy issues were identified.',
+            source_results={
+                'creative':None,
+                'ad_copy':{
+                    'status':'green',
+                    'summary':'No policy issues were identified in the submitted ad copy.',
+                },
+            },
+            findings=[],
+        )
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', green_review)
     asyncio.run(process_job('j1', None, 'copy_only', ReviewRequestMeta(ad_copy='Save today.')))
     status=get_status('j1')
     report=get_report('j1')
@@ -1857,9 +2061,27 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     assert status.report_ready
     assert not status.has_creative
     assert report is not None
-    assert report['overall_status'] == 'orange'
-    assert report['internal_disposition'] == 'human_review'
+    assert report['overall_status'] == 'green'
+    assert report['internal_disposition'] == 'clear'
     assert 'No creative was submitted' in report['limitations'][-1]
+
+
+def test_process_job_fails_without_publishing_invalid_policy_result(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+
+    async def invalid_review(evidence, model):
+        raise ComplianceResponseError('The policy reviewer returned an invalid structured result.')
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', invalid_review)
+    asyncio.run(process_job('invalid-result', None, 'copy_only', ReviewRequestMeta(ad_copy='Save today.')))
+
+    status=get_status('invalid-result')
+    assert status.status == JobStatus.failed
+    assert not status.report_ready
+    assert get_report('invalid-result') is None
+
 
 def test_queue_uses_bounded_parallel_workers(monkeypatch):
     monkeypatch.delenv('JOB_WORKER_CONCURRENCY', raising=False)
@@ -2345,9 +2567,23 @@ def test_batched_jobs_suppress_individual_messages_until_last_job(tmp_path, monk
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
-    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
     individual_messages=[]
     batch_messages=[]
+    async def green_review(evidence, model):
+        return ComplianceReport(
+            overall_status='green',
+            summary='No policy issues were identified.',
+            source_results={
+                'creative':None,
+                'ad_copy':{
+                    'status':'green',
+                    'summary':'No policy issues were identified in the submitted ad copy.',
+                },
+            },
+            findings=[],
+        )
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', green_review)
     monkeypatch.setattr('app.review_pipeline.jobs.send_review_message', lambda *args: individual_messages.append(args))
     monkeypatch.setattr(review_telegram, 'send_batch_message', lambda batch: batch_messages.append(batch) or True)
     create_batch('batch2', [

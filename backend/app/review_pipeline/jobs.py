@@ -203,14 +203,9 @@ async def _review_offer(
     )
     try:
         report=await review_with_openrouter(evidence, meta.model)
-    except Exception as exc:
+    except Exception:
         logger.exception('Offer review failed for %s', profile.offer_id)
-        report=ComplianceReport(
-            overall_status='orange',
-            summary=f'{profile.display_name} could not be reviewed automatically.',
-            limitations=[f'Offer review failed: {type(exc).__name__}. Run this review again or review manually.'],
-            internal_disposition='human_review',
-        )
+        raise
     report.offer_id=profile.offer_id
     report.offer_name=profile.display_name
     report.guideline_version=profile.version

@@ -2,7 +2,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ResultStatus = Literal['green','yellow','orange','red']
 ReviewSourceKind = Literal['google_drive_file','google_sheet']
@@ -107,6 +107,79 @@ class SourceResult(BaseModel):
 class SourceResults(BaseModel):
     creative: SourceResult | None = None
     ad_copy: SourceResult | None = None
+
+
+class StrictLLMModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+
+class LLMFinding(StrictLLMModel):
+    severity: Literal['low','medium','high']
+    source: Literal['audio','onscreen_text','visual','ad_copy','policy']
+    timestamp_start: str | None
+    timestamp_end: str | None
+    evidence: str = Field(min_length=1, max_length=1_500)
+    policy_reason: str = Field(min_length=1, max_length=1_500)
+    suggested_fix: str = Field(min_length=1, max_length=1_500)
+    confidence: Literal['low','medium','high']
+
+
+class LLMSafeRewrite(StrictLLMModel):
+    ad_copy: str = Field(max_length=5_000)
+    onscreen_text: list[str] = Field(max_length=25)
+
+
+class LLMSourceResult(StrictLLMModel):
+    status: ResultStatus
+    summary: str = Field(min_length=1, max_length=1_500)
+
+
+class LLMSourceResults(StrictLLMModel):
+    creative: LLMSourceResult | None
+    ad_copy: LLMSourceResult | None
+
+
+class LLMComplianceResult(StrictLLMModel):
+    overall_status: ResultStatus
+    summary: str = Field(min_length=1, max_length=1_500)
+    source_results: LLMSourceResults
+    findings: list[LLMFinding] = Field(max_length=25)
+    safe_rewrite: LLMSafeRewrite
+    limitations: list[str] = Field(max_length=25)
+
+    @model_validator(mode='after')
+    def validate_verdict_matches_findings(self):
+        expected_status: ResultStatus
+        severities={finding.severity for finding in self.findings}
+        if 'high' in severities:
+            expected_status='red'
+        elif 'medium' in severities:
+            expected_status='orange'
+        elif severities:
+            expected_status='yellow'
+        else:
+            expected_status='green'
+
+        if self.overall_status != expected_status:
+            raise ValueError(
+                f'overall_status must be {expected_status!r} for the returned findings; '
+                f'received {self.overall_status!r}'
+            )
+        if expected_status == 'green':
+            source_statuses=[
+                result.status
+                for result in (
+                    self.source_results.creative,
+                    self.source_results.ad_copy,
+                )
+                if result is not None
+            ]
+            if any(status != 'green' for status in source_statuses):
+                raise ValueError(
+                    'source_results must be green when no policy findings are returned'
+                )
+        return self
+
 
 class OfferComplianceResult(BaseModel):
     offer_id: str = 'acp'

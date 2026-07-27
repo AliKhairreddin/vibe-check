@@ -11,7 +11,13 @@ Verdict scale:
 - "yellow": only minor, low-risk issues or small recommended edits; no material likely violation identified.
 - "orange": a meaningful possible issue, ambiguity, missing substantiation, or uncertainty that requires human review before publishing.
 - "red": a clear or high-confidence likely violation; do not publish without material changes.
-- Use the most severe applicable color for overall_status. Never use pass, needs_review, or likely_violation in the returned status fields.
+- Every yellow, orange, or red verdict must include at least one concrete finding with observed evidence, a policy reason, and a suggested fix.
+- A green verdict must return an empty findings array. Never use an empty findings array with yellow, orange, or red.
+- Derive overall_status from the most severe returned finding: no findings = green, low = yellow, medium = orange, high = red.
+- Do not invent a finding merely to justify a color. If no supplied evidence violates or creates risk under the supplied policy, return green.
+- Use the most severe applicable color for overall_status. Never use pass, needs_review, likely_violation, unknown, or null in any returned status field.
+- Return every property in the schema. Use null only for an unavailable creative or ad_copy source result and for timestamps without timing metadata.
+- Do not add wrapper objects or additional properties.
 
 Source rules:
 - "ad_copy" means only the submitted platform caption/body text in submitted_ad_copy.text. This is the Facebook, Instagram, TikTok, or platform caption/copy supplied by the user.
@@ -66,7 +72,13 @@ Return exactly one JSON object with this shape and no wrapper keys:
 }"""
 
 def build_user_prompt(evidence:dict)->str:
-    return "Review this ad evidence for the named offer against official policy only. Return JSON matching the required schema.\n" + __import__('json').dumps(evidence, ensure_ascii=False, indent=2)
+    return (
+        "Review this ad evidence for the named offer against official policy only. "
+        "Return one complete JSON object matching the required schema exactly. "
+        "Before responding, verify that overall_status is derived from the highest "
+        "finding severity and that zero findings produces green.\n"
+        + __import__('json').dumps(evidence, ensure_ascii=False, indent=2)
+    )
 
 
 OVERRIDE_SYSTEM_PROMPT = """You annotate immutable official-policy findings with separately supplied internal overrides. Return strict JSON only.
