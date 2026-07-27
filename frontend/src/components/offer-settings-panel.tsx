@@ -490,10 +490,13 @@ export function OfferSettingsPanel() {
                           maxLength={80}
                           required
                           aria-describedby={`${fieldPrefix}-offer-id-help`}
-                          onChange={(event) => updateDraft((current) => ({
-                            ...current,
-                            offer_id: event.currentTarget.value.toLocaleLowerCase(),
-                          }))}
+                          onChange={(event) => {
+                            const offerId = event.currentTarget.value.toLocaleLowerCase();
+                            updateDraft((current) => ({
+                              ...current,
+                              offer_id: offerId,
+                            }));
+                          }}
                         />
                         <p id={`${fieldPrefix}-offer-id-help`} className="text-xs text-muted-foreground">
                           Lowercase letters, numbers, hyphens, or underscores.
@@ -507,10 +510,13 @@ export function OfferSettingsPanel() {
                         value={draft.display_name}
                         maxLength={160}
                         required
-                        onChange={(event) => updateDraft((current) => ({
-                          ...current,
-                          display_name: event.currentTarget.value,
-                        }))}
+                        onChange={(event) => {
+                          const displayName = event.currentTarget.value;
+                          updateDraft((current) => ({
+                            ...current,
+                            display_name: displayName,
+                          }));
+                        }}
                       />
                     </div>
                   </div>
@@ -540,16 +546,18 @@ export function OfferSettingsPanel() {
                       className="min-h-72 font-mono text-xs leading-5"
                       maxLength={MAX_GUIDELINES_LENGTH}
                       aria-describedby={`${fieldPrefix}-guidelines-count`}
-                      onChange={(event) => updateDraft((current) => {
+                      onChange={(event) => {
                         const officialGuidelines = event.currentTarget.value;
-                        const configured = Boolean(officialGuidelines.trim());
-                        return {
-                          ...current,
-                          official_guidelines: officialGuidelines,
-                          enabled: configured ? current.enabled : false,
-                          is_default: configured ? current.is_default : false,
-                        };
-                      })}
+                        updateDraft((current) => {
+                          const configured = Boolean(officialGuidelines.trim());
+                          return {
+                            ...current,
+                            official_guidelines: officialGuidelines,
+                            enabled: configured ? current.enabled : false,
+                            is_default: configured ? current.is_default : false,
+                          };
+                        });
+                      }}
                     />
                     <p id={`${fieldPrefix}-guidelines-count`} className="text-right text-xs text-muted-foreground">
                       {draft.official_guidelines.length.toLocaleString()} / {MAX_GUIDELINES_LENGTH.toLocaleString()} characters
