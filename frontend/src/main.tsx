@@ -338,7 +338,7 @@ function ReviewWorkspace() {
   const [sceneDetection, setSceneDetection] = useState(false);
   const [creativeSource, setCreativeSource] = useState<CreativeSource>('drive');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [selectedDriveFolderIds, setSelectedDriveFolderIds] = useState<Set<string>>(new Set());
+  const [selectedDriveFolders, setSelectedDriveFolders] = useState<Map<string, string>>(new Map());
   const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<Set<string>>(new Set());
   const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
@@ -347,8 +347,8 @@ function ReviewWorkspace() {
   const adCopyLines = useMemo(() => splitAdCopyLines(adCopyText), [adCopyText]);
 
   const selectedFolderList = useMemo(
-    () => Array.from(selectedDriveFolderIds).sort(),
-    [selectedDriveFolderIds]
+    () => Array.from(selectedDriveFolders.keys()).sort(),
+    [selectedDriveFolders]
   );
   const selectedFileList = useMemo(
     () => Array.from(selectedDriveFileIds).sort(),
@@ -443,7 +443,7 @@ function ReviewWorkspace() {
 
     if (
       creativeSource === 'drive' &&
-      (selectedDriveFolderIds.size || selectedDriveFileIds.size) &&
+      (selectedDriveFolders.size || selectedDriveFileIds.size) &&
       driveSelectionQuery.isFetching
     ) {
       setSubmitError('The selected Drive folders are still being resolved. Try again in a moment.');
@@ -483,6 +483,9 @@ function ReviewWorkspace() {
     sharedFields.set('model', loadOpenRouterModel());
     sharedFields.set('offer_ids', JSON.stringify(eligibleOffers.map((offer) => offer.offer_id)));
     const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
+    const batchSourceLabel = creativeSource === 'drive' && creatives.length
+      ? driveBatchSourceLabel(selectedDriveFolders, selectedDriveFileIds.size)
+      : '';
     const nextItems: BatchItem[] = copyOnly
       ? adCopyLines.map((copy, index) => ({
           id: randomId(),
@@ -515,6 +518,7 @@ function ReviewWorkspace() {
       if (batchId) {
         await createReviewBatch({
           batch_id: batchId,
+          ...(batchSourceLabel ? { source_label: batchSourceLabel } : {}),
           items: nextItems.map((item) => ({
             item_id: item.id,
             file_name: item.fileName,
@@ -650,7 +654,7 @@ function ReviewWorkspace() {
                   aria-pressed={creativeSource === 'computer'}
                   onClick={() => {
                     setCreativeSource('computer');
-                    setSelectedDriveFolderIds(new Set());
+                    setSelectedDriveFolders(new Map());
                     setSelectedDriveFileIds(new Set());
                   }}
                 >
@@ -662,14 +666,14 @@ function ReviewWorkspace() {
               {creativeSource === 'drive' ? (
                 <div>
                   <DriveBrowser
-                    selectedFolderIds={selectedDriveFolderIds}
+                    selectedFolders={selectedDriveFolders}
                     selectedFileIds={selectedDriveFileIds}
                     onSelectionChange={(folders, files) => {
-                      setSelectedDriveFolderIds(folders);
+                      setSelectedDriveFolders(folders);
                       setSelectedDriveFileIds(files);
                     }}
                   />
-                  {(selectedDriveFolderIds.size || selectedDriveFileIds.size) ? (
+                  {(selectedDriveFolders.size || selectedDriveFileIds.size) ? (
                     <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
                       {driveSelectionQuery.isFetching ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
                       {driveSelectionQuery.isFetching
@@ -2190,6 +2194,23 @@ function formatDate(value: number) {
 
 function randomId() {
   return crypto.randomUUID().replace(/-/g, '');
+}
+
+function driveBatchSourceLabel(
+  selectedFolders: Map<string, string>,
+  selectedFileCount: number
+) {
+  const folderNames = Array.from(selectedFolders.values())
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' }));
+  const visibleFolders = folderNames.slice(0, 3);
+  const folderLabel = folderNames.length > 3
+    ? `${visibleFolders.join(', ')} + ${folderNames.length - 3} more folders`
+    : visibleFolders.join(', ');
+  const fileLabel = selectedFileCount
+    ? `${selectedFileCount} selected ${selectedFileCount === 1 ? 'file' : 'files'}`
+    : '';
+  const label = [folderLabel, fileLabel].filter(Boolean).join(' + ');
+  return label.length > 500 ? `${label.slice(0, 497).trimEnd()}...` : label;
 }
 
 function isFailedBatchStatus(status: string) {

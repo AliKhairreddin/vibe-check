@@ -307,6 +307,7 @@ class CreateBatchItem(BaseModel):
 
 class CreateReviewBatch(BaseModel):
     batch_id: str
+    source_label: str | None = Field(default=None, max_length=500)
     items: list[CreateBatchItem]
 
 class BatchFailure(BaseModel):
@@ -324,6 +325,7 @@ class ReviewBatch(BaseModel):
     created_at: int
     updated_at: int
     expected_count: int
+    source_label: str | None = None
     items: list[ReviewBatchItem]
     notification_status: str = 'pending'
 

@@ -618,7 +618,11 @@ def create_review_batch(payload:CreateReviewBatch):
         raise HTTPException(400, 'Batch item ids must be unique.')
     if any(not BATCH_ID_PATTERN.fullmatch(item.item_id) for item in payload.items):
         raise HTTPException(400, 'Invalid batch item id')
-    return create_batch(payload.batch_id, payload.items)
+    return create_batch(
+        payload.batch_id,
+        payload.items,
+        source_label=payload.source_label,
+    )
 
 @app.get('/api/batches/{batch_id}', response_model=ReviewBatch)
 def review_batch(batch_id:str):

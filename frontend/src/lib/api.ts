@@ -199,12 +199,14 @@ export type ReviewBatch = {
   created_at: number;
   updated_at: number;
   expected_count: number;
+  source_label?: string | null;
   items: ReviewBatchItem[];
   notification_status: string;
 };
 
 export type CreateReviewBatchInput = {
   batch_id: string;
+  source_label?: string;
   items: Array<Pick<ReviewBatchItem, 'item_id' | 'file_name' | 'media_kind'>>;
 };
 

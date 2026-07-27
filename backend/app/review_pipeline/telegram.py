@@ -117,6 +117,9 @@ def build_batch_message(
         tz=timezone.utc,
     ).strftime('%B %d').replace(' 0', ' ')
     lines = [f'<b>Batch Uploaded {html.escape(title_date)}</b>']
+    if batch.source_label:
+        lines.append('')
+        _add_field(lines, 'Google Drive source', batch.source_label)
     report_url = build_batch_url(batch.batch_id)
     footer = []
     if report_url:

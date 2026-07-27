@@ -133,6 +133,7 @@ export default defineSchema({
     batchId: v.string(),
     createdAt: v.number(),
     expectedCount: v.number(),
+    sourceLabel: v.optional(v.string()),
     items: v.array(v.object({
       offerOutcomes: v.optional(v.array(v.object({
         adCopyResult: v.optional(v.string()),

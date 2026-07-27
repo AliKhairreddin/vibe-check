@@ -2164,7 +2164,7 @@ def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeyp
         CreateBatchItem(item_id='item1', file_name='creative-one.mp4', media_kind='video'),
         CreateBatchItem(item_id='item2', file_name='creative-two.png', media_kind='image'),
         CreateBatchItem(item_id='item3', file_name='Ad copy 1: Save today.', media_kind='copy_only'),
-    ])
+    ], source_label='Q3 Growth & Retargeting')
 
     finish_batch_item_and_notify('batch1', 'item1', status='complete', job_id='job1', result='red', message='Complete')
     finish_batch_item_and_notify('batch1', 'item2', status='upload_failed', message='Network upload failed')
@@ -2172,13 +2172,17 @@ def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeyp
 
     finish_batch_item_and_notify('batch1', 'item3', status='complete', job_id='job3', result='green', message='Complete')
     assert len(sent) == 1
-    assert get_batch('batch1').notification_status == 'sent'
+    stored_batch=get_batch('batch1')
+    assert stored_batch.notification_status == 'sent'
+    assert stored_batch.source_label == 'Q3 Growth & Retargeting'
 
     finish_batch_item_and_notify('batch1', 'item3', status='complete', job_id='job3', result='green', message='Complete')
     assert len(sent) == 1
 
     message=build_batch_message(sent[0])
     assert '<b>Batch Uploaded ' in message
+    assert '<b>Google Drive source:</b>' in message
+    assert 'Q3 Growth &amp; Retargeting' in message
     assert '<b>Type:</b> Creative Vid' in message
     assert '<b>Type:</b> Creative Image' in message
     assert '<b>Type:</b> Ad copy' in message
@@ -2388,6 +2392,7 @@ async def test_batch_api_registers_pending_uploads_before_reviews_start(tmp_path
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
         created=await client.post('/api/batches', json={
             'batch_id':batch_id,
+            'source_label':'Summer campaign',
             'items':[
                 {'item_id':item_ids[0], 'file_name':'one.mp4', 'media_kind':'video'},
                 {'item_id':item_ids[1], 'file_name':'two.mp4', 'media_kind':'video'},
@@ -2400,11 +2405,13 @@ async def test_batch_api_registers_pending_uploads_before_reviews_start(tmp_path
         fetched=await client.get(f'/api/batches/{batch_id}')
 
     assert created.status_code == 200
+    assert created.json()['source_label'] == 'Summer campaign'
     assert [item['status'] for item in created.json()['items']] == ['pending', 'pending']
     assert failed.status_code == 200
     assert [item['status'] for item in failed.json()['items']] == ['upload_failed', 'pending']
     assert fetched.status_code == 200
     assert fetched.json()['expected_count'] == 2
+    assert fetched.json()['source_label'] == 'Summer campaign'
 
 def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     token='secret-token-that-must-not-be-logged'

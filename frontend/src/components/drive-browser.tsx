@@ -21,13 +21,13 @@ import { browseDriveFolder, type DriveBrowserItem, type DriveFolder } from '@/li
 import { cn } from '@/lib/utils';
 
 export type DriveBrowserProps = {
-  selectedFolderIds: Set<string>;
+  selectedFolders: Map<string, string>;
   selectedFileIds: Set<string>;
-  onSelectionChange: (folders: Set<string>, files: Set<string>) => void;
+  onSelectionChange: (folders: Map<string, string>, files: Set<string>) => void;
 };
 
 export function DriveBrowser({
-  selectedFolderIds,
+  selectedFolders,
   selectedFileIds,
   onSelectionChange,
 }: DriveBrowserProps) {
@@ -47,7 +47,7 @@ export function DriveBrowser({
     : folderQuery.data
       ? [folderQuery.data.current_folder]
       : [];
-  const selectedAncestor = visiblePath.find((folder) => selectedFolderIds.has(folder.folder_id));
+  const selectedAncestor = visiblePath.find((folder) => selectedFolders.has(folder.folder_id));
   const visibleItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return [...(folderQuery.data?.items ?? [])]
@@ -58,10 +58,10 @@ export function DriveBrowser({
       });
   }, [folderQuery.data?.items, search]);
 
-  function toggleFolder(folderId: string) {
-    const folders = new Set(selectedFolderIds);
-    if (folders.has(folderId)) folders.delete(folderId);
-    else folders.add(folderId);
+  function toggleFolder(item: DriveBrowserItem) {
+    const folders = new Map(selectedFolders);
+    if (folders.has(item.file_id)) folders.delete(item.file_id);
+    else folders.set(item.file_id, item.name);
     onSelectionChange(folders, new Set(selectedFileIds));
   }
 
@@ -69,7 +69,7 @@ export function DriveBrowser({
     const files = new Set(selectedFileIds);
     if (files.has(fileId)) files.delete(fileId);
     else files.add(fileId);
-    onSelectionChange(new Set(selectedFolderIds), files);
+    onSelectionChange(new Map(selectedFolders), files);
   }
 
   function openFolder(item: DriveBrowserItem) {
@@ -95,12 +95,12 @@ export function DriveBrowser({
   }
 
   function clearSelection() {
-    onSelectionChange(new Set(), new Set());
+    onSelectionChange(new Map(), new Set());
   }
 
-  const selectedCount = selectedFolderIds.size + selectedFileIds.size;
+  const selectedCount = selectedFolders.size + selectedFileIds.size;
   const selectionLabel = [
-    selectedFolderIds.size ? `${selectedFolderIds.size} ${pluralize('folder', selectedFolderIds.size)}` : '',
+    selectedFolders.size ? `${selectedFolders.size} ${pluralize('folder', selectedFolders.size)}` : '',
     selectedFileIds.size ? `${selectedFileIds.size} ${pluralize('file', selectedFileIds.size)}` : '',
   ].filter(Boolean).join(' · ');
 
@@ -199,8 +199,8 @@ export function DriveBrowser({
             <FolderRow
               key={item.file_id}
               item={item}
-              selected={selectedFolderIds.has(item.file_id)}
-              onToggle={() => toggleFolder(item.file_id)}
+              selected={selectedFolders.has(item.file_id)}
+              onToggle={() => toggleFolder(item)}
               onOpen={() => openFolder(item)}
             />
           ) : (

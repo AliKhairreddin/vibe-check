@@ -286,6 +286,8 @@ def create_batch(
     batch_id:str,
     items:list[CreateBatchItem],
     offer_outcomes:list[OfferOutcome]|None=None,
+    *,
+    source_label:str|None=None,
 )->ReviewBatch:
     timestamp=now_ms()
     outcome_snapshot=(
@@ -298,6 +300,7 @@ def create_batch(
         created_at=timestamp,
         updated_at=timestamp,
         expected_count=len(items),
+        source_label=source_label,
         items=[
             ReviewBatchItem(
                 **item.model_dump(),
@@ -309,6 +312,7 @@ def create_batch(
     write_json(batch_path(batch_id), batch.model_dump(mode='json'))
     remote=_convex_call('mutation', 'batches:createBatch', {
         'batchId': batch_id,
+        **({'sourceLabel': source_label} if source_label else {}),
         'items': [
             {
                 'itemId': item.item_id,

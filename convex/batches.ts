@@ -34,6 +34,7 @@ function publicBatch(batch: {
   batchId: string;
   createdAt: number;
   expectedCount: number;
+  sourceLabel?: string;
   items: BatchItem[];
   notificationStatus: string;
   updatedAt: number;
@@ -42,6 +43,7 @@ function publicBatch(batch: {
     batch_id: batch.batchId,
     created_at: batch.createdAt,
     expected_count: batch.expectedCount,
+    source_label: batch.sourceLabel ?? null,
     items: batch.items.map((item) => ({
       file_name: item.fileName,
       item_id: item.itemId,
@@ -76,6 +78,7 @@ export const createBatch = mutation({
   args: {
     secret: v.string(),
     batchId: v.string(),
+    sourceLabel: v.optional(v.string()),
     items: v.array(v.object({
       fileName: v.string(),
       itemId: v.string(),
@@ -100,6 +103,7 @@ export const createBatch = mutation({
       batchId: args.batchId,
       createdAt: now,
       expectedCount: args.items.length,
+      sourceLabel: args.sourceLabel,
       items: args.items.map((item) => ({ ...item, message: "", status: "pending" })),
       notificationStatus: "pending",
       notificationAttempts: 0,
