@@ -3,6 +3,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from app.main import app, copy_review_file_name, review_meta
 from app.review_pipeline import automation_storage as review_automation_storage
 from app.review_pipeline import automations as review_automations
 from app.review_pipeline import jobs as review_jobs
+from app.review_pipeline import live_scan_storage
 from app.review_pipeline import llm as review_llm
 from app.review_pipeline import queue as review_queue
 from app.review_pipeline import storage as review_storage
@@ -23,12 +25,13 @@ from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveCl
 from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import ComplianceResponseError, parse_report_json, parse_strict_report_json
+from app.review_pipeline.live_scan_storage import normalize_creative_key, normalize_primary_text, primary_text_key
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
 from app.review_pipeline.automation_storage import claim_automation_files, claim_automation_run, finish_automation_run, list_review_automations, upsert_review_automation
 from app.review_pipeline.source_links import resolve_review_sources
-from app.review_pipeline.telegram import build_batch_message, build_review_message, finish_batch_item_and_notify, send_review_message
+from app.review_pipeline.telegram import build_batch_message, build_live_scan_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
 from PIL import Image
@@ -2805,3 +2808,343 @@ def test_select_frame_records_samples_evenly():
     frames=[{'filename':f'frame_{index}.jpg','timestamp':index} for index in range(10)]
     selected=select_frame_records(frames, 4)
     assert [frame['filename'] for frame in selected] == ['frame_0.jpg', 'frame_3.jpg', 'frame_6.jpg', 'frame_9.jpg']
+
+
+def test_live_scan_keys_match_creative_names_but_keep_copy_variants_separate():
+    assert normalize_creative_key(' Folder/Winning_CREATIVE-01.MP4 ') == 'winning creative 01'
+    assert normalize_creative_key('winning creative 01.mov') == 'winning creative 01'
+    first=normalize_primary_text(' Save   up to 20%. ')
+    second=normalize_primary_text('Save up to 30%.')
+    assert first == 'Save up to 20%.'
+    assert primary_text_key(first) == primary_text_key('Save up to 20%.')
+    assert primary_text_key(first) != primary_text_key(second)
+
+
+def test_live_scan_claims_reuse_reviewed_name_and_do_not_duplicate_copy_job(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_scan_storage,'JOB_DATA_DIR',tmp_path)
+    monkeypatch.setattr(live_scan_storage,'_convex_call',lambda *args,**kwargs:None)
+    monkeypatch.setattr(live_scan_storage,'convex_enabled',lambda:False)
+    historical=SimpleNamespace(
+        file_name='Winning_Creative.MP4',
+        has_creative=True,
+        job_id='historical-job',
+        overall_status='green',
+        report_ready=True,
+        status=JobStatus.complete,
+    )
+    monkeypatch.setattr(live_scan_storage,'list_reviews',lambda limit:[historical])
+    def fake_status(job_id):
+        if job_id == 'historical-job':
+            return SimpleNamespace(message='',progress=100,status=JobStatus.complete)
+        raise FileNotFoundError(job_id)
+    monkeypatch.setattr(live_scan_storage,'get_status',fake_status)
+
+    creative=live_scan_storage.claim_live_review(
+        'creative',
+        normalize_creative_key('winning creative.mov'),
+        'winning creative.mov',
+        start_review=False,
+    )
+    assert creative['job_id'] == 'historical-job'
+    assert creative['result'] == 'green'
+    assert creative['should_submit'] is False
+
+    copy_key=primary_text_key('Save today.')
+    first=live_scan_storage.claim_live_review(
+        'copy',
+        copy_key,
+        'Save today.',
+        start_review=True,
+    )
+    second=live_scan_storage.claim_live_review(
+        'copy',
+        copy_key,
+        'Save today.',
+        start_review=True,
+    )
+    assert first['should_submit'] is True
+    assert second['should_submit'] is False
+    assert first['job_id'] == second['job_id']
+
+
+@pytest.mark.anyio
+async def test_live_scan_groups_media_by_name_and_queues_unique_primary_texts(tmp_path,monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR',tmp_path)
+    monkeypatch.setattr(live_scan_storage,'JOB_DATA_DIR',tmp_path)
+    monkeypatch.delenv('APP_PASSWORD',raising=False)
+    claims=[]
+    enqueued=[]
+    observed={}
+    released=[]
+
+    def fake_claim(kind,key,display_name,*,start_review):
+        claims.append((kind,key,display_name,start_review))
+        return {
+            'job_id':f'{len(claims):032x}',
+            'needs_media':kind == 'creative',
+            'result':None,
+            'should_submit':kind == 'copy',
+            'status':'claiming' if kind == 'copy' else 'waiting_media',
+        }
+
+    async def fake_enqueue(job_id,media_path,media_kind,meta,file_name,file_size=None):
+        enqueued.append((job_id,media_kind,meta.ad_copy,file_name))
+        return JobRecord(
+            job_id=job_id,
+            file_name=file_name,
+            has_creative=media_kind != 'copy_only',
+            has_ad_copy=meta.has_ad_copy,
+        )
+
+    monkeypatch.setattr('app.main.claim_live_review',fake_claim)
+    monkeypatch.setattr(
+        'app.main.mark_live_review_queued',
+        lambda *args:(_ for _ in ()).throw(RuntimeError('Convex temporarily unavailable')),
+    )
+    monkeypatch.setattr(
+        'app.main.set_review_source',
+        lambda *args:(_ for _ in ()).throw(RuntimeError('Source linking temporarily unavailable')),
+    )
+    monkeypatch.setattr(
+        'app.main.release_live_review',
+        lambda *args:released.append(args),
+    )
+    monkeypatch.setattr('app.main.enqueue_job',fake_enqueue)
+    monkeypatch.setattr(
+        'app.main.live_scan_request_meta',
+        lambda **values:ReviewRequestMeta(
+            ad_copy=values.get('ad_copy',''),
+            live_scan_kind=values['kind'],
+            live_scan_key=values['key'],
+            live_scan_creative_name=values['creative_name'],
+        ),
+    )
+    monkeypatch.setattr(
+        'app.main.observe_live_account',
+        lambda **values:observed.update(values) or {},
+    )
+
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+        response=await client.post('/api/live-scans/observe',json={
+            'account_id':'act_123',
+            'account_name':'Lead Economy',
+            'observation_date':'2026-07-30',
+            'observed_at':1_775_000_000_000,
+            'source_url':'https://business.facebook.com/adsmanager/manage/ads?act=123',
+            'ads':[
+                {
+                    'ad_id':'ad-1',
+                    'creative_name':'Winning Creative.mp4',
+                    'primary_texts':['Save up to 20%.','Call today.'],
+                    'delivery_status':'ACTIVE',
+                    'campaign_name':'Campaign A',
+                    'media_url':'https://scontent.xx.fbcdn.net/video.mp4',
+                    'media_type':'video',
+                    'is_live':True,
+                },
+                {
+                    'ad_id':'ad-2',
+                    'creative_name':'winning_creative.MOV',
+                    'primary_texts':['Save   up to 20%.'],
+                    'delivery_status':'ACTIVE',
+                    'campaign_name':'Campaign B',
+                    'is_live':True,
+                },
+                {
+                    'ad_id':'paused',
+                    'creative_name':'Paused Creative',
+                    'primary_texts':['Do not submit me.'],
+                    'delivery_status':'PAUSED',
+                    'is_live':False,
+                },
+            ],
+        })
+
+    assert response.status_code == 200
+    body=response.json()
+    assert body['live_ads'] == 2
+    assert body['unique_creatives'] == 1
+    assert body['unique_primary_texts'] == 2
+    assert body['queued_copy_jobs'] == 2
+    assert len(body['media_requests']) == 1
+    assert [value[0] for value in claims].count('creative') == 1
+    assert [value[0] for value in claims].count('copy') == 2
+    assert sorted(value[2] for value in enqueued) == ['Call today.','Save up to 20%.']
+    assert observed['creatives'][0]['ad_count'] == 2
+    assert observed['creatives'][0]['campaign_names'] == ['Campaign A','Campaign B']
+    assert len(observed['copies']) == 2
+    assert observed['observed_ad_ids'] == ['ad-1','ad-2','paused']
+    assert released == []
+
+
+def test_live_scan_current_state_preserves_partial_copy_then_removes_paused_ad(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_scan_storage,'JOB_DATA_DIR',tmp_path)
+    monkeypatch.setattr(live_scan_storage,'_convex_call',lambda *args,**kwargs:None)
+    monkeypatch.setattr(live_scan_storage,'convex_enabled',lambda:False)
+    creative={
+        'creative_key':'winning creative',
+        'creative_name':'Winning Creative',
+        'ad_ids':['ad-1'],
+        'ad_count':1,
+        'campaign_names':['Campaign A'],
+        'ad_set_names':['Ad set A'],
+        'delivery_statuses':['ACTIVE'],
+    }
+    copy={
+        'copy_key':primary_text_key('Save today.'),
+        'creative_key':'winning creative',
+        'creative_name':'Winning Creative',
+        'primary_text':'Save today.',
+        'ad_ids':['ad-1'],
+        'ad_count':1,
+    }
+    common={
+        'account_id':'act_123',
+        'account_name':'Lead Economy',
+        'observation_date':'2026-07-30',
+        'source_url':'https://business.facebook.com/adsmanager/manage/ads?act=123',
+        'observed_ad_ids':['ad-1'],
+    }
+
+    live_scan_storage.observe_live_account(
+        **common,
+        observed_at=100,
+        creatives=[creative],
+        copies=[copy],
+    )
+    live_scan_storage.observe_live_account(
+        **common,
+        observed_at=200,
+        creatives=[creative],
+        copies=[],
+    )
+    partial=live_scan_storage.get_live_scan_day('2026-07-30')
+    assert partial.totals.live_ads == 1
+    assert partial.totals.copy_variants == 1
+    assert partial.accounts[0].creatives[0].copies[0].primary_text == 'Save today.'
+
+    live_scan_storage.observe_live_account(
+        **common,
+        observed_at=300,
+        creatives=[],
+        copies=[],
+    )
+    paused=live_scan_storage.get_live_scan_day('2026-07-30')
+    assert paused.totals.accounts_observed == 1
+    assert paused.totals.live_ads == 0
+    assert paused.totals.unique_creatives == 0
+    assert paused.totals.copy_variants == 0
+    assert paused.accounts[0].creatives == []
+
+
+@pytest.mark.anyio
+async def test_live_scan_creative_upload_queues_one_media_review(tmp_path,monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR',tmp_path)
+    monkeypatch.setattr(live_scan_storage,'JOB_DATA_DIR',tmp_path)
+    monkeypatch.delenv('APP_PASSWORD',raising=False)
+    enqueued={}
+    released=[]
+    job_id='1' * 32
+
+    monkeypatch.setattr('app.main.claim_live_review',lambda *args,**kwargs:{
+        'job_id':job_id,
+        'needs_media':False,
+        'result':None,
+        'should_submit':True,
+        'status':'claiming',
+    })
+    monkeypatch.setattr(
+        'app.main.mark_live_review_queued',
+        lambda *args:(_ for _ in ()).throw(RuntimeError('Convex temporarily unavailable')),
+    )
+    monkeypatch.setattr(
+        'app.main.set_review_source',
+        lambda *args:(_ for _ in ()).throw(RuntimeError('Source linking temporarily unavailable')),
+    )
+    monkeypatch.setattr(
+        'app.main.release_live_review',
+        lambda *args:released.append(args),
+    )
+    monkeypatch.setattr(
+        'app.main.live_scan_request_meta',
+        lambda **values:ReviewRequestMeta(
+            live_scan_kind='creative',
+            live_scan_key=values['key'],
+            live_scan_creative_name=values['creative_name'],
+        ),
+    )
+
+    async def fake_enqueue(job_id,media_path,media_kind,meta,file_name,file_size=None):
+        enqueued.update({
+            'job_id':job_id,
+            'payload':media_path.read_bytes(),
+            'media_kind':media_kind,
+            'file_name':file_name,
+            'file_size':file_size,
+            'meta':meta,
+        })
+        return JobRecord(
+            job_id=job_id,
+            file_name=file_name,
+            file_size=file_size,
+            has_ad_copy=False,
+        )
+
+    monkeypatch.setattr('app.main.enqueue_job',fake_enqueue)
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+        response=await client.post(
+            '/api/live-scans/creative',
+            files={'creative':('captured.mp4',b'fake-video','video/mp4')},
+            data={
+                'creative_name':'Winning Creative',
+                'account_id':'act_123',
+                'account_name':'Lead Economy',
+                'observation_date':'2026-07-30',
+                'source_url':'https://business.facebook.com/adsmanager/manage/ads?act=123',
+            },
+        )
+
+    assert response.status_code == 200
+    assert enqueued['job_id'] == job_id
+    assert enqueued['payload'] == b'fake-video'
+    assert enqueued['media_kind'] == 'video'
+    assert enqueued['file_name'] == 'Winning Creative'
+    assert enqueued['file_size'] == len(b'fake-video')
+    assert enqueued['meta'].live_scan_kind == 'creative'
+    assert released == []
+
+
+def test_live_scan_telegram_message_links_live_page(monkeypatch):
+    monkeypatch.setenv('APP_PUBLIC_URL','https://vibe-check.example')
+    meta=ReviewRequestMeta(
+        live_scan_kind='copy',
+        live_scan_key='copy-key',
+        live_scan_creative_name='Winning Creative',
+        live_scan_account_name='Lead Economy',
+        live_scan_observation_date='2026-07-30',
+        ad_copy='Save up to 20%.',
+    )
+    message=build_live_scan_message(
+        JobRecord(job_id='live-job',status=JobStatus.complete,has_creative=False),
+        {
+            'overall_status':'orange',
+            'offer_id':'acp',
+            'offer_name':'ACP',
+            'findings':[],
+        },
+        meta,
+        'copy_only',
+    )
+    assert 'Live Primary text Result' in message
+    assert 'Winning Creative' in message
+    assert 'Save up to 20%.' in message
+    assert '/live-scans' in message
+    assert '/reviews/live-job/report' in message

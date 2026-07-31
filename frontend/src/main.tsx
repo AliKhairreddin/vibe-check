@@ -46,6 +46,7 @@ import {
   Trash2,
   Upload,
   Plus,
+  Radio,
 } from 'lucide-react';
 import './index.css';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -84,6 +85,7 @@ import { DriveBrowser } from '@/components/drive-browser';
 import { AdminAccessGate } from '@/components/admin-access-gate';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
+import { LiveScansPage } from '@/components/live-scans-page';
 import {
   batchOutcomeForOffer,
   findOfferOutcome,
@@ -250,6 +252,7 @@ function AppShell() {
           <ShellLink to="/" label="Dashboard" icon={<LayoutDashboard />} />
           <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
           <ShellLink to="/history" label="History" icon={<History />} />
+          <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
           <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
           <ShellLink to="/settings" label="Settings" icon={<Settings />} />
         </nav>
@@ -287,10 +290,11 @@ function AppShell() {
               {theme === 'dark' ? <Sun /> : <Moon />}
             </Button>
           </div>
-          <nav className="mt-3 grid grid-cols-5 gap-1" aria-label="Primary navigation">
+          <nav className="mt-3 grid grid-cols-6 gap-1" aria-label="Primary navigation">
             <ShellLink compact to="/" label="Dashboard" icon={<LayoutDashboard />} />
             <ShellLink compact to="/reviews/new" label="Review" icon={<Plus />} />
             <ShellLink compact to="/history" label="History" icon={<History />} />
+            <ShellLink compact to="/live-scans" label="Live" icon={<Radio />} />
             <ShellLink compact to="/automations" label="Automate" icon={<CalendarClock />} />
             <ShellLink compact to="/settings" label="Settings" icon={<Settings />} />
           </nav>
@@ -312,7 +316,7 @@ function ShellLink({
   compact?: boolean;
   icon: React.ReactNode;
   label: string;
-  to: '/' | '/reviews/new' | '/history' | '/automations' | '/settings';
+  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/settings';
 }) {
   return (
     <Link
@@ -2568,6 +2572,11 @@ const historyRoute = createRoute({
   path: '/history',
   component: AllHistoryPage,
 });
+const liveScansRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/live-scans',
+  component: LiveScansPage,
+});
 const reportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reviews/$jobId/report',
@@ -2593,6 +2602,7 @@ const router = createRouter({
     indexRoute,
     newReviewRoute,
     historyRoute,
+    liveScansRoute,
     automationsRoute,
     batchRoute,
     progressRoute,

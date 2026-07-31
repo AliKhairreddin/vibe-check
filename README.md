@@ -35,6 +35,8 @@ The system is intentionally hybrid:
 - Sends one multi-offer Telegram summary after every item in a batch reaches a terminal state.
 - Provides an offer-filtered dashboard, cursor-paginated history, recoverable history removal, and direct report/source links.
 - Saves disabled-by-default Drive review automations with timezone, weekday, time, subfolder, and filename-glob controls.
+- Accepts automatic live-ad observations from the bundled Chrome extension, deduplicates media by normalized creative name, and reviews each unique primary text separately as copy-only evidence.
+- Shows accounts observed by media buyers today on a dedicated Live Scans page and sends completed live creative/copy findings to Telegram.
 
 ## Architecture
 
@@ -83,7 +85,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 94 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, two-pass offer isolation, internal overrides, scheduled automation claims and retries, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 109 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, two-pass offer isolation, internal overrides, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -103,6 +105,7 @@ The repository currently includes 94 backend tests covering pipeline behavior, m
 backend/app/                 FastAPI entry point and review pipeline
 backend/tests/               Pipeline and API regression tests
 frontend/src/                Review workspace and report UI
+extension/                   Unpacked Chrome extension for automatic Meta Ads Manager observation
 worker/                      Cloudflare Worker router/container binding
 convex/                      Durable batch and review state
 scripts/                     Verification helpers
@@ -159,6 +162,9 @@ The public offer catalog contains names and version counts only. Full official g
 | `GET /api/reviews/{job_id}` | Read job state |
 | `GET /api/reviews/{job_id}/report` | Read structured report JSON |
 | `GET /api/reviews/{job_id}/source` | Resolve safe creative/copy source links |
+| `POST /api/live-scans/observe` | Ingest live Meta ad observations and queue unseen primary-text reviews |
+| `POST /api/live-scans/creative` | Upload an unseen live creative requested by name |
+| `GET /api/live-scans?date=YYYY-MM-DD` | Read accounts and findings observed live on a date |
 | `GET /api/drive/browse` | Browse direct Drive folder children |
 | `POST /api/drive/selection/resolve` | Expand and deduplicate selected folders/files |
 | `GET /api/offers/catalog` | List safe offer metadata for review selection and dashboard filters |
@@ -173,6 +179,8 @@ The public offer catalog contains names and version counts only. Full official g
 The bundled publisher guidance in `backend/app/review_pipeline/guidelines/` is the ACP fallback. ACP, Kissterra, Lead Economy, and Smart Financial always appear in the catalog; the latter three begin disabled and without guidelines. Settings can persist policy text and activation state in Convex. Official guideline text, internal overrides, and optional per-review policy supplements remain separate inputs in every report.
 
 Cloudflare Cron checks Convex once per minute and only wakes the review container when an automation is due. Runs are claimed idempotently by schedule with bounded recovery for failed or abandoned scans, and Drive files are claimed by automation, file ID, and modified time so an unchanged successful creative is not reviewed again. Failed review jobs release their file-version claim for a future retry. Filename globs support `{date}`, `{YYYY}`, `{MM}`, and `{DD}` placeholders. No automation is seeded or enabled by deployment.
+
+The Chrome extension is installed from `extension/` as an unpacked internal extension. It observes Ads Manager network responses and visible live rows without requiring a scan button. The ad name is the creative identity: file extensions, punctuation, letter case, and whitespace are normalized before matching. Different primary texts do not cause another media review; each exact normalized primary text receives its own deterministic copy-only job. The extension never sends Facebook cookies or session tokens. When a Meta CDN media URL is available, the extension transfers that media to the existing temporary review pipeline and Vibe Check removes it after processing.
 
 ## Verification
 

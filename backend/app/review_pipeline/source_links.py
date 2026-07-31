@@ -11,7 +11,18 @@ logger = logging.getLogger(__name__)
 
 
 def _cached_source(record: JobRecord) -> ReviewSource | None:
-    if record.source_status != 'linked' or not record.source_url or record.source_kind != 'google_drive_file':
+    if record.source_status != 'linked' or not record.source_url:
+        return None
+    if record.source_kind == 'meta_ads':
+        return ReviewSource(
+            kind='meta_ads',
+            status='linked',
+            url=record.source_url,
+            label='Open Meta Ads Manager',
+            message=record.source_message,
+            checked_at=record.source_checked_at or now_ms(),
+        )
+    if record.source_kind != 'google_drive_file':
         return None
     return ReviewSource(
         kind=record.source_kind,
@@ -111,6 +122,10 @@ def resolve_review_sources(
     record = get_status(job_id)
     checked_at = now_ms()
     sources: list[ReviewSource] = []
+    if record.source_kind == 'meta_ads':
+        cached=_cached_source(record)
+        if cached:
+            return ReviewSources(sources=[cached])
     if record.has_creative:
         sources.append(_resolve_creative_source(record, drive_client))
     if record.has_ad_copy:

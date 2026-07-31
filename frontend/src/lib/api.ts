@@ -17,7 +17,7 @@ export type Status = {
 };
 
 export type ReviewSource = {
-  kind?: 'google_drive_file' | 'google_sheet' | null;
+  kind?: 'google_drive_file' | 'google_sheet' | 'meta_ads' | null;
   status: 'linked' | 'not_found' | 'ambiguous' | 'unavailable';
   url?: string | null;
   file_id?: string | null;
@@ -267,6 +267,62 @@ export type AutomationRunResult = {
   queued_count: number;
   batch_id?: string | null;
   job_ids: string[];
+};
+
+export type LiveReviewState = {
+  job_id: string | null;
+  message: string;
+  progress: number;
+  result: OverallStatus | null;
+  status: string;
+};
+
+export type LiveScanCopyFinding = {
+  ad_count: number;
+  ad_ids: string[];
+  copy_key: string;
+  first_observed_at: number;
+  last_observed_at: number;
+  primary_text: string;
+  review: LiveReviewState;
+};
+
+export type LiveScanCreativeFinding = {
+  ad_count: number;
+  ad_ids: string[];
+  ad_set_names: string[];
+  campaign_names: string[];
+  copies: LiveScanCopyFinding[];
+  creative_key: string;
+  creative_name: string;
+  delivery_statuses: string[];
+  first_observed_at: number;
+  last_observed_at: number;
+  review: LiveReviewState;
+};
+
+export type LiveScanAccount = {
+  account_id: string;
+  account_name: string;
+  creatives: LiveScanCreativeFinding[];
+  first_observed_at: number;
+  last_observed_at: number;
+  live_ad_count: number;
+  scan_count: number;
+  source_url: string | null;
+};
+
+export type LiveScanDay = {
+  accounts: LiveScanAccount[];
+  observation_date: string;
+  totals: {
+    accounts_observed: number;
+    copy_variants: number;
+    live_ads: number;
+    outcomes: Record<OverallStatus, number>;
+    pending: number;
+    unique_creatives: number;
+  };
 };
 
 type ChunkedUpload = {
@@ -573,6 +629,11 @@ export async function runReviewAutomation(automationId: string): Promise<Automat
       headers: adminHeaders(),
     }
   );
+}
+
+export async function getLiveScans(date: string): Promise<LiveScanDay> {
+  const params = new URLSearchParams({ date });
+  return requestJson<LiveScanDay>(`/api/live-scans?${params}`);
 }
 
 export async function listReviewHistoryPage(

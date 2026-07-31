@@ -162,6 +162,71 @@ export default defineSchema({
     .index("by_created_at", ["createdAt"])
     .index("by_notification_status", ["notificationStatus"])
     .index("by_notification_ready_status_lease", ["notificationReady", "notificationStatus", "notificationLeaseExpiresAt"]),
+  liveScanAccounts: defineTable({
+    accountId: v.string(),
+    accountName: v.string(),
+    firstObservedAt: v.number(),
+    lastObservedAt: v.number(),
+    observationDate: v.string(),
+    scanCount: v.number(),
+    sourceUrl: v.optional(v.string()),
+  })
+    .index("by_date", ["observationDate"])
+    .index("by_date_account", ["observationDate", "accountId"]),
+  liveScanCreatives: defineTable({
+    accountId: v.string(),
+    adCount: v.number(),
+    adIds: v.array(v.string()),
+    adSetNames: v.array(v.string()),
+    campaignNames: v.array(v.string()),
+    creativeKey: v.string(),
+    creativeName: v.string(),
+    deliveryStatuses: v.array(v.string()),
+    firstObservedAt: v.number(),
+    lastObservedAt: v.number(),
+    observationDate: v.string(),
+  })
+    .index("by_date", ["observationDate"])
+    .index("by_date_account", ["observationDate", "accountId"])
+    .index("by_date_account_creative", ["observationDate", "accountId", "creativeKey"]),
+  liveScanCopies: defineTable({
+    accountId: v.string(),
+    adCount: v.number(),
+    adIds: v.array(v.string()),
+    copyKey: v.string(),
+    creativeKey: v.string(),
+    creativeName: v.string(),
+    firstObservedAt: v.number(),
+    lastObservedAt: v.number(),
+    observationDate: v.string(),
+    primaryText: v.string(),
+  })
+    .index("by_date", ["observationDate"])
+    .index("by_date_account", ["observationDate", "accountId"])
+    .index("by_date_account_creative_copy", [
+      "observationDate",
+      "accountId",
+      "creativeKey",
+      "copyKey",
+    ]),
+  liveScanReviewClaims: defineTable({
+    createdAt: v.number(),
+    displayName: v.string(),
+    jobId: v.string(),
+    key: v.string(),
+    kind: v.union(v.literal("creative"), v.literal("copy")),
+    leaseExpiresAt: v.optional(v.number()),
+    result: v.optional(v.union(
+      v.literal("green"),
+      v.literal("yellow"),
+      v.literal("orange"),
+      v.literal("red")
+    )),
+    status: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_kind_key", ["kind", "key"])
+    .index("by_job_id", ["jobId"]),
   offerProfiles: defineTable({
     createdAt: v.number(),
     displayName: v.string(),

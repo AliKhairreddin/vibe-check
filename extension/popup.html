@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibe Check Live Scanner</title>
+    <link rel="stylesheet" href="extension.css">
+  </head>
+  <body class="popup">
+    <main>
+      <div class="brand">
+        <span class="pulse"></span>
+        <div>
+          <strong>Vibe Check</strong>
+          <span>Live Scanner</span>
+        </div>
+      </div>
+      <section class="status-card">
+        <p class="eyebrow">Automatic status</p>
+        <p id="status">Waiting for Ads Manager</p>
+        <p id="details" class="muted">The scanner runs without a button whenever Ads Manager is open.</p>
+      </section>
+      <p id="error" class="error" hidden></p>
+      <button id="settings" type="button">Settings</button>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

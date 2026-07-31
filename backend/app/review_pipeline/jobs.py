@@ -9,7 +9,12 @@ from .automation_storage import (
     release_review_automation_claim,
 )
 from .storage import job_dir, set_report, set_status, write_json
-from .telegram import finish_batch_item_and_notify, send_review_message
+from .live_scan_storage import finish_live_review
+from .telegram import (
+    finish_batch_item_and_notify,
+    send_live_scan_message,
+    send_review_message,
+)
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_internal_override_context, build_policy_context, built_in_acp_profile
@@ -355,7 +360,26 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             record_review_automation_job_result(meta, job_id)
         except Exception:
             logger.exception('Could not finalize automation run for job %s', job_id)
-        if meta.has_batch:
+        if meta.live_scan_kind and meta.live_scan_key:
+            try:
+                await asyncio.to_thread(
+                    finish_live_review,
+                    meta.live_scan_kind,
+                    meta.live_scan_key,
+                    job_id,
+                    status='complete',
+                    result=report.overall_status,
+                )
+            except Exception:
+                logger.exception('Could not finalize live scan review %s',job_id)
+            await asyncio.to_thread(
+                send_live_scan_message,
+                rec,
+                report_json,
+                meta,
+                media_kind,
+            )
+        elif meta.has_batch:
             try:
                 await asyncio.to_thread(
                     finish_batch_item_and_notify,
@@ -379,6 +403,17 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             )
     except Exception as e:
         set_status(job_id, JobStatus.failed, 100, str(e))
+        if meta.live_scan_kind and meta.live_scan_key:
+            try:
+                await asyncio.to_thread(
+                    finish_live_review,
+                    meta.live_scan_kind,
+                    meta.live_scan_key,
+                    job_id,
+                    status='failed',
+                )
+            except Exception:
+                logger.exception('Could not fail live scan review %s',job_id)
         try:
             release_review_automation_claim(meta)
         except Exception:

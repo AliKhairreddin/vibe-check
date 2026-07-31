@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from .media import MediaKind
-from .models import JobRecord, OfferOutcome, ReviewBatch
+from .models import JobRecord, OfferOutcome, ReviewBatch, ReviewRequestMeta
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,11 @@ def build_batch_url(batch_id: str) -> str:
     return f'{base_url}/batches/{batch_id}' if base_url else ''
 
 
+def build_live_scans_url() -> str:
+    base_url = os.getenv('APP_PUBLIC_URL', '').strip().rstrip('/')
+    return f'{base_url}/live-scans' if base_url else ''
+
+
 def build_review_message(
     record: JobRecord,
     report: dict[str, Any],
@@ -105,6 +110,61 @@ def send_review_message(
     return _send_telegram_message(
         build_review_message(record, report, ad_copy_text, media_kind),
         f'job_id={record.job_id}',
+    )
+
+
+def build_live_scan_message(
+    record: JobRecord,
+    report: dict[str, Any],
+    meta: ReviewRequestMeta,
+    media_kind: MediaKind | None = None,
+) -> str:
+    kind_label='Creative' if meta.live_scan_kind == 'creative' else 'Primary text'
+    lines=[f'<b>Live {html.escape(kind_label)} Result</b>']
+    if meta.live_scan_account_name:
+        _add_field(lines,'Meta account',meta.live_scan_account_name)
+    if meta.live_scan_creative_name:
+        _add_field(lines,'Creative name',meta.live_scan_creative_name)
+    if meta.live_scan_kind == 'creative':
+        _add_field(lines,'Type',_creative_type_label(media_kind))
+    elif meta.ad_copy:
+        _add_field(lines,'Primary text',_wrap_text(meta.ad_copy,max_chars=MAX_NAME_CHARS))
+    if meta.live_scan_observation_date:
+        _add_field(lines,'Observed live',meta.live_scan_observation_date)
+
+    lines.extend(['','<b>Result:</b>'])
+    for offer_name,offer_report in _ordered_offer_reports(report):
+        _add_offer_result(
+            lines,
+            offer_name,
+            offer_report,
+            include_source_split=False,
+        )
+
+    report_url=build_report_url(record.job_id)
+    live_url=build_live_scans_url()
+    if report_url or live_url:
+        lines.extend(['','<b>Links:</b>'])
+    if live_url:
+        lines.append(
+            f'<a href="{html.escape(live_url,quote=True)}">Open live scans</a>'
+        )
+    if report_url:
+        lines.append(
+            f'<a href="{html.escape(report_url,quote=True)}">Open report</a>'
+        )
+    return '\n'.join(lines)
+
+
+def send_live_scan_message(
+    record: JobRecord,
+    report: dict[str, Any],
+    meta: ReviewRequestMeta,
+    media_kind: MediaKind | None = None,
+) -> bool:
+    return _send_telegram_message(
+        build_live_scan_message(record,report,meta,media_kind),
+        f'live_scan_job_id={record.job_id}',
     )
 
 

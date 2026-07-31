@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Vibe Check Live Scanner",
+  "version": "0.1.0",
+  "description": "Automatically submits live Meta Ads Manager creatives and primary text to Vibe Check.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.facebook.com/*",
+    "https://*.fbcdn.net/*",
+    "https://*.cdninstagram.com/*",
+    "https://vibe-check.thatcanadian.dev/*",
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://business.facebook.com/adsmanager/*",
+        "https://www.facebook.com/adsmanager/*"
+      ],
+      "js": [
+        "page-observer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://business.facebook.com/adsmanager/*",
+        "https://www.facebook.com/adsmanager/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Vibe Check Live Scanner"
+  },
+  "options_page": "options.html"
+}

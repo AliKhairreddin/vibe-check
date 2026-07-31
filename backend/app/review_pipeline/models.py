@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ResultStatus = Literal['green','yellow','orange','red']
-ReviewSourceKind = Literal['google_drive_file','google_sheet']
+ReviewSourceKind = Literal['google_drive_file','google_sheet','meta_ads']
 ReviewSourceStatus = Literal['linked','not_found','ambiguous','unavailable']
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
@@ -287,6 +287,12 @@ class ReviewRequestMeta(BaseModel):
     automation_run_id: str | None = None
     automation_file_id: str | None = None
     automation_file_modified_time: str = ''
+    live_scan_kind: Literal['creative','copy'] | None = None
+    live_scan_key: str = ''
+    live_scan_creative_name: str = ''
+    live_scan_account_id: str = ''
+    live_scan_account_name: str = ''
+    live_scan_observation_date: str = ''
 
     @property
     def has_ad_copy(self) -> bool:
@@ -303,6 +309,118 @@ class ReviewRequestMeta(BaseModel):
     @property
     def primary_offer_id(self) -> str:
         return self.offer_ids[0]
+
+
+class LiveScanAd(BaseModel):
+    ad_id: str = Field(min_length=1, max_length=256)
+    creative_name: str = Field(min_length=1, max_length=300)
+    primary_texts: list[str] = Field(default_factory=list, max_length=25)
+    delivery_status: str = Field(default='active', max_length=80)
+    campaign_name: str = Field(default='', max_length=300)
+    ad_set_name: str = Field(default='', max_length=300)
+    media_url: str | None = Field(default=None, max_length=4_000)
+    media_type: Literal['video','image','unknown'] = 'unknown'
+    media_file_name: str = Field(default='', max_length=300)
+    is_live: bool = True
+
+    @field_validator('primary_texts')
+    @classmethod
+    def validate_primary_texts(cls, values):
+        normalized=[]
+        for value in values:
+            text=' '.join(str(value).split()).strip()
+            if not text or text in normalized:
+                continue
+            if len(text) > 5_000:
+                raise ValueError('Primary text must be 5,000 characters or fewer.')
+            normalized.append(text)
+        return normalized
+
+
+class LiveScanObservation(BaseModel):
+    account_id: str = Field(min_length=1, max_length=256)
+    account_name: str = Field(min_length=1, max_length=300)
+    observation_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    observed_at: int = Field(gt=0)
+    source_url: str | None = Field(default=None, max_length=4_000)
+    ads: list[LiveScanAd] = Field(default_factory=list, max_length=500)
+
+
+class LiveScanMediaRequest(BaseModel):
+    creative_key: str
+    creative_name: str
+    job_id: str
+    media_type: Literal['video','image','unknown'] = 'unknown'
+    media_url: str | None = None
+
+
+class LiveScanIngestResult(BaseModel):
+    account_id: str
+    observation_date: str
+    observed_at: int
+    live_ads: int
+    unique_creatives: int
+    unique_primary_texts: int
+    queued_copy_jobs: int
+    media_requests: list[LiveScanMediaRequest] = Field(default_factory=list)
+
+
+class LiveReviewState(BaseModel):
+    job_id: str | None = None
+    message: str = ''
+    progress: int = 0
+    result: ResultStatus | None = None
+    status: str
+
+
+class LiveScanCopyFinding(BaseModel):
+    ad_count: int
+    ad_ids: list[str] = Field(default_factory=list)
+    copy_key: str
+    first_observed_at: int
+    last_observed_at: int
+    primary_text: str
+    review: LiveReviewState
+
+
+class LiveScanCreativeFinding(BaseModel):
+    ad_count: int
+    ad_ids: list[str] = Field(default_factory=list)
+    ad_set_names: list[str] = Field(default_factory=list)
+    campaign_names: list[str] = Field(default_factory=list)
+    copies: list[LiveScanCopyFinding] = Field(default_factory=list)
+    creative_key: str
+    creative_name: str
+    delivery_statuses: list[str] = Field(default_factory=list)
+    first_observed_at: int
+    last_observed_at: int
+    review: LiveReviewState
+
+
+class LiveScanAccount(BaseModel):
+    account_id: str
+    account_name: str
+    creatives: list[LiveScanCreativeFinding] = Field(default_factory=list)
+    first_observed_at: int
+    last_observed_at: int
+    live_ad_count: int
+    scan_count: int
+    source_url: str | None = None
+
+
+class LiveScanTotals(BaseModel):
+    accounts_observed: int = 0
+    copy_variants: int = 0
+    live_ads: int = 0
+    outcomes: dict[ResultStatus, int] = Field(default_factory=dict)
+    pending: int = 0
+    unique_creatives: int = 0
+
+
+class LiveScanDay(BaseModel):
+    accounts: list[LiveScanAccount] = Field(default_factory=list)
+    observation_date: str
+    totals: LiveScanTotals
 
 class DriveCreativeFile(BaseModel):
     file_id: str

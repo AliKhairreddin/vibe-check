@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibe Check Live Scanner Settings</title>
+    <link rel="stylesheet" href="extension.css">
+  </head>
+  <body class="options">
+    <main>
+      <div class="brand">
+        <span class="pulse"></span>
+        <div>
+          <strong>Vibe Check</strong>
+          <span>Live Scanner Settings</span>
+        </div>
+      </div>
+      <form id="settings-form">
+        <label class="switch-row">
+          <span>
+            <strong>Automatic scanning</strong>
+            <small>Run whenever this browser observes Ads Manager.</small>
+          </span>
+          <input id="enabled" type="checkbox">
+        </label>
+        <label>
+          <span>Vibe Check URL</span>
+          <input id="server-url" type="url" required placeholder="https://vibe-check.thatcanadian.dev">
+        </label>
+        <label>
+          <span>App password</span>
+          <input id="app-password" type="password" autocomplete="off">
+          <small>Leave empty when Vibe Check does not use an app password.</small>
+        </label>
+        <div class="actions">
+          <button type="submit">Save settings</button>
+          <span id="saved" class="muted" aria-live="polite"></span>
+        </div>
+      </form>
+      <p class="notice">
+        Facebook passwords, cookies, and session tokens are never sent to Vibe Check.
+        Only observed ad metadata and requested creative media are submitted.
+      </p>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

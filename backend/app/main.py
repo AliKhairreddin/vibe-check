@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, json, logging, os, re, secrets, shutil, uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
@@ -21,6 +22,10 @@ from .review_pipeline.models import (
     DriveFolder,
     DriveSelectionResult,
     JobRecord,
+    LiveScanDay,
+    LiveScanIngestResult,
+    LiveScanMediaRequest,
+    LiveScanObservation,
     OfferProfile,
     OfferProfileInput,
     OfferProfileList,
@@ -66,6 +71,16 @@ from .review_pipeline.drive import (
 )
 from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
+from .review_pipeline.live_scan_storage import (
+    claim_live_review,
+    get_live_scan_day,
+    mark_live_review_queued,
+    normalize_creative_key,
+    normalize_primary_text,
+    observe_live_account,
+    primary_text_key,
+    release_live_review,
+)
 from .review_pipeline.automation_storage import (
     delete_review_automation,
     deliver_pending_batch_notifications,
@@ -86,6 +101,7 @@ UPLOAD_METADATA_FILE = 'upload.json'
 UPLOAD_CHUNKS_DIR = 'upload_chunks'
 BATCH_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 JOB_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+OBSERVATION_DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 MAX_BATCH_ITEMS = 100
 ADMIN_PASSWORD_HEADER = 'x-admin-password'
@@ -183,6 +199,39 @@ def parse_offer_ids(value:str)->list[str]:
     if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
         raise HTTPException(400, 'offer_ids must be a JSON array of offer IDs.')
     return list(dict.fromkeys(item.strip().lower() for item in parsed if item.strip())) or ['acp']
+
+
+def live_scan_request_meta(
+    *,
+    kind:str,
+    key:str,
+    creative_name:str,
+    account_id:str,
+    account_name:str,
+    observation_date:str,
+    ad_copy:str='',
+)->ReviewRequestMeta:
+    meta=review_meta(ad_copy,'','','','',1.0,False,'','')
+    return meta.model_copy(update={
+        'live_scan_kind':kind,
+        'live_scan_key':key,
+        'live_scan_creative_name':creative_name,
+        'live_scan_account_id':account_id,
+        'live_scan_account_name':account_name,
+        'live_scan_observation_date':observation_date,
+    })
+
+
+def clean_live_source_url(value:str|None)->str|None:
+    if not value:
+        return None
+    normalized=value.strip()
+    if not normalized.startswith('https://'):
+        return None
+    host=normalized.split('/',3)[2].split(':',1)[0].casefold()
+    if host != 'facebook.com' and not host.endswith('.facebook.com'):
+        return None
+    return normalized[:4_000]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -347,6 +396,291 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
     rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name, file_size=size)
     return rec
+
+
+@app.post('/api/live-scans/observe', response_model=LiveScanIngestResult)
+async def observe_live_scan(payload:LiveScanObservation):
+    source_url=clean_live_source_url(payload.source_url)
+    live_ads=[ad for ad in payload.ads if ad.is_live]
+    creative_groups:dict[str,dict]=defaultdict(lambda:{
+        'ad_ids':set(),
+        'ad_set_names':set(),
+        'campaign_names':set(),
+        'delivery_statuses':set(),
+        'media_url':None,
+        'media_type':'unknown',
+        'creative_name':'',
+    })
+    copy_groups:dict[tuple[str,str],dict]=defaultdict(lambda:{
+        'ad_ids':set(),
+        'creative_name':'',
+        'primary_text':'',
+    })
+
+    for ad in live_ads:
+        creative_key=normalize_creative_key(ad.creative_name)
+        if not creative_key:
+            continue
+        creative=creative_groups[creative_key]
+        creative['creative_name']=ad.creative_name.strip()
+        creative['ad_ids'].add(ad.ad_id)
+        if ad.ad_set_name:
+            creative['ad_set_names'].add(ad.ad_set_name)
+        if ad.campaign_name:
+            creative['campaign_names'].add(ad.campaign_name)
+        if ad.delivery_status:
+            creative['delivery_statuses'].add(ad.delivery_status)
+        if ad.media_url and not creative['media_url']:
+            creative['media_url']=ad.media_url
+            creative['media_type']=ad.media_type
+        for raw_text in ad.primary_texts:
+            text=normalize_primary_text(raw_text)
+            if not text:
+                continue
+            copy_key=primary_text_key(text)
+            copy=copy_groups[(creative_key,copy_key)]
+            copy['creative_name']=ad.creative_name.strip()
+            copy['primary_text']=text
+            copy['ad_ids'].add(ad.ad_id)
+
+    media_requests=[]
+    for key,value in creative_groups.items():
+        claim=await asyncio.to_thread(
+            claim_live_review,
+            'creative',
+            key,
+            value['creative_name'],
+            start_review=False,
+        )
+        if claim.get('needs_media'):
+            media_requests.append(LiveScanMediaRequest(
+                creative_key=key,
+                creative_name=value['creative_name'],
+                job_id=claim['job_id'],
+                media_type=value['media_type'],
+                media_url=value['media_url'],
+            ))
+
+    queued_copy_jobs=0
+    for (_creative_key,copy_key),value in copy_groups.items():
+        claim=await asyncio.to_thread(
+            claim_live_review,
+            'copy',
+            copy_key,
+            value['primary_text'][:160],
+            start_review=True,
+        )
+        if not claim.get('should_submit'):
+            continue
+        job_id=claim['job_id']
+        try:
+            meta=live_scan_request_meta(
+                kind='copy',
+                key=copy_key,
+                creative_name=value['creative_name'],
+                account_id=payload.account_id,
+                account_name=payload.account_name,
+                observation_date=payload.observation_date,
+                ad_copy=value['primary_text'],
+            )
+            jd=job_dir(job_id)
+            (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+            await enqueue_job(
+                job_id,
+                None,
+                'copy_only',
+                meta,
+                copy_review_file_name(value['primary_text']),
+            )
+        except Exception as exc:
+            logger.exception('Could not queue live ad-copy review %s',job_id)
+            await asyncio.to_thread(
+                release_live_review,'copy',copy_key,job_id,str(exc)
+            )
+            continue
+        try:
+            await asyncio.to_thread(mark_live_review_queued,'copy',copy_key,job_id)
+        except Exception:
+            logger.exception('Could not mark live ad-copy review %s as queued',job_id)
+        try:
+            set_review_source(job_id,ReviewSource(
+                kind='meta_ads',
+                status='linked',
+                url=source_url,
+                label='Open Meta Ads Manager',
+                message=(
+                    f'Observed live in Meta ad account “{payload.account_name}” '
+                    f'with creative “{value["creative_name"]}”.'
+                ),
+                checked_at=payload.observed_at,
+            ))
+        except Exception:
+            logger.exception('Could not link Meta source for live ad-copy review %s',job_id)
+        queued_copy_jobs += 1
+
+    creatives=[
+        {
+            'creative_key':key,
+            'creative_name':value['creative_name'],
+            'ad_ids':sorted(value['ad_ids']),
+            'ad_count':len(value['ad_ids']),
+            'campaign_names':sorted(value['campaign_names']),
+            'ad_set_names':sorted(value['ad_set_names']),
+            'delivery_statuses':sorted(value['delivery_statuses']),
+        }
+        for key,value in creative_groups.items()
+    ]
+    copies=[
+        {
+            'copy_key':copy_key,
+            'creative_key':creative_key,
+            'creative_name':value['creative_name'],
+            'primary_text':value['primary_text'],
+            'ad_ids':sorted(value['ad_ids']),
+            'ad_count':len(value['ad_ids']),
+        }
+        for (creative_key,copy_key),value in copy_groups.items()
+    ]
+    await asyncio.to_thread(
+        observe_live_account,
+        account_id=payload.account_id,
+        account_name=payload.account_name,
+        observation_date=payload.observation_date,
+        observed_at=payload.observed_at,
+        source_url=source_url,
+        observed_ad_ids=sorted({ad.ad_id for ad in payload.ads}),
+        creatives=creatives,
+        copies=copies,
+    )
+    return LiveScanIngestResult(
+        account_id=payload.account_id,
+        observation_date=payload.observation_date,
+        observed_at=payload.observed_at,
+        live_ads=len(live_ads),
+        unique_creatives=len(creatives),
+        unique_primary_texts=len({copy_key for _,copy_key in copy_groups}),
+        queued_copy_jobs=queued_copy_jobs,
+        media_requests=media_requests,
+    )
+
+
+@app.post('/api/live-scans/creative')
+async def upload_live_scan_creative(
+    creative:UploadFile=File(...),
+    creative_name:str=Form(...),
+    account_id:str=Form(...),
+    account_name:str=Form(...),
+    observation_date:str=Form(...),
+    source_url:str=Form(''),
+):
+    creative_name=creative_name.strip()
+    if not creative_name or len(creative_name) > 300:
+        raise HTTPException(400,'Creative name must be between 1 and 300 characters.')
+    if not account_id.strip() or len(account_id) > 256:
+        raise HTTPException(400,'Meta ad account ID is invalid.')
+    if not OBSERVATION_DATE_PATTERN.fullmatch(observation_date):
+        raise HTTPException(400,'Observation date must use YYYY-MM-DD.')
+    creative_key=normalize_creative_key(creative_name)
+    if not creative_key:
+        raise HTTPException(400,'Creative name cannot be normalized.')
+    claim=await asyncio.to_thread(
+        claim_live_review,
+        'creative',
+        creative_key,
+        creative_name,
+        start_review=True,
+    )
+    if not claim.get('should_submit'):
+        try:
+            return get_status(claim['job_id'])
+        except FileNotFoundError:
+            return {
+                'job_id':claim['job_id'],
+                'status':claim['status'],
+                'message':'Creative review is already claimed.',
+            }
+
+    job_id=claim['job_id']
+    upload_name=Path(creative.filename or creative_name or 'meta-creative').name
+    try:
+        media_kind=detect_media_kind(upload_name,creative.content_type)
+    except ValueError as exc:
+        await asyncio.to_thread(
+            release_live_review,'creative',creative_key,job_id,str(exc)
+        )
+        raise HTTPException(415,str(exc)) from None
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','200')) * 1024 * 1024
+    jd=job_dir(job_id)
+    media_path=jd/upload_name
+    size=0
+    record=None
+    try:
+        with media_path.open('wb') as handle:
+            while chunk:=await creative.read(1024*1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(
+                        413,
+                        f'Max upload is {os.getenv("MAX_UPLOAD_MB","200")} MB',
+                    )
+                handle.write(chunk)
+        meta=live_scan_request_meta(
+            kind='creative',
+            key=creative_key,
+            creative_name=creative_name,
+            account_id=account_id.strip(),
+            account_name=account_name.strip() or account_id.strip(),
+            observation_date=observation_date,
+        )
+        (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+        record=await enqueue_job(
+            job_id,
+            media_path,
+            media_kind,
+            meta,
+            creative_name,
+            file_size=size,
+        )
+    except HTTPException:
+        media_path.unlink(missing_ok=True)
+        await asyncio.to_thread(
+            release_live_review,'creative',creative_key,job_id,'Upload failed'
+        )
+        raise
+    except Exception as exc:
+        media_path.unlink(missing_ok=True)
+        await asyncio.to_thread(
+            release_live_review,'creative',creative_key,job_id,str(exc)
+        )
+        raise
+    try:
+        await asyncio.to_thread(
+            mark_live_review_queued,'creative',creative_key,job_id
+        )
+    except Exception:
+        logger.exception('Could not mark live creative review %s as queued',job_id)
+    try:
+        set_review_source(job_id,ReviewSource(
+            kind='meta_ads',
+            status='linked',
+            url=clean_live_source_url(source_url),
+            label='Open Meta Ads Manager',
+            message=(
+                f'Captured automatically from live Meta ad account '
+                f'“{account_name.strip() or account_id.strip()}”.'
+            ),
+            checked_at=now_ms(),
+        ))
+    except Exception:
+        logger.exception('Could not link Meta source for live creative review %s',job_id)
+    return record
+
+
+@app.get('/api/live-scans', response_model=LiveScanDay)
+def live_scans(date:str):
+    if not OBSERVATION_DATE_PATTERN.fullmatch(date):
+        raise HTTPException(400,'Date must use YYYY-MM-DD.')
+    return get_live_scan_day(date)
 
 
 def drive_creative_model(file)->DriveCreativeFile:

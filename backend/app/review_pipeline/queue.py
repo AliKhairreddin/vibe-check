@@ -12,6 +12,7 @@ from .jobs import process_job
 from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
 from .storage import set_status
+from .live_scan_storage import finish_live_review
 from .telegram import finish_batch_item_and_notify
 from .automation_storage import (
     heartbeat_automation_run,
@@ -278,6 +279,16 @@ async def _process_queue(worker_index: int) -> None:
                     release_review_automation_claim(job.meta)
                 except Exception:
                     logger.exception('Could not release automation claim for failed job %s', job.job_id)
+                if job.meta.live_scan_kind and job.meta.live_scan_key:
+                    try:
+                        finish_live_review(
+                            job.meta.live_scan_kind,
+                            job.meta.live_scan_key,
+                            job.job_id,
+                            status='failed',
+                        )
+                    except Exception:
+                        logger.exception('Could not fail live scan review %s',job.job_id)
                 try:
                     record_review_automation_job_result(job.meta, job.job_id)
                 except Exception:
