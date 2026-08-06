@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vibe Check Live Scanner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Automatically submits live Meta Ads Manager creatives and primary text to Vibe Check.",
   "permissions": [
     "storage"
@@ -19,6 +19,7 @@
   "content_scripts": [
     {
       "matches": [
+        "https://adsmanager.facebook.com/*",
         "https://business.facebook.com/adsmanager/*",
         "https://www.facebook.com/adsmanager/*"
       ],
@@ -30,6 +31,7 @@
     },
     {
       "matches": [
+        "https://adsmanager.facebook.com/*",
         "https://business.facebook.com/adsmanager/*",
         "https://www.facebook.com/adsmanager/*"
       ],
