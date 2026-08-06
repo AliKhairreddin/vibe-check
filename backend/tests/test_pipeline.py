@@ -18,7 +18,7 @@ from app.review_pipeline import llm as review_llm
 from app.review_pipeline import queue as review_queue
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
-from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, OverrideAnnotationSet, ReviewAutomation, ReviewAutomationInput, ReviewRequestMeta
+from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewRequestMeta
 from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
@@ -27,6 +27,7 @@ from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import ComplianceResponseError, parse_report_json, parse_strict_report_json
 from app.review_pipeline.live_scan_storage import normalize_creative_key, normalize_primary_text, primary_text_key
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
+from app.review_pipeline.policy_seeds import seeded_offer_inputs
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
 from app.review_pipeline.automation_storage import claim_automation_files, claim_automation_run, finish_automation_run, list_review_automations, upsert_review_automation
@@ -88,7 +89,7 @@ def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
     assert evidence['onscreen_text_ocr'][0]['text'] == 'On-screen words.'
     assert evidence['visual_observations']['observations'][0]['scene'] == 'Person holding paperwork.'
     assert 'platform caption/body' in evidence['source_definitions']['ad_copy']
-    assert 'internal_overrides' not in evidence
+    assert evidence['internal_overrides'] == []
 
 def test_review_evidence_supports_copy_only_jobs():
     meta=ReviewRequestMeta(ad_copy='Standalone ad copy.', notes='Brand note.')
@@ -563,6 +564,7 @@ def strict_report_payload(
             'ad_copy':None,
         },
         'findings':findings or [],
+        'applied_overrides':[],
         'safe_rewrite':{
             'ad_copy':'',
             'onscreen_text':[],
@@ -632,6 +634,20 @@ def test_strict_openrouter_report_accepts_green_with_no_findings():
     report=parse_strict_report_json(json.dumps(strict_report_payload()))
     assert report.overall_status == 'green'
     assert report.findings == []
+
+
+def test_strict_openrouter_report_accepts_green_with_applied_override():
+    payload=strict_report_payload()
+    payload['applied_overrides']=[{
+        'override_id':'cash-imagery',
+        'title':'Cash imagery context',
+        'source':'visual',
+        'evidence':'Cash appears in an unrelated act of assistance.',
+        'rationale':'The current rule permits money imagery when it is unrelated to the insurance offer.',
+    }]
+    report=parse_strict_report_json(json.dumps(payload))
+    assert report.overall_status == 'green'
+    assert report.applied_overrides[0].override_id == 'cash-imagery'
 
 
 @pytest.mark.anyio
@@ -823,6 +839,33 @@ def test_default_guidelines_are_loaded_and_combined():
     policy_text, sources=build_policy_context('Extra rule.')
     assert 'Extra rule.' in policy_text
     assert sources == ['Saved General Publisher Ad Copy & Creative Guidelines', 'Additional pasted policy/guidelines']
+
+
+def test_seeded_offer_policies_cover_every_live_offer_with_current_rules():
+    profiles=seeded_offer_inputs()
+    assert list(profiles) == ['acp','kissterra','lead-economy','smart-financial']
+    assert profiles['acp'].is_default
+    assert all(profile.enabled and profile.official_guidelines for profile in profiles.values())
+    assert all(profile.internal_overrides for profile in profiles.values())
+    for profile in profiles.values():
+        override_ids=[override.override_id for override in profile.internal_overrides]
+        assert len(override_ids) == len(set(override_ids))
+        assert all('supersedes the original' in override.rationale for override in profile.internal_overrides)
+    assert '$19/month' in next(
+        override.guidance
+        for override in profiles['acp'].internal_overrides
+        if override.override_id == 'savings-discounts-and-pricing'
+    )
+    assert '$31/month' in next(
+        override.guidance
+        for override in profiles['lead-economy'].internal_overrides
+        if override.override_id == 'discounts-and-rate-claims'
+    )
+    assert 'Auto $39' in next(
+        override.guidance
+        for override in profiles['smart-financial'].internal_overrides
+        if override.override_id == 'discounts-and-rate-claims'
+    )
 
 def test_offer_profiles_persist_guidelines_and_offer_scoped_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -1587,48 +1630,32 @@ def offer_with_cash_override()->OfferProfile:
     )
 
 
-def red_cash_report()->ComplianceReport:
-    return ComplianceReport.model_validate({
-        'overall_status':'red',
-        'summary':'Money imagery violates official policy.',
-        'findings':[{
-            'severity':'high',
-            'source':'visual',
-            'evidence':'Visible cash beside the offer.',
-            'policy_reason':'Official ACP policy prohibits money imagery.',
-            'suggested_fix':'Remove the cash.',
-            'confidence':'high',
-        }],
-    })
-
-
 @pytest.mark.anyio
-async def test_two_pass_override_annotation_cannot_change_official_red_finding(monkeypatch):
+async def test_effective_policy_review_returns_green_with_valid_override(monkeypatch):
     profile=offer_with_cash_override()
-    official_calls=[]
-    override_calls=[]
+    review_calls=[]
 
-    async def fake_official_review(evidence, model):
-        official_calls.append(evidence)
-        assert 'internal_overrides' not in evidence
-        return red_cash_report()
-
-    async def fake_override_review(context, model):
-        override_calls.append(context)
-        return OverrideAnnotationSet.model_validate({
-            'annotations':[{
-                'finding_index':0,
-                'internal_override':{
-                    'override_id':'cash-imagery',
-                    'title':'Model-provided title is ignored',
-                    'disposition':'accepted',
-                    'rationale':'The image is incidental and does not promise a payout.',
-                },
+    async def fake_effective_review(evidence, model):
+        review_calls.append(evidence)
+        assert evidence['internal_overrides'][0]['override_id'] == 'cash-imagery'
+        return ComplianceReport.model_validate({
+            'overall_status':'green',
+            'summary':'Ready under the current internal rule.',
+            'source_results':{
+                'creative':{'status':'green','summary':'The cash is incidental.'},
+                'ad_copy':None,
+            },
+            'findings':[],
+            'applied_overrides':[{
+                'override_id':'cash-imagery',
+                'title':'Model-provided title is ignored',
+                'source':'visual',
+                'evidence':'Visible cash appears in an unrelated scene.',
+                'rationale':'The image is incidental and does not promise a payout.',
             }],
         })
 
-    monkeypatch.setattr(review_jobs, 'review_with_openrouter', fake_official_review)
-    monkeypatch.setattr(review_jobs, 'review_internal_overrides_with_openrouter', fake_override_review)
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', fake_effective_review)
     result=await review_jobs._review_offer(
         profile,
         'image',
@@ -1640,38 +1667,41 @@ async def test_two_pass_override_annotation_cannot_change_official_red_finding(m
         'Evidence note.',
     )
 
-    assert len(official_calls) == 1 and len(override_calls) == 1
-    assert override_calls[0]['internal_overrides'][0]['override_id'] == 'cash-imagery'
-    assert result.overall_status == 'red'
-    assert len(result.findings) == 1
-    assert result.findings[0].severity == 'high'
-    assert result.findings[0].evidence == 'Visible cash beside the offer.'
-    assert result.findings[0].policy_reason == 'Official ACP policy prohibits money imagery.'
-    assert result.findings[0].internal_override is not None
-    assert result.findings[0].internal_override.override_id == 'cash-imagery'
-    assert result.findings[0].internal_override.title == 'Cash imagery exception'
+    assert len(review_calls) == 1
+    assert result.overall_status == 'green'
+    assert result.findings == []
+    assert result.applied_overrides[0].override_id == 'cash-imagery'
+    assert result.applied_overrides[0].title == 'Cash imagery exception'
     assert result.internal_disposition == 'accepted_with_override'
+    outcomes=review_jobs._completed_offer_outcomes(
+        ReviewRequestMeta(offer_outcomes=[OfferOutcome(
+            offer_id='acp',
+            offer_name='ACP',
+            evaluation_state='evaluated',
+        )]),
+        [result],
+    )
+    assert outcomes[0].overall_status == 'green'
+    assert outcomes[0].with_override
 
 
 @pytest.mark.anyio
-async def test_two_pass_override_annotation_removes_unknown_override_ids(monkeypatch):
-    async def fake_official_review(evidence, model):
-        return red_cash_report()
-
-    async def fake_override_review(context, model):
-        return OverrideAnnotationSet.model_validate({
-            'annotations':[{
-                'finding_index':0,
-                'internal_override':{
-                    'override_id':'invented-exception',
-                    'disposition':'accepted',
-                    'rationale':'Not actually configured.',
-                },
+async def test_effective_policy_review_removes_unknown_override_ids(monkeypatch):
+    async def fake_effective_review(evidence, model):
+        return ComplianceReport.model_validate({
+            'overall_status':'green',
+            'summary':'Model claimed an unknown exception.',
+            'findings':[],
+            'applied_overrides':[{
+                'override_id':'invented-exception',
+                'title':'Invented exception',
+                'source':'visual',
+                'evidence':'Visible cash.',
+                'rationale':'Not actually configured.',
             }],
         })
 
-    monkeypatch.setattr(review_jobs, 'review_with_openrouter', fake_official_review)
-    monkeypatch.setattr(review_jobs, 'review_internal_overrides_with_openrouter', fake_override_review)
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', fake_effective_review)
     result=await review_jobs._review_offer(
         offer_with_cash_override(),
         'image',
@@ -1683,9 +1713,10 @@ async def test_two_pass_override_annotation_removes_unknown_override_ids(monkeyp
         'Evidence note.',
     )
 
-    assert result.overall_status == 'red'
-    assert result.findings[0].internal_override is None
-    assert result.internal_disposition == 'action_required'
+    assert result.overall_status == 'orange'
+    assert result.applied_overrides == []
+    assert result.internal_disposition == 'human_review'
+    assert result.findings[0].policy_reason.startswith('Only enabled overrides')
     assert any('invented-exception' in limitation for limitation in result.limitations)
 
 

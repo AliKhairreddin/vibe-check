@@ -143,6 +143,7 @@ export default defineSchema({
         offerId: v.string(),
         offerName: v.string(),
         overallStatus: v.optional(v.string()),
+        withOverride: v.optional(v.boolean()),
       }))),
       fileName: v.string(),
       itemId: v.string(),

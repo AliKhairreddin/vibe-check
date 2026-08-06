@@ -323,6 +323,7 @@ def create_batch(
                         'offerId':outcome.offer_id,
                         'offerName':outcome.offer_name,
                         'evaluationState':outcome.evaluation_state,
+                        **({'withOverride':True} if outcome.with_override else {}),
                         'message':outcome.message,
                     }
                     for outcome in outcome_snapshot
@@ -437,6 +438,7 @@ def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
                 **({'overallStatus':outcome.overall_status} if outcome.overall_status else {}),
                 **({'creativeResult':outcome.creative_result} if outcome.creative_result else {}),
                 **({'adCopyResult':outcome.ad_copy_result} if outcome.ad_copy_result else {}),
+                **({'withOverride':True} if outcome.with_override else {}),
                 'message':outcome.message,
             }
             for outcome in resolved_outcomes
@@ -565,6 +567,12 @@ def _offer_outcomes(
             overall_status=_overall_status(result),
             creative_result=_creative_result(result, has_creative),
             ad_copy_result=_ad_copy_result(result, has_ad_copy),
+            with_override=result.get('internal_disposition') == 'accepted_with_override',
+            message=(
+                'Green under the saved current internal rules.'
+                if result.get('internal_disposition') == 'accepted_with_override'
+                else 'Evaluated using the effective saved policy.'
+            ),
         ))
     for offer_id,result in by_offer_id.items():
         if offer_id in KNOWN_OFFER_NAMES:
@@ -576,6 +584,12 @@ def _offer_outcomes(
             overall_status=_overall_status(result),
             creative_result=_creative_result(result, has_creative),
             ad_copy_result=_ad_copy_result(result, has_ad_copy),
+            with_override=result.get('internal_disposition') == 'accepted_with_override',
+            message=(
+                'Green under the saved current internal rules.'
+                if result.get('internal_disposition') == 'accepted_with_override'
+                else 'Evaluated using the effective saved policy.'
+            ),
         ))
     return sorted(outcomes, key=offer_sort_key)
 

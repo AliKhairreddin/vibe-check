@@ -4,8 +4,8 @@ from typing import Any
 
 import httpx
 from pydantic import ValidationError
-from .models import ComplianceReport, LLMComplianceResult, OverrideAnnotationSet
-from .prompts import OVERRIDE_SYSTEM_PROMPT, SYSTEM_PROMPT, build_override_user_prompt, build_user_prompt
+from .models import ComplianceReport, LLMComplianceResult
+from .prompts import SYSTEM_PROMPT, build_user_prompt
 
 STATUS_ALIASES = {
     'green': 'green',
@@ -507,13 +507,6 @@ def parse_strict_report_json(text:str)->ComplianceReport:
     return ComplianceReport.model_validate(result.model_dump())
 
 
-def parse_override_annotations_json(text:str)->OverrideAnnotationSet:
-    data=_load_json(text)
-    if not isinstance(data, dict):
-        raise TypeError('Internal override annotations JSON must be an object')
-    return OverrideAnnotationSet.model_validate(data)
-
-
 async def review_with_openrouter(evidence:dict, model:str|None=None)->ComplianceReport:
     key=os.getenv('OPENROUTER_API_KEY')
     if not key:
@@ -579,30 +572,3 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
         f'supporting findings after {MAX_REVIEW_ATTEMPTS} attempts. '
         'No policy color was assigned.'
     ) from last_error
-
-
-async def review_internal_overrides_with_openrouter(
-    context:dict,
-    model:str|None=None,
-)->OverrideAnnotationSet:
-    key=os.getenv('OPENROUTER_API_KEY')
-    if not key:
-        return OverrideAnnotationSet()
-    payload={
-        'model': model or os.getenv('OPENROUTER_MODEL','deepseek/deepseek-v4-flash'),
-        'messages':[
-            {'role':'system','content':OVERRIDE_SYSTEM_PROMPT},
-            {'role':'user','content':build_override_user_prompt(context)},
-        ],
-        'response_format': {'type':'json_object'},
-        'temperature': 0,
-    }
-    async with httpx.AsyncClient(timeout=120) as client:
-        r=await client.post(
-            'https://openrouter.ai/api/v1/chat/completions',
-            headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},
-            json=payload,
-        )
-        r.raise_for_status()
-        content=r.json()['choices'][0]['message']['content']
-    return parse_override_annotations_json(content)

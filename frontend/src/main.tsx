@@ -258,7 +258,7 @@ function AppShell() {
         </nav>
         <div className="mt-auto grid gap-3">
           <div className="rounded-lg border bg-card/60 p-3 text-xs leading-5 text-muted-foreground">
-            Official policy results stay separate from offer-scoped internal overrides.
+            Results reflect effective policy, with saved internal overrides identified separately.
           </div>
           <Button
             type="button"
@@ -1746,6 +1746,7 @@ function ReportPage() {
         overall_status: normalizeResultStatus(result.overall_status),
         creative_result: normalizeResultStatus(result.source_results?.creative?.status),
         ad_copy_result: normalizeResultStatus(result.source_results?.ad_copy?.status),
+        with_override: result.internal_disposition === 'accepted_with_override',
         message: 'Evaluated using saved offer guidelines.',
       }));
   const detailedResults = offerResults.filter((result) => {
@@ -1929,11 +1930,33 @@ function ReportPage() {
           {activeOffer.internal_disposition === 'accepted_with_override' ? (
             <Alert>
               <CheckCircle2 />
-              <AlertTitle>Accepted internally for {activeOffer.offer_name}</AlertTitle>
+              <AlertTitle>Green with internal override for {activeOffer.offer_name}</AlertTitle>
               <AlertDescription>
-                The official guideline finding remains in this report. Every accepted exception is identified in the Internal treatment column below.
+                The creative is ready to run under the current saved internal rules. The policy differences that changed the decision are recorded below.
               </AlertDescription>
             </Alert>
+          ) : null}
+          {activeOffer.applied_overrides?.length ? (
+            <div className="grid gap-3">
+              <div>
+                <h3 className="text-sm font-medium">Applied internal overrides</h3>
+                <p className="text-xs text-muted-foreground">
+                  These saved rules materially changed the effective result from the official source policy.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {activeOffer.applied_overrides.map((override) => (
+                  <div key={override.override_id} className="grid gap-2 rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary">{override.title || override.override_id}</Badge>
+                      <Badge variant="outline">{formatSource(override.source)}</Badge>
+                    </div>
+                    <p className="text-sm">{override.evidence}</p>
+                    <p className="text-xs leading-5 text-muted-foreground">{override.rationale}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : null}
           {sourceResults.length ? (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1998,7 +2021,7 @@ function ReportPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-xl">Findings</CardTitle>
-          <CardDescription>{activeOffer.findings.length} official-policy findings returned</CardDescription>
+          <CardDescription>{activeOffer.findings.length} effective-policy findings returned</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">

@@ -11,6 +11,7 @@ type BatchItem = {
     offerId: string;
     offerName: string;
     overallStatus?: string;
+    withOverride?: boolean;
   }>;
   fileName: string;
   itemId: string;
@@ -58,6 +59,7 @@ function publicBatch(batch: {
         offer_id: outcome.offerId,
         offer_name: outcome.offerName,
         overall_status: outcome.overallStatus ?? null,
+        with_override: outcome.withOverride ?? false,
       })),
       result: item.result ?? null,
       status: item.status,
@@ -91,6 +93,7 @@ export const createBatch = mutation({
         offerId: v.string(),
         offerName: v.string(),
         overallStatus: v.optional(v.string()),
+        withOverride: v.optional(v.boolean()),
       }))),
     })),
   },
@@ -168,6 +171,7 @@ export const finishItem = mutation({
       offerId: v.string(),
       offerName: v.string(),
       overallStatus: v.optional(v.string()),
+      withOverride: v.optional(v.boolean()),
     }))),
     result: v.optional(v.string()),
     status: v.string(),

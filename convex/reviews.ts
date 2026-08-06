@@ -81,6 +81,12 @@ function reportPrimaryOfferId(report: unknown) {
   return normalizeOfferId((report as { primary_offer_id?: unknown }).primary_offer_id);
 }
 
+function reportUsesOverride(report: unknown) {
+  if (!report || typeof report !== "object") return false;
+  return (report as { internal_disposition?: unknown }).internal_disposition
+    === "accepted_with_override";
+}
+
 function assertOfferReportSize(value: unknown, label: string) {
   const size = getConvexSize(value as Value);
   if (size > MAX_OFFER_RESULT_BYTES) {
@@ -419,6 +425,7 @@ function publicOfferOutcomes(report: unknown, hasCreative: boolean, hasAdCopy: b
             ? String(source.offer_name ?? source.offerName)
             : offerId,
           overall_status: normalizeResultStatus(source.overall_status ?? source.overallStatus),
+          with_override: source.with_override === true || source.withOverride === true,
         }];
       });
       if (outcomes.length) return outcomes;
@@ -436,6 +443,7 @@ function publicOfferOutcomes(report: unknown, hasCreative: boolean, hasAdCopy: b
       offer_id: offer.offer_id,
       offer_name: offer.offer_name,
       overall_status: evaluated ? overallStatus(report) : null,
+      with_override: evaluated && reportUsesOverride(report),
     };
   });
 }

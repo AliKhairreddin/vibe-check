@@ -145,15 +145,17 @@ export function batchOutcomeForOffer(
 export function OfferResultBadge({
   className,
   status,
+  withOverride = false,
 }: {
   className?: string;
   status: OverallStatus | null | undefined;
+  withOverride?: boolean;
 }) {
   if (!status) return <Badge variant="outline" className={className}>N/A</Badge>;
   const meta = STATUS_META[status];
   return (
     <Badge variant="outline" className={cn(meta.className, className)}>
-      {meta.label}
+      {status === 'green' && withOverride ? 'Green · Override' : meta.label}
     </Badge>
   );
 }
@@ -185,7 +187,11 @@ export function OfferOutcomeCell({
       title={compactDetails}
     >
       {outcome.overall_status ? (
-        <OfferResultBadge className="w-fit" status={outcome.overall_status} />
+        <OfferResultBadge
+          className="w-fit"
+          status={outcome.overall_status}
+          withOverride={outcome.with_override}
+        />
       ) : (
         <Badge variant="outline" className="w-fit">Not ready</Badge>
       )}
@@ -322,7 +328,9 @@ function railOutcomeMeta(outcome: OfferOutcome | null) {
   }
   return {
     className: STATUS_META[outcome.overall_status].railClassName,
-    label: STATUS_META[outcome.overall_status].label,
+    label: outcome.overall_status === 'green' && outcome.with_override
+      ? 'Green (internal override)'
+      : STATUS_META[outcome.overall_status].label,
   };
 }
 
@@ -335,6 +343,9 @@ function outcomeDetails(outcome: OfferOutcome) {
   }
   if (outcome.ad_copy_result) {
     details.push(`Copy: ${STATUS_META[outcome.ad_copy_result].label}`);
+  }
+  if (outcome.with_override) {
+    details.push('Saved internal override applied');
   }
   if (
     outcome.overall_status &&

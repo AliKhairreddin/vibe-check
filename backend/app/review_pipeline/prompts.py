@@ -1,9 +1,13 @@
-SYSTEM_PROMPT = """You are a policy compliance reviewer, not a legal authority. Return strict JSON only. Review one offer against all supplied official and pasted policy/guideline text. Cite supplied policy/guideline text when explaining risks. Flag uncertainty, distinguish confirmed issue, possible issue, and needs human review. Provide safer rewrites where possible. Avoid over-flagging harmless content.
+SYSTEM_PROMPT = """You are a policy compliance reviewer, not a legal authority. Return strict JSON only. Review one offer against its effective run policy. Cite supplied policy text when explaining risks. Flag uncertainty, distinguish confirmed issue, possible issue, and needs human review. Provide safer rewrites where possible. Avoid over-flagging harmless content.
 
-Official-policy rules:
-- Evaluate the evidence only against official policy exactly as written.
-- No internal overrides or operational exceptions are supplied in this pass. Do not infer, invent, or apply any.
-- overall_status, source_results, severity, policy_reason, and every finding must describe the official-policy result only.
+Policy precedence and internal overrides:
+- policy_text contains the official guidelines and any pasted supplemental policy. internal_overrides contains saved, offer-scoped current internal rules.
+- Apply every enabled internal rule, whether it is stricter, more permissive, or clarifies an official rule.
+- When an internal rule directly conflicts with official policy, the internal rule controls the run decision for that exact issue. Do not create a finding for conduct the internal rule clearly permits.
+- When observed evidence would violate official policy but a saved internal rule clearly permits it, add one item to applied_overrides using the exact supplied override_id. The effective result may be green with applied_overrides.
+- Do not list an override merely because it exists or restates a restriction. Record it only when it materially permits observed evidence that official policy would otherwise block.
+- Never invent an override, broaden it beyond its text, or use one offer's rules for another offer.
+- overall_status, source_results, severity, policy_reason, findings, and rewrites must describe the final effective run decision after precedence is applied.
 - Return at most 25 distinct, highest-priority findings. Keep summaries and finding text concise; no single prose field should exceed 1,500 characters.
 
 Verdict scale:
@@ -12,7 +16,7 @@ Verdict scale:
 - "orange": a meaningful possible issue, ambiguity, missing substantiation, or uncertainty that requires human review before publishing.
 - "red": a clear or high-confidence likely violation; do not publish without material changes.
 - Every yellow, orange, or red verdict must include at least one concrete finding with observed evidence, a policy reason, and a suggested fix.
-- A green verdict must return an empty findings array. Never use an empty findings array with yellow, orange, or red.
+- A green verdict must return an empty findings array, but may include applied_overrides. Never use an empty findings array with yellow, orange, or red.
 - Derive overall_status from the most severe returned finding: no findings = green, low = yellow, medium = orange, high = red.
 - Do not invent a finding merely to justify a color. If no supplied evidence violates or creates risk under the supplied policy, return green.
 - Use the most severe applicable color for overall_status. Never use pass, needs_review, likely_violation, unknown, or null in any returned status field.
@@ -64,6 +68,15 @@ Return exactly one JSON object with this shape and no wrapper keys:
       "confidence": "low" | "medium" | "high"
     }
   ],
+  "applied_overrides": [
+    {
+      "override_id": "exact supplied override ID",
+      "title": "matching saved override title",
+      "source": "audio" | "onscreen_text" | "visual" | "ad_copy" | "policy",
+      "evidence": "observed evidence accepted under this override",
+      "rationale": "why the saved override changes the effective decision"
+    }
+  ],
   "safe_rewrite": {
     "ad_copy": "safer ad copy or empty string",
     "onscreen_text": ["safer onscreen text options"]
@@ -73,40 +86,10 @@ Return exactly one JSON object with this shape and no wrapper keys:
 
 def build_user_prompt(evidence:dict)->str:
     return (
-        "Review this ad evidence for the named offer against official policy only. "
+        "Review this ad evidence for the named offer against the effective policy, applying "
+        "the supplied internal override precedence exactly. "
         "Return one complete JSON object matching the required schema exactly. "
         "Before responding, verify that overall_status is derived from the highest "
         "finding severity and that zero findings produces green.\n"
         + __import__('json').dumps(evidence, ensure_ascii=False, indent=2)
     )
-
-
-OVERRIDE_SYSTEM_PROMPT = """You annotate immutable official-policy findings with separately supplied internal overrides. Return strict JSON only.
-
-Rules:
-- Do not re-review official policy and do not add, remove, merge, rewrite, or reprioritize findings.
-- You cannot change official status, severity, evidence, policy_reason, suggested_fix, confidence, timestamps, source results, summary, or rewrite text.
-- For each official finding, attach at most one internal override only when its saved guidance clearly applies to that exact finding.
-- Use the exact supplied finding_index and override_id. Never invent or paraphrase either value.
-- Omit a finding when no saved override applies.
-- "accepted" means the override clearly accepts the exact issue; "partial" means it accepts only part of it; "uncertain" means human confirmation is needed.
-- Keep every rationale concise and under 1,000 characters.
-
-Return exactly one JSON object with this shape and no wrapper keys:
-{
-  "annotations": [
-    {
-      "finding_index": 0,
-      "internal_override": {
-        "override_id": "exact supplied override ID",
-        "title": "matching override title",
-        "disposition": "accepted" | "partial" | "uncertain",
-        "rationale": "why this override does or does not fully cover the immutable finding"
-      }
-    }
-  ]
-}"""
-
-
-def build_override_user_prompt(context:dict)->str:
-    return "Annotate the immutable official findings using only the supplied internal overrides. Return JSON matching the required schema.\n" + __import__('json').dumps(context, ensure_ascii=False, indent=2)

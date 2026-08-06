@@ -320,7 +320,12 @@ def _merge_batch_item_report(item, report: dict[str, Any]) -> dict[str, Any]:
             value.update({
                 'evaluation_state':'evaluated',
                 'overall_status':status,
-                'message':'Evaluated using the saved official guidelines.',
+                'with_override':result.get('internal_disposition') == 'accepted_with_override',
+                'message':(
+                    'Green under the saved current internal rules.'
+                    if result.get('internal_disposition') == 'accepted_with_override'
+                    else 'Evaluated using the effective saved policy.'
+                ),
             })
         outcomes.append(value)
         seen.add(snapshot.offer_id)
@@ -332,10 +337,15 @@ def _merge_batch_item_report(item, report: dict[str, Any]) -> dict[str, Any]:
             continue
         outcomes.append({
             'evaluation_state':'evaluated',
-            'message':'Evaluated using the saved official guidelines.',
+            'message':(
+                'Green under the saved current internal rules.'
+                if result.get('internal_disposition') == 'accepted_with_override'
+                else 'Evaluated using the effective saved policy.'
+            ),
             'offer_id':offer_id,
             'offer_name':str(result.get('offer_name') or offer_id),
             'overall_status':status,
+            'with_override':result.get('internal_disposition') == 'accepted_with_override',
         })
     return {'offer_outcomes':outcomes}
 

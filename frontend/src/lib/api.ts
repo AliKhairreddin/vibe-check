@@ -137,7 +137,16 @@ export type OfferOutcome = {
   overall_status: OverallStatus | null;
   creative_result: OverallStatus | null;
   ad_copy_result: OverallStatus | null;
+  with_override?: boolean;
   message: string;
+};
+
+export type AppliedPolicyOverride = {
+  override_id: string;
+  title: string;
+  source: Finding['source'];
+  evidence: string;
+  rationale: string;
 };
 
 export type OfferResult = {
@@ -157,6 +166,7 @@ export type OfferResult = {
     } | null;
   };
   findings: Finding[];
+  applied_overrides?: AppliedPolicyOverride[];
   safe_rewrite: { ad_copy: string; onscreen_text: string[] };
   limitations: string[];
   policy_sources?: string[];

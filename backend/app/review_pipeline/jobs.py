@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio, logging, shutil, anyio
 from pathlib import Path
 from .media import MediaKind, image_metadata, prepare_image_frame
-from .models import ComplianceReport, JobStatus, OfferComplianceResult, OfferOutcome, OfferProfile, ReviewRequestMeta
+from .models import ComplianceReport, Finding, JobStatus, OfferComplianceResult, OfferOutcome, OfferProfile, ReviewRequestMeta
 from .offer_catalog import offer_sort_key
 from .automation_storage import (
     record_review_automation_job_result,
@@ -20,7 +20,7 @@ from .audio import extract_audio, transcribe
 from .guidelines import build_internal_override_context, build_policy_context, built_in_acp_profile
 from .ocr import run_ocr
 from .vision import observe_frames_with_openrouter
-from .llm import review_internal_overrides_with_openrouter, review_with_openrouter
+from .llm import review_with_openrouter
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 logger = logging.getLogger(__name__)
@@ -63,124 +63,74 @@ def build_review_evidence(
         'visual_observations': visual_observations or {'source':'not_run','observations':[]},
         'policy_text': policy_text,
         'policy_sources': policy_sources,
+        'internal_overrides': build_internal_override_context(profile),
         'notes': meta.notes,
         'cost_saving_note': evidence_note,
     }
 
 
 def _internal_disposition(report:ComplianceReport)->str:
-    if not report.findings:
-        return 'clear' if report.overall_status == 'green' else 'human_review'
-    treatments=[
-        finding.internal_override.disposition
-        for finding in report.findings
-        if finding.internal_override is not None
-    ]
-    if len(treatments) == len(report.findings) and all(value == 'accepted' for value in treatments):
+    if report.findings:
+        return 'human_review' if report.overall_status == 'orange' else 'action_required'
+    if report.applied_overrides:
         return 'accepted_with_override'
-    if any(value in {'partial','uncertain'} for value in treatments):
-        return 'human_review'
-    return 'action_required'
+    return 'clear' if report.overall_status == 'green' else 'human_review'
 
 
-def _validate_internal_overrides(report:ComplianceReport, profile:OfferProfile)->None:
+def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->None:
     available={override.override_id:override for override in profile.internal_overrides if override.enabled}
     invalid_ids:set[str]=set()
-    for finding in report.findings:
-        applied=finding.internal_override
-        if applied is None:
-            continue
+    invalid_applications=[]
+    duplicate_ids:set[str]=set()
+    retained=[]
+    seen:set[str]=set()
+    for applied in report.applied_overrides:
         configured=available.get(applied.override_id)
         if configured is None:
             invalid_ids.add(applied.override_id)
-            finding.internal_override=None
+            invalid_applications.append(applied)
             continue
+        if applied.override_id in seen:
+            duplicate_ids.add(applied.override_id)
+            continue
+        seen.add(applied.override_id)
         applied.title=configured.title
+        retained.append(applied)
+    report.applied_overrides=retained
     if invalid_ids:
         report.limitations.append(
-            'The model referenced unknown internal override IDs; those annotations were removed: '
+            'The model referenced unknown internal override IDs; those applications were removed: '
             + ', '.join(sorted(invalid_ids))
         )
+        if report.overall_status == 'green':
+            first_invalid=invalid_applications[0]
+            report.overall_status='orange'
+            report.summary=(
+                'The effective result needs human review because the model relied on an '
+                'internal override that is not saved for this offer.'
+            )
+            report.findings.append(Finding(
+                severity='medium',
+                source=first_invalid.source,
+                evidence=first_invalid.evidence or 'An unknown internal override was applied.',
+                policy_reason='Only enabled overrides saved for this offer may change the run decision.',
+                suggested_fix='Review the evidence manually or save an explicit approved rule before publishing.',
+                confidence='high',
+            ))
+            affected=(
+                report.source_results.ad_copy
+                if first_invalid.source == 'ad_copy'
+                else report.source_results.creative
+            )
+            if affected is not None:
+                affected.status='orange'
+                affected.summary='An unknown internal override requires human review.'
+    if duplicate_ids:
+        report.limitations.append(
+            'The model returned duplicate internal override applications; only the first was kept: '
+            + ', '.join(sorted(duplicate_ids))
+        )
     report.internal_disposition=_internal_disposition(report)
-
-
-def _override_review_context(report:ComplianceReport, profile:OfferProfile)->dict:
-    return {
-        'offer': {
-            'offer_id': profile.offer_id,
-            'display_name': profile.display_name,
-            'guideline_version': profile.version,
-        },
-        'official_findings': [
-            {
-                'finding_index': index,
-                'severity': finding.severity,
-                'source': finding.source,
-                'timestamp_start': finding.timestamp_start,
-                'timestamp_end': finding.timestamp_end,
-                'evidence': finding.evidence,
-                'policy_reason': finding.policy_reason,
-                'suggested_fix': finding.suggested_fix,
-                'confidence': finding.confidence,
-            }
-            for index,finding in enumerate(report.findings)
-        ],
-        'internal_overrides': build_internal_override_context(profile),
-    }
-
-
-async def _annotate_internal_overrides(
-    report:ComplianceReport,
-    profile:OfferProfile,
-    model:str|None,
-)->None:
-    for finding in report.findings:
-        finding.internal_override=None
-
-    configured=build_internal_override_context(profile)
-    if not report.findings or not configured:
-        _validate_internal_overrides(report, profile)
-        return
-
-    try:
-        annotation_set=await review_internal_overrides_with_openrouter(
-            _override_review_context(report, profile),
-            model,
-        )
-    except Exception as exc:
-        logger.exception('Internal override annotation failed for %s', profile.offer_id)
-        report.limitations.append(
-            f'Internal overrides could not be evaluated: {type(exc).__name__}. Review saved exceptions manually.'
-        )
-        _validate_internal_overrides(report, profile)
-        report.internal_disposition='human_review'
-        return
-
-    invalid_indexes:set[int]=set()
-    duplicate_indexes:set[int]=set()
-    annotated_indexes:set[int]=set()
-    for annotation in annotation_set.annotations:
-        index=annotation.finding_index
-        if index >= len(report.findings):
-            invalid_indexes.add(index)
-            continue
-        if index in annotated_indexes:
-            duplicate_indexes.add(index)
-            continue
-        annotated_indexes.add(index)
-        report.findings[index].internal_override=annotation.internal_override.model_copy(deep=True)
-
-    if invalid_indexes:
-        report.limitations.append(
-            'The model referenced unknown finding indexes; those internal override annotations were removed: '
-            + ', '.join(str(index) for index in sorted(invalid_indexes))
-        )
-    if duplicate_indexes:
-        report.limitations.append(
-            'The model returned duplicate internal override annotations; only the first was kept for finding indexes: '
-            + ', '.join(str(index) for index in sorted(duplicate_indexes))
-        )
-    _validate_internal_overrides(report, profile)
 
 
 async def _review_offer(
@@ -214,10 +164,14 @@ async def _review_offer(
     report.offer_id=profile.offer_id
     report.offer_name=profile.display_name
     report.guideline_version=profile.version
-    report.policy_sources=policy_sources
+    report.policy_sources=[*policy_sources]
+    if build_internal_override_context(profile):
+        report.policy_sources.append(
+            f'{profile.display_name} current internal rules (version {profile.version})'
+        )
     if evidence_note not in report.limitations:
         report.limitations.append(evidence_note)
-    await _annotate_internal_overrides(report, profile, meta.model)
+    _validate_applied_overrides(report, profile)
     return OfferComplianceResult.model_validate(
         report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
     )
@@ -262,7 +216,12 @@ def _completed_offer_outcomes(
                 if result.source_results.ad_copy is not None
                 else None
             ),
-            message='Evaluated using the saved official guidelines.',
+            with_override=result.internal_disposition == 'accepted_with_override',
+            message=(
+                'Green under the saved current internal rules.'
+                if result.internal_disposition == 'accepted_with_override'
+                else 'Evaluated using the effective saved policy.'
+            ),
         ))
         seen.add(result.offer_id)
     for result in offer_results:
@@ -283,7 +242,12 @@ def _completed_offer_outcomes(
                 if result.source_results.ad_copy is not None
                 else None
             ),
-            message='Evaluated using the saved official guidelines.',
+            with_override=result.internal_disposition == 'accepted_with_override',
+            message=(
+                'Green under the saved current internal rules.'
+                if result.internal_disposition == 'accepted_with_override'
+                else 'Evaluated using the effective saved policy.'
+            ),
         ))
     return sorted(outcomes, key=offer_sort_key)
 

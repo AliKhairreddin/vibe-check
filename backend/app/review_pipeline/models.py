@@ -32,12 +32,13 @@ class AppliedOverride(BaseModel):
     disposition: Literal['accepted','partial','uncertain'] = 'uncertain'
     rationale: str = ''
 
-class OverrideAnnotation(BaseModel):
-    finding_index: int = Field(ge=0)
-    internal_override: AppliedOverride
 
-class OverrideAnnotationSet(BaseModel):
-    annotations: list[OverrideAnnotation] = Field(default_factory=list)
+class AppliedPolicyOverride(BaseModel):
+    override_id: str
+    title: str = ''
+    source: Literal['audio','onscreen_text','visual','ad_copy','policy'] = 'policy'
+    evidence: str = ''
+    rationale: str = ''
 
 class OfferProfile(BaseModel):
     offer_id: str = Field(min_length=1, max_length=80)
@@ -139,11 +140,20 @@ class LLMSourceResults(StrictLLMModel):
     ad_copy: LLMSourceResult | None
 
 
+class LLMAppliedPolicyOverride(StrictLLMModel):
+    override_id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=160)
+    source: Literal['audio','onscreen_text','visual','ad_copy','policy']
+    evidence: str = Field(min_length=1, max_length=1_500)
+    rationale: str = Field(min_length=1, max_length=1_500)
+
+
 class LLMComplianceResult(StrictLLMModel):
     overall_status: ResultStatus
     summary: str = Field(min_length=1, max_length=1_500)
     source_results: LLMSourceResults
     findings: list[LLMFinding] = Field(max_length=25)
+    applied_overrides: list[LLMAppliedPolicyOverride] = Field(max_length=25)
     safe_rewrite: LLMSafeRewrite
     limitations: list[str] = Field(max_length=25)
 
@@ -189,6 +199,7 @@ class OfferComplianceResult(BaseModel):
     summary: str
     source_results: SourceResults = Field(default_factory=SourceResults)
     findings: list[Finding] = Field(default_factory=list)
+    applied_overrides: list[AppliedPolicyOverride] = Field(default_factory=list)
     safe_rewrite: SafeRewrite = Field(default_factory=SafeRewrite)
     limitations: list[str] = Field(default_factory=list)
     policy_sources: list[str] = Field(default_factory=list)
@@ -212,6 +223,7 @@ class OfferOutcome(BaseModel):
     overall_status: ResultStatus | None = None
     creative_result: ResultStatus | None = None
     ad_copy_result: ResultStatus | None = None
+    with_override: bool = False
     message: str = ''
 
     @field_validator('overall_status', 'creative_result', 'ad_copy_result', mode='before')

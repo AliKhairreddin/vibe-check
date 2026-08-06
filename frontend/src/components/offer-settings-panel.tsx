@@ -333,7 +333,7 @@ export function OfferSettingsPanel() {
       <CardHeader>
         <CardTitle className="text-xl">Offer profiles</CardTitle>
         <CardDescription>
-          Maintain official guidelines and internal review exceptions separately for every offer.
+          Maintain source guidelines and higher-priority current internal rules separately for every offer.
         </CardDescription>
         <CardAction>
           <Button
@@ -614,7 +614,7 @@ export function OfferSettingsPanel() {
                         Internal overrides
                       </h4>
                       <p className="text-sm text-muted-foreground">
-                        Document accepted internal exceptions for {draft.display_name || 'this offer'}.
+                        Document current internal rules for {draft.display_name || 'this offer'}. They may clarify, tighten, or permit exceptions to source guidelines.
                         The AI still reports the official violation and links the matching exception beside it.
                       </p>
                     </div>
@@ -724,7 +724,7 @@ export function OfferSettingsPanel() {
                       <div className="grid max-w-md gap-1">
                         <p className="text-sm font-medium">No internal overrides</p>
                         <p className="text-sm text-muted-foreground">
-                          This offer currently follows its official guidelines without saved exceptions.
+                          This offer currently follows its source guidelines without saved current internal rules.
                         </p>
                       </div>
                     </div>

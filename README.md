@@ -26,7 +26,7 @@ The system is intentionally hybrid:
 - Runs Tesseract OCR, timestamped speech-to-text, and a capped sampled-frame vision pass.
 - Produces strict JSON reports with separate creative and ad-copy results.
 - Evaluates one evidence bundle against every active offer with saved guidelines; inactive or unconfigured offers remain visible as N/A.
-- Keeps official guideline findings separate from offer-scoped internal overrides.
+- Applies offer-scoped current internal rules above source guidelines on exact conflicts, while recording every override that changes a run decision.
 - Uses a four-level verdict model: green, yellow, orange, and red.
 - Handles files up to 200 MB through retryable 8 MB chunks.
 - Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
@@ -85,7 +85,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 109 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, two-pass offer isolation, internal overrides, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 111 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal overrides, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -176,7 +176,7 @@ The public offer catalog contains names and version counts only. Full official g
 | `POST /api/automations/{automation_id}/run` | Admin-only manual scan and queue of new/changed matches |
 | `DELETE /api/automations/{automation_id}` | Admin-only deletion of a saved schedule |
 
-The bundled publisher guidance in `backend/app/review_pipeline/guidelines/` is the ACP fallback. ACP, Kissterra, Lead Economy, and Smart Financial always appear in the catalog; the latter three begin disabled and without guidelines. Settings can persist policy text and activation state in Convex. Official guideline text, internal overrides, and optional per-review policy supplements remain separate inputs in every report.
+The bundled source policies in `backend/app/review_pipeline/guidelines/` cover ACP, Kissterra, Lead Economy/Coverage Professor, and Smart Financial. The curated July 2026 current internal rules live in `backend/app/review_pipeline/policy_seeds.py`. Settings persists source policy, current internal rules, and activation state in Convex; optional per-review policy supplements remain a separate input.
 
 Cloudflare Cron checks Convex once per minute and only wakes the review container when an automation is due. Runs are claimed idempotently by schedule with bounded recovery for failed or abandoned scans, and Drive files are claimed by automation, file ID, and modified time so an unchanged successful creative is not reviewed again. Failed review jobs release their file-version claim for a future retry. Filename globs support `{date}`, `{YYYY}`, `{MM}`, and `{DD}` placeholders. No automation is seeded or enabled by deployment.
 
@@ -194,9 +194,10 @@ The verification gate regenerates Worker types, type-checks the Worker, runs bac
 
 ```bash
 pnpm run convex:deploy
+scripts/sync-offer-policies.py
 ```
 
-Pushes to `main` trigger `.github/workflows/deploy.yml`, which verifies the repository, deploys Convex, builds the Docker-backed container image, and deploys Cloudflare. The container release intentionally runs in GitHub Actions because the runner has Docker available.
+Pushes to `main` trigger `.github/workflows/deploy.yml`, which verifies the repository, deploys Convex, builds the Docker-backed container image, and deploys Cloudflare. The container release intentionally runs in GitHub Actions because the runner has Docker available. Run the policy sync only when intentionally publishing the source-controlled offer-policy bundle; `--dry-run` validates it without changing Convex.
 
 ## Known Limitations
 
