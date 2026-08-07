@@ -63,6 +63,7 @@ _queue_diagnostics: dict[str, int | str] = {
     'started_count': 0,
     'terminal_count': 0,
 }
+_recovery_lock = asyncio.Lock()
 _automation_heartbeat_jobs: dict[str, tuple[str, str]] = {}
 _automation_heartbeat_ref_counts: dict[tuple[str, str], int] = {}
 _automation_heartbeat_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
@@ -300,61 +301,81 @@ async def enqueue_job(
 
 
 async def recover_interrupted_jobs() -> dict[str, int]:
-    interrupted = await asyncio.to_thread(list_interrupted_reviews)
-    job_ids = [review.job_id for review in interrupted]
-    if not job_ids:
-        return {'failed': 0, 'requeued': 0}
-    payloads = await load_recovery_payloads(job_ids)
-    reconstructed = await asyncio.to_thread(
-        reconstruct_drive_payloads,
-        [review for review in interrupted if review.job_id not in payloads],
-    )
-    payloads.update(reconstructed)
-    requeued = 0
-    unrecoverable_ids: set[str] = set()
-    for job_id in job_ids:
-        payload = payloads.get(job_id)
-        if payload is None:
-            unrecoverable_ids.add(job_id)
-            continue
-        if (
-            payload.media_kind != 'copy_only'
-            and payload.drive_file is None
-            and payload.media_url is None
-        ):
-            unrecoverable_ids.add(job_id)
-            continue
-        file_name = Path(payload.file_name).name
-        media_path = (
-            job_dir(job_id) / file_name
-            if payload.media_kind != 'copy_only'
-            else None
+    async with _recovery_lock:
+        interrupted = await asyncio.to_thread(list_interrupted_reviews)
+        job_ids = [review.job_id for review in interrupted]
+        if not job_ids:
+            return {'failed': 0, 'requeued': 0}
+        payloads = await load_recovery_payloads(job_ids)
+        reconstructed = await asyncio.to_thread(
+            reconstruct_drive_payloads,
+            [review for review in interrupted if review.job_id not in payloads],
         )
-        write_json(
-            job_dir(job_id) / 'request.json',
-            payload.meta.model_dump(mode='json'),
-        )
-        try:
-            await enqueue_job(
-                job_id,
-                media_path,
-                payload.media_kind,
-                payload.meta,
-                file_name,
-                file_size=payload.file_size,
-                drive_file=payload.drive_file,
-                persist_payload=job_id in reconstructed,
-                recovery_payload=payload,
+        payloads.update(reconstructed)
+        requeued = 0
+        unrecoverable_ids: set[str] = set()
+        for job_id in job_ids:
+            payload = payloads.get(job_id)
+            if payload is None:
+                unrecoverable_ids.add(job_id)
+                continue
+            if (
+                payload.media_kind != 'copy_only'
+                and payload.drive_file is None
+                and payload.media_url is None
+            ):
+                unrecoverable_ids.add(job_id)
+                continue
+            file_name = Path(payload.file_name).name
+            media_path = (
+                job_dir(job_id) / file_name
+                if payload.media_kind != 'copy_only'
+                else None
             )
-        except Exception:
-            logger.exception('Could not requeue interrupted review %s.', job_id)
+            write_json(
+                job_dir(job_id) / 'request.json',
+                payload.meta.model_dump(mode='json'),
+            )
+            try:
+                await enqueue_job(
+                    job_id,
+                    media_path,
+                    payload.media_kind,
+                    payload.meta,
+                    file_name,
+                    file_size=payload.file_size,
+                    drive_file=payload.drive_file,
+                    persist_payload=job_id in reconstructed,
+                    recovery_payload=payload,
+                )
+            except Exception:
+                logger.exception('Could not requeue interrupted review %s.', job_id)
+                continue
+            requeued += 1
+        failed = await asyncio.to_thread(
+            fail_unrecoverable_jobs,
+            list(unrecoverable_ids),
+        )
+        return {'failed': len(failed), 'requeued': requeued}
+
+
+async def monitor_interrupted_jobs(interval_seconds: float = 60) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        state = queue_state()
+        if int(state['active']) > 0 or int(state['pending']) > 0:
             continue
-        requeued += 1
-    failed = await asyncio.to_thread(
-        fail_unrecoverable_jobs,
-        list(unrecoverable_ids),
-    )
-    return {'failed': len(failed), 'requeued': requeued}
+        try:
+            recovered = await recover_interrupted_jobs()
+        except Exception:
+            logger.exception('Periodic interrupted review recovery failed.')
+            continue
+        if recovered['requeued'] or recovered['failed']:
+            logger.warning(
+                'Periodic recovery requeued %s review(s) and failed %s unrecoverable review(s).',
+                recovered['requeued'],
+                recovered['failed'],
+            )
 
 
 async def _download_drive_file(job: QueuedReviewJob) -> None:

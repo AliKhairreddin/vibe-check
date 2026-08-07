@@ -2375,6 +2375,29 @@ def test_startup_recovery_reconstructs_google_drive_job_without_saved_payload(
     assert payload.meta.batch_id == 'batch'
     assert payload.meta.offer_ids == ['acp']
 
+
+@pytest.mark.anyio
+async def test_periodic_recovery_reconciles_an_idle_queue(monkeypatch):
+    recovered=asyncio.Event()
+    monkeypatch.setattr(
+        review_queue,
+        'queue_state',
+        lambda: {'active':0, 'pending':0, 'workers':4},
+    )
+
+    async def fake_recover():
+        recovered.set()
+        return {'failed':0, 'requeued':1}
+
+    monkeypatch.setattr(review_queue, 'recover_interrupted_jobs', fake_recover)
+    monitor=asyncio.create_task(review_queue.monitor_interrupted_jobs(0.01))
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+    finally:
+        monitor.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await monitor
+
 @pytest.mark.anyio
 async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatch):
     destination=tmp_path/'job'/'creative.mp4'

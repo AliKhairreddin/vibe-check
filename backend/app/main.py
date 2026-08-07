@@ -63,6 +63,7 @@ from .review_pipeline.storage import (
 )
 from .review_pipeline.queue import (
     enqueue_job,
+    monitor_interrupted_jobs,
     queue_state,
     recover_interrupted_jobs,
     start_job_workers,
@@ -273,8 +274,14 @@ async def lifespan(app: FastAPI):
             )
     except Exception:
         logger.exception('Could not reconcile interrupted manual reviews at startup.')
+    recovery_monitor=asyncio.create_task(monitor_interrupted_jobs())
     start_background_task(deliver_batch_notifications_in_background())
     yield
+    recovery_monitor.cancel()
+    try:
+        await recovery_monitor
+    except asyncio.CancelledError:
+        pass
     await stop_job_workers()
 
 app=FastAPI(title='Ad Compliance Creative Reviewer', lifespan=lifespan)
