@@ -89,7 +89,7 @@
       const adId = extractAdId(row);
       if (!adId) continue;
       const cells = [...row.querySelectorAll('[role="gridcell"], [role="cell"]')]
-        .map((cell) => cell.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .map((cell) => cell.textContent?.trim() ?? '')
         .filter((value) => value && value.length <= 300);
       const creativeName = cells.find((value) =>
         !LIVE_STATUS.test(value)

@@ -99,6 +99,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_job_id", ["jobId"])
+    .index("by_file_name", ["fileName"])
     .index("by_created_at", ["createdAt"])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewOfferStats: defineTable({

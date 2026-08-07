@@ -25,7 +25,7 @@ from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveCl
 from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import ComplianceResponseError, parse_report_json, parse_strict_report_json
-from app.review_pipeline.live_scan_storage import normalize_creative_key, normalize_primary_text, primary_text_key
+from app.review_pipeline.live_scan_storage import exact_creative_key, normalize_primary_text, primary_text_key
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.policy_seeds import seeded_offer_inputs
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
@@ -2841,9 +2841,10 @@ def test_select_frame_records_samples_evenly():
     assert [frame['filename'] for frame in selected] == ['frame_0.jpg', 'frame_3.jpg', 'frame_6.jpg', 'frame_9.jpg']
 
 
-def test_live_scan_keys_match_creative_names_but_keep_copy_variants_separate():
-    assert normalize_creative_key(' Folder/Winning_CREATIVE-01.MP4 ') == 'winning creative 01'
-    assert normalize_creative_key('winning creative 01.mov') == 'winning creative 01'
+def test_live_scan_keys_preserve_exact_creative_names_and_keep_copy_variants_separate():
+    assert exact_creative_key(' Folder/Winning_CREATIVE-01.MP4 ') == ' Folder/Winning_CREATIVE-01.MP4 '
+    assert exact_creative_key('winning creative 01.mov') == 'winning creative 01.mov'
+    assert exact_creative_key('Winning Creative') != exact_creative_key('winning creative')
     first=normalize_primary_text(' Save   up to 20%. ')
     second=normalize_primary_text('Save up to 30%.')
     assert first == 'Save up to 20%.'
@@ -2859,7 +2860,7 @@ def test_live_scan_claims_reuse_reviewed_name_and_do_not_duplicate_copy_job(
     monkeypatch.setattr(live_scan_storage,'_convex_call',lambda *args,**kwargs:None)
     monkeypatch.setattr(live_scan_storage,'convex_enabled',lambda:False)
     historical=SimpleNamespace(
-        file_name='Winning_Creative.MP4',
+        file_name='Winning Creative.mov',
         has_creative=True,
         job_id='historical-job',
         overall_status='green',
@@ -2875,13 +2876,22 @@ def test_live_scan_claims_reuse_reviewed_name_and_do_not_duplicate_copy_job(
 
     creative=live_scan_storage.claim_live_review(
         'creative',
-        normalize_creative_key('winning creative.mov'),
-        'winning creative.mov',
+        exact_creative_key('Winning Creative.mov'),
+        'Winning Creative.mov',
         start_review=False,
     )
     assert creative['job_id'] == 'historical-job'
     assert creative['result'] == 'green'
     assert creative['should_submit'] is False
+
+    different_name=live_scan_storage.claim_live_review(
+        'creative',
+        exact_creative_key('winning creative.mov'),
+        'winning creative.mov',
+        start_review=False,
+    )
+    assert different_name['status'] == 'waiting_media'
+    assert different_name['job_id'] != 'historical-job'
 
     copy_key=primary_text_key('Save today.')
     first=live_scan_storage.claim_live_review(
@@ -2907,17 +2917,22 @@ async def test_live_scan_groups_media_by_name_and_queues_unique_primary_texts(tm
     monkeypatch.setattr(live_scan_storage,'JOB_DATA_DIR',tmp_path)
     monkeypatch.delenv('APP_PASSWORD',raising=False)
     claims=[]
+    claimed={}
     enqueued=[]
     observed={}
     released=[]
 
     def fake_claim(kind,key,display_name,*,start_review):
         claims.append((kind,key,display_name,start_review))
+        claim_key=(kind,key)
+        is_new=claim_key not in claimed
+        if is_new:
+            claimed[claim_key]=f'{len(claimed) + 1:032x}'
         return {
-            'job_id':f'{len(claims):032x}',
+            'job_id':claimed[claim_key],
             'needs_media':kind == 'creative',
             'result':None,
-            'should_submit':kind == 'copy',
+            'should_submit':kind == 'copy' and is_new,
             'status':'claiming' if kind == 'copy' else 'waiting_media',
         }
 
@@ -2998,16 +3013,18 @@ async def test_live_scan_groups_media_by_name_and_queues_unique_primary_texts(tm
     assert response.status_code == 200
     body=response.json()
     assert body['live_ads'] == 2
-    assert body['unique_creatives'] == 1
+    assert body['unique_creatives'] == 2
     assert body['unique_primary_texts'] == 2
     assert body['queued_copy_jobs'] == 2
-    assert len(body['media_requests']) == 1
-    assert [value[0] for value in claims].count('creative') == 1
-    assert [value[0] for value in claims].count('copy') == 2
+    assert len(body['media_requests']) == 2
+    assert [value[0] for value in claims].count('creative') == 2
+    assert [value[0] for value in claims].count('copy') == 3
     assert sorted(value[2] for value in enqueued) == ['Call today.','Save up to 20%.']
-    assert observed['creatives'][0]['ad_count'] == 2
-    assert observed['creatives'][0]['campaign_names'] == ['Campaign A','Campaign B']
-    assert len(observed['copies']) == 2
+    assert sorted(value['ad_count'] for value in observed['creatives']) == [1,1]
+    assert sorted(value['campaign_names'] for value in observed['creatives']) == [
+        ['Campaign A'],['Campaign B'],
+    ]
+    assert len(observed['copies']) == 3
     assert observed['observed_ad_ids'] == ['ad-1','ad-2','paused']
     assert released == []
 

@@ -10,6 +10,10 @@
     return values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
   }
 
+  function exactStringValue(...values) {
+    return values.find((value) => typeof value === 'string' && value.trim()) ?? '';
+  }
+
   function idValue(...values) {
     const value = values.find((candidate) =>
       (typeof candidate === 'string' || typeof candidate === 'number')
@@ -143,7 +147,7 @@
     if (!hasAdShape) return null;
 
     const resolvedId = adId || idValue(value.id);
-    const name = stringValue(value.ad_name, value.adName, value.name);
+    const name = exactStringValue(value.ad_name, value.adName, value.name);
     if (!resolvedId || !name) return null;
     let media = findMedia(creative) ?? findMedia(value);
     if (isVideoCreative(creative) && media?.media_type !== 'video') {

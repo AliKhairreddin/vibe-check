@@ -75,7 +75,7 @@ from .review_pipeline.live_scan_storage import (
     claim_live_review,
     get_live_scan_day,
     mark_live_review_queued,
-    normalize_creative_key,
+    exact_creative_key,
     normalize_primary_text,
     observe_live_account,
     primary_text_key,
@@ -418,11 +418,11 @@ async def observe_live_scan(payload:LiveScanObservation):
     })
 
     for ad in live_ads:
-        creative_key=normalize_creative_key(ad.creative_name)
-        if not creative_key:
+        creative_key=exact_creative_key(ad.creative_name)
+        if not creative_key.strip():
             continue
         creative=creative_groups[creative_key]
-        creative['creative_name']=ad.creative_name.strip()
+        creative['creative_name']=ad.creative_name
         creative['ad_ids'].add(ad.ad_id)
         if ad.ad_set_name:
             creative['ad_set_names'].add(ad.ad_set_name)
@@ -439,7 +439,7 @@ async def observe_live_scan(payload:LiveScanObservation):
                 continue
             copy_key=primary_text_key(text)
             copy=copy_groups[(creative_key,copy_key)]
-            copy['creative_name']=ad.creative_name.strip()
+            copy['creative_name']=ad.creative_name
             copy['primary_text']=text
             copy['ad_ids'].add(ad.ad_id)
 
@@ -573,16 +573,15 @@ async def upload_live_scan_creative(
     observation_date:str=Form(...),
     source_url:str=Form(''),
 ):
-    creative_name=creative_name.strip()
-    if not creative_name or len(creative_name) > 300:
+    if not creative_name.strip() or len(creative_name) > 300:
         raise HTTPException(400,'Creative name must be between 1 and 300 characters.')
     if not account_id.strip() or len(account_id) > 256:
         raise HTTPException(400,'Meta ad account ID is invalid.')
     if not OBSERVATION_DATE_PATTERN.fullmatch(observation_date):
         raise HTTPException(400,'Observation date must use YYYY-MM-DD.')
-    creative_key=normalize_creative_key(creative_name)
-    if not creative_key:
-        raise HTTPException(400,'Creative name cannot be normalized.')
+    creative_key=exact_creative_key(creative_name)
+    if not creative_key.strip():
+        raise HTTPException(400,'Creative name cannot be blank.')
     claim=await asyncio.to_thread(
         claim_live_review,
         'creative',

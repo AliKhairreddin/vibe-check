@@ -7,7 +7,6 @@ type ReviewKind = "creative" | "copy";
 const CLAIM_LEASE_MS = 15 * 60 * 1000;
 const MAX_AD_IDS = 500;
 const MAX_NAMES = 100;
-const MEDIA_EXTENSION = /\.(?:avif|gif|heic|heif|jpe?g|m4v|mov|mp4|mpeg|png|webm|webp)$/i;
 
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
@@ -29,17 +28,6 @@ function overallStatus(report: unknown): ResultStatus | null {
   return normalizeResultStatus((report as { overall_status?: unknown }).overall_status);
 }
 
-function normalizeCreativeKey(value: string) {
-  const fileName = value.trim().replaceAll("\\", "/").split("/").at(-1)?.trim() ?? value.trim();
-  return fileName
-    .normalize("NFKC")
-    .replace(MEDIA_EXTENSION, "")
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
 function mergeStrings(current: string[], incoming: string[], limit: number) {
   return [...new Set([...current, ...incoming].filter(Boolean))].slice(0, limit);
 }
@@ -55,15 +43,16 @@ async function findReview(ctx: QueryCtx | MutationCtx, jobId: string) {
 async function findHistoricalCreativeReview(ctx: MutationCtx, key: string) {
   const reviews = await ctx.db
     .query("reviews")
-    .withIndex("by_deleted_at_created_at", (builder) => builder.eq("deletedAt", undefined))
-    .order("desc")
-    .take(500);
-  return reviews.find((review) =>
-    review.status === "complete"
-    && review.reportReady
-    && (review.hasCreative ?? true)
-    && normalizeCreativeKey(review.fileName) === key
-  ) ?? null;
+    .withIndex("by_file_name", (builder) => builder.eq("fileName", key))
+    .collect();
+  return reviews
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .find((review) =>
+      review.deletedAt === undefined
+      && review.status === "complete"
+      && review.reportReady
+      && (review.hasCreative ?? true)
+    ) ?? null;
 }
 
 async function getClaim(ctx: QueryCtx | MutationCtx, kind: ReviewKind, key: string) {

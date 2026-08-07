@@ -21,22 +21,11 @@ from .storage import (
 
 ReviewKind = Literal['creative','copy']
 CLAIM_LEASE_MS = 15 * 60 * 1000
-MEDIA_EXTENSIONS = {
-    '.avif', '.gif', '.heic', '.heif', '.jpeg', '.jpg', '.m4v', '.mov',
-    '.mp4', '.mpeg', '.png', '.webm', '.webp',
-}
 _local_lock=threading.Lock()
 
 
-def normalize_creative_key(value:str)->str:
-    name=Path(value.strip().replace('\\','/')).name.strip()
-    suffix=Path(name).suffix.casefold()
-    if suffix in MEDIA_EXTENSIONS:
-        name=name[:-len(suffix)]
-    normalized=unicodedata.normalize('NFKC', name).casefold()
-    return ' '.join(
-        ''.join(char if char.isalnum() else ' ' for char in normalized).split()
-    )
+def exact_creative_key(value:str)->str:
+    return value
 
 
 def normalize_primary_text(value:str)->str:
@@ -126,7 +115,7 @@ def claim_live_review(
                     review.status.value == 'complete'
                     and review.report_ready
                     and review.has_creative
-                    and normalize_creative_key(review.file_name) == key
+                    and review.file_name == key
                 ):
                     claim={
                         'created_at':now,
