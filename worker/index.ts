@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v21";
+const BACKEND_INSTANCE = "primary-v22";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -151,6 +151,7 @@ export class ReviewBackend extends Container<Env> {
   override onError(error: unknown): never {
     console.error(JSON.stringify({
       event: "review_backend_error",
+      errorMessage: error instanceof Error ? error.message.slice(0, 500) : "",
       errorType: error instanceof Error ? error.name : typeof error,
     }));
     throw error;

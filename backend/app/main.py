@@ -261,23 +261,34 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception('Could not reconcile interrupted automation jobs at startup.')
     await start_job_workers()
-    try:
-        recovered=await recover_interrupted_jobs()
-        if recovered['requeued']:
-            logger.warning(
-                'Requeued %s interrupted review(s) from durable payload storage.',
-                recovered['requeued'],
-            )
-        if recovered['failed']:
-            logger.warning(
-                'Marked %s interrupted review(s) as failed because their upload was unavailable.',
-                recovered['failed'],
-            )
-    except Exception:
-        logger.exception('Could not reconcile interrupted manual reviews at startup.')
+
+    async def recover_manual_reviews_after_startup() -> None:
+        try:
+            recovered=await recover_interrupted_jobs()
+            if recovered['requeued']:
+                logger.warning(
+                    'Requeued %s interrupted review(s) from durable payload storage.',
+                    recovered['requeued'],
+                )
+            if recovered['failed']:
+                logger.warning(
+                    'Marked %s interrupted review(s) as failed because their upload was unavailable.',
+                    recovered['failed'],
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception('Could not reconcile interrupted manual reviews after startup.')
+
+    startup_recovery=asyncio.create_task(recover_manual_reviews_after_startup())
     recovery_monitor=asyncio.create_task(monitor_interrupted_jobs())
     start_background_task(deliver_batch_notifications_in_background())
     yield
+    startup_recovery.cancel()
+    try:
+        await startup_recovery
+    except asyncio.CancelledError:
+        pass
     recovery_monitor.cancel()
     try:
         await recovery_monitor
