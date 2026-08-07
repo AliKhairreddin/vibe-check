@@ -71,7 +71,22 @@ jobs:
         run: docker version
 
       - name: Deploy Cloudflare
-        run: pnpm exec wrangler deploy
+        run: |
+          deployment=$(pnpm exec wrangler deployments status --json)
+          version_id=$(echo "$deployment" | jq -r '.versions[] | select(.percentage == 100) | .version_id' | head -n 1)
+          current_slot=""
+          if [ -n "$version_id" ]; then
+            current_slot=$(pnpm exec wrangler versions view "$version_id" --json | jq -r '.resources.bindings[]? | select(.name == "BACKEND_SLOT") | .text' | head -n 1)
+          fi
+          current_slot=${current_slot:-primary-v25}
+          if [ "$current_slot" = "primary-blue" ]; then
+            next_slot=primary-green
+          else
+            next_slot=primary-blue
+          fi
+          echo "CURRENT_BACKEND_SLOT=$current_slot" >> "$GITHUB_ENV"
+          echo "NEXT_BACKEND_SLOT=$next_slot" >> "$GITHUB_ENV"
+          pnpm exec wrangler deploy --keep-vars --var "BACKEND_SLOT:$current_slot"
 
       - name: Wait for Cloudflare container rollout
         run: |
@@ -99,4 +114,4 @@ jobs:
           exit 1
 
       - name: Activate Worker after container rollout
-        run: pnpm exec wrangler deploy --containers-rollout=none
+        run: pnpm exec wrangler deploy --containers-rollout=none --keep-vars --var "BACKEND_SLOT:$NEXT_BACKEND_SLOT"

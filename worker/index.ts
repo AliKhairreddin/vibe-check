@@ -1,7 +1,5 @@
 import { Container } from "@cloudflare/containers";
 
-// Reuse one durable backend identity; the deployment workflow waits for image rollout first.
-const BACKEND_INSTANCE = "primary-v25";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -10,6 +8,21 @@ type OptionalSecrets = Env & {
   TELEGRAM_CHAT_ID?: string;
   TELEGRAM_MESSAGE_THREAD_ID?: string;
 };
+
+const BACKEND_SLOTS = ["primary-blue", "primary-green", "primary-v25"] as const;
+
+function backendSlot(env: Env): string {
+  return env.BACKEND_SLOT || "primary-v25";
+}
+
+async function stopInactiveBackends(env: Env): Promise<void> {
+  const activeSlot = backendSlot(env);
+  await Promise.allSettled(
+    BACKEND_SLOTS
+      .filter((slot) => slot !== activeSlot)
+      .map((slot) => env.REVIEW_BACKEND.getByName(slot).destroy()),
+  );
+}
 
 type AutomationSchedule = {
   days_of_week: number[];
@@ -205,7 +218,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      const backend = env.REVIEW_BACKEND.getByName(BACKEND_INSTANCE);
+      const backend = env.REVIEW_BACKEND.getByName(backendSlot(env));
       return backend.fetch(request);
     }
 
@@ -226,8 +239,9 @@ export default {
       headers,
     });
     ctx.waitUntil((async () => {
+      await stopInactiveBackends(env);
       if (!await hasDueAutomations(env)) return;
-      const backend = env.REVIEW_BACKEND.getByName(BACKEND_INSTANCE);
+      const backend = env.REVIEW_BACKEND.getByName(backendSlot(env));
       const recoveryResponse = await backend.fetch(new Request(
         new URL("/api/internal/review-recovery", baseUrl),
         { method: "POST", headers },

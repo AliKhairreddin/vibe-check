@@ -14,7 +14,7 @@
       "class_name": "ReviewBackend",
       "image": "./Dockerfile",
       "instance_type": "standard-1",
-      "max_instances": 1,
+      "max_instances": 2,
       "rollout_active_grace_period": 300
     }
   ],
@@ -53,6 +53,7 @@
   "vars": {
     "APP_ALLOWED_HOSTS": "vibe-check.thatcanadian.dev",
     "APP_PUBLIC_URL": "https://vibe-check.thatcanadian.dev",
+    "BACKEND_SLOT": "primary-v25",
     "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",
     "GOOGLE_AD_COPY_SHEET_URL": "https://docs.google.com/spreadsheets/d/1p3z7ubxNH8yOh_58CD12XOH6XEN80toI7fvkEgnA29o/edit?usp=drive_link",
     "GOOGLE_DRIVE_FOLDER_ID": "16zD3i1-QnFcrfxXECtjf7T0zbUfzcCAd",
