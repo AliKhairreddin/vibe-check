@@ -3667,3 +3667,19 @@ def test_live_scan_telegram_message_links_live_page(monkeypatch):
     assert 'Save up to 20%.' in message
     assert '/live-scans' in message
     assert '/reviews/live-job/report' in message
+
+
+def test_worker_scheduled_recovery_precedes_automation_eligibility_gate():
+    worker_source = (
+        Path(__file__).resolve().parents[2] / 'worker' / 'index.ts'
+    ).read_text(encoding='utf-8')
+    scheduled_source = worker_source[worker_source.index('  scheduled('):]
+
+    recovery_request = scheduled_source.index(
+        'new URL("/api/internal/review-recovery"',
+    )
+    automation_gate = scheduled_source.index(
+        'if (!await hasDueAutomations(env)) return;',
+    )
+
+    assert recovery_request < automation_gate

@@ -240,7 +240,6 @@ export default {
     });
     ctx.waitUntil((async () => {
       await stopInactiveBackends(env);
-      if (!await hasDueAutomations(env)) return;
       const backend = env.REVIEW_BACKEND.getByName(backendSlot(env));
       const recoveryResponse = await backend.fetch(new Request(
         new URL("/api/internal/review-recovery", baseUrl),
@@ -266,6 +265,7 @@ export default {
         failed: recoveryResult.recovered?.failed ?? 0,
         requeued: recoveryResult.recovered?.requeued ?? 0,
       }));
+      if (!await hasDueAutomations(env)) return;
       const response = await backend.fetch(request);
       if (!response.ok) {
         throw new Error(`Automation tick failed with status ${response.status}`);
