@@ -65,6 +65,7 @@ from .review_pipeline.queue import (
     enqueue_job,
     monitor_interrupted_jobs,
     queue_state,
+    recover_and_drain_review_queue,
     recover_interrupted_jobs,
     start_job_workers,
     stop_job_workers,
@@ -344,6 +345,12 @@ async def tick_review_automations(request:Request):
 def internal_queue_state(request:Request):
     require_automation_secret(request)
     return queue_state()
+
+
+@app.post('/api/internal/review-recovery')
+async def internal_review_recovery(request:Request):
+    require_automation_secret(request)
+    return await recover_and_drain_review_queue()
 
 
 @app.get('/api/automations', response_model=ReviewAutomationList)

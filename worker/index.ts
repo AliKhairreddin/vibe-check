@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v16";
+const BACKEND_INSTANCE = "primary-v17";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -72,9 +72,15 @@ async function hasDueAutomations(env: Env): Promise<boolean> {
     needs_maintenance?: boolean;
     needs_notification?: boolean;
     needs_recovery?: boolean;
+    needs_review_recovery?: boolean;
   } | null;
   if (!state || typeof state !== "object") return false;
-  if (state.needs_maintenance || state.needs_recovery || state.needs_notification) return true;
+  if (
+    state.needs_maintenance
+    || state.needs_recovery
+    || state.needs_review_recovery
+    || state.needs_notification
+  ) return true;
   return (state.automations ?? []).some((automation) => {
     if (automation.last_run_status === "failed" && automation.last_scheduled_for) {
       return true;
@@ -217,6 +223,15 @@ export default {
       const response = await backend.fetch(request);
       if (!response.ok) {
         throw new Error(`Automation tick failed with status ${response.status}`);
+      }
+      const recoveryResponse = await backend.fetch(new Request(
+        new URL("/api/internal/review-recovery", baseUrl),
+        { method: "POST", headers },
+      ));
+      if (!recoveryResponse.ok) {
+        throw new Error(
+          `Review recovery failed with status ${recoveryResponse.status}`,
+        );
       }
     })());
   },

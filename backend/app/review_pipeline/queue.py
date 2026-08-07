@@ -64,6 +64,7 @@ _queue_diagnostics: dict[str, int | str] = {
     'terminal_count': 0,
 }
 _recovery_lock = asyncio.Lock()
+_drain_lock = asyncio.Lock()
 _automation_heartbeat_jobs: dict[str, tuple[str, str]] = {}
 _automation_heartbeat_ref_counts: dict[tuple[str, str], int] = {}
 _automation_heartbeat_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
@@ -376,6 +377,47 @@ async def monitor_interrupted_jobs(interval_seconds: float = 60) -> None:
                 recovered['requeued'],
                 recovered['failed'],
             )
+
+
+async def recover_and_drain_review_queue(
+    timeout_seconds: float = 12 * 60,
+) -> dict[str, object]:
+    """Keep a scheduled request open while background review workers make progress."""
+    if _drain_lock.locked():
+        return {
+            'already_draining': True,
+            'drained': False,
+            'queue': queue_state(),
+            'recovered': {'failed': 0, 'requeued': 0},
+        }
+    async with _drain_lock:
+        return await _recover_and_drain_review_queue(timeout_seconds)
+
+
+async def _recover_and_drain_review_queue(
+    timeout_seconds: float,
+) -> dict[str, object]:
+    recovered = {'failed': 0, 'requeued': 0}
+    state = queue_state()
+    if int(state['active']) == 0 and int(state['pending']) == 0:
+        recovered = await recover_interrupted_jobs()
+    drained = False
+    try:
+        async with asyncio.timeout(max(1.0, timeout_seconds)):
+            await _queue.join()
+        drained = True
+    except TimeoutError:
+        logger.info(
+            'Scheduled review queue drain yielded with %s active and %s pending.',
+            queue_state()['active'],
+            queue_state()['pending'],
+        )
+    return {
+        'already_draining': False,
+        'drained': drained,
+        'queue': queue_state(),
+        'recovered': recovered,
+    }
 
 
 async def _download_drive_file(job: QueuedReviewJob) -> None:

@@ -99,6 +99,29 @@ export const tickState = query({
           )
           .take(1);
 
+    let needsReviewRecovery = false;
+    for (const status of [
+      "queued",
+      "extracting",
+      "analyzing_visuals",
+      "transcribing",
+      "reviewing_with_llm",
+    ]) {
+      const reviews = await ctx.db
+        .query("reviews")
+        .withIndex("by_status_deleted_automation_updated", (q) =>
+          q
+            .eq("status", status)
+            .eq("deletedAt", undefined)
+            .eq("automationRunId", undefined)
+        )
+        .take(1);
+      if (reviews.length) {
+        needsReviewRecovery = true;
+        break;
+      }
+    }
+
     let needsNotification = false;
     for (const status of ["pending", "failed", "claimed"]) {
       const batches = status === "pending"
@@ -132,6 +155,7 @@ export const tickState = query({
         .sort((left, right) => left.name.localeCompare(right.name))
         .map(publicAutomation),
       needs_recovery: Boolean(running.length || queued.length),
+      needs_review_recovery: needsReviewRecovery,
       needs_notification: needsNotification,
       needs_maintenance: !maintenance?.complete,
     };

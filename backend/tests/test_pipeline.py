@@ -2398,6 +2398,56 @@ async def test_periodic_recovery_reconciles_an_idle_queue(monkeypatch):
         with pytest.raises(asyncio.CancelledError):
             await monitor
 
+
+@pytest.mark.anyio
+async def test_scheduled_recovery_requeues_and_drains_an_idle_queue(monkeypatch):
+    queue=asyncio.Queue()
+    monkeypatch.setattr(review_queue, '_queue', queue)
+    monkeypatch.setattr(review_queue, '_drain_lock', asyncio.Lock())
+
+    async def fake_recover():
+        await queue.put('recovered-job')
+        return {'failed':0, 'requeued':1}
+
+    async def finish_recovered_job():
+        assert await queue.get() == 'recovered-job'
+        queue.task_done()
+
+    monkeypatch.setattr(review_queue, 'recover_interrupted_jobs', fake_recover)
+    worker=asyncio.create_task(finish_recovered_job())
+    result=await review_queue.recover_and_drain_review_queue(timeout_seconds=1)
+    await worker
+
+    assert result['drained'] is True
+    assert result['already_draining'] is False
+    assert result['recovered'] == {'failed':0, 'requeued':1}
+    assert result['queue']['pending'] == 0
+
+
+@pytest.mark.anyio
+async def test_internal_review_recovery_requires_secret_and_drains(monkeypatch):
+    monkeypatch.setenv('CONVEX_HTTP_SECRET', 'recovery-secret')
+
+    async def fake_drain():
+        return {
+            'drained':True,
+            'queue':{'active':0, 'pending':0, 'workers':4},
+            'recovered':{'failed':0, 'requeued':2},
+        }
+
+    monkeypatch.setattr('app.main.recover_and_drain_review_queue', fake_drain)
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        unauthorized=await client.post('/api/internal/review-recovery')
+        response=await client.post(
+            '/api/internal/review-recovery',
+            headers={'x-automation-secret':'recovery-secret'},
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.json()['recovered']['requeued'] == 2
+
 @pytest.mark.anyio
 async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatch):
     destination=tmp_path/'job'/'creative.mp4'
