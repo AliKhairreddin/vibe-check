@@ -218,7 +218,7 @@ async def enqueue_job(
 async def _download_drive_file(job: QueuedReviewJob) -> None:
     if job.drive_file is None or job.media_path is None:
         return
-    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '200')) * 1024 * 1024
+    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '400')) * 1024 * 1024
     last_progress = -1
 
     def update_progress(downloaded: int, expected: int | None) -> None:

@@ -384,7 +384,7 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
         media_kind=detect_media_kind(file_name, upload.content_type)
     except ValueError as exc:
         raise HTTPException(415, str(exc)) from None
-    max_mb=int(os.getenv('MAX_UPLOAD_MB','200'))
+    max_mb=int(os.getenv('MAX_UPLOAD_MB','400'))
     job_id=uuid.uuid4().hex; jd=job_dir(job_id)
     media_path=jd/file_name
     size=0
@@ -609,7 +609,7 @@ async def upload_live_scan_creative(
             release_live_review,'creative',creative_key,job_id,str(exc)
         )
         raise HTTPException(415,str(exc)) from None
-    max_bytes=int(os.getenv('MAX_UPLOAD_MB','200')) * 1024 * 1024
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','400')) * 1024 * 1024
     jd=job_dir(job_id)
     media_path=jd/upload_name
     size=0
@@ -621,7 +621,7 @@ async def upload_live_scan_creative(
                 if size > max_bytes:
                     raise HTTPException(
                         413,
-                        f'Max upload is {os.getenv("MAX_UPLOAD_MB","200")} MB',
+                        f'Max upload is {os.getenv("MAX_UPLOAD_MB","400")} MB',
                     )
                 handle.write(chunk)
         meta=live_scan_request_meta(
@@ -702,7 +702,7 @@ def browse_drive(folder_id:str|None=None):
         children=drive.list_folder_children(current.file_id)
     except DriveLookupError as exc:
         raise HTTPException(503, str(exc)) from None
-    max_bytes=int(os.getenv('MAX_UPLOAD_MB','200')) * 1024 * 1024
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','400')) * 1024 * 1024
     items=[]
     for child in children:
         is_folder=child.mime_type == FOLDER_MIME_TYPE
@@ -711,7 +711,7 @@ def browse_drive(folder_id:str|None=None):
             **drive_creative_model(child).model_dump(),
             kind='folder' if is_folder else 'creative',
             selectable=not too_large,
-            disabled_reason=(f'Exceeds the {os.getenv("MAX_UPLOAD_MB", "200")} MB limit' if too_large else None),
+            disabled_reason=(f'Exceeds the {os.getenv("MAX_UPLOAD_MB", "400")} MB limit' if too_large else None),
         ))
     return DriveBrowserList(
         current_folder=DriveFolder(
@@ -728,7 +728,7 @@ def browse_drive(folder_id:str|None=None):
 def resolve_drive_selection(payload:ResolveDriveSelection):
     if not payload.folder_ids and not payload.file_ids:
         raise HTTPException(400, 'Select at least one Google Drive folder or creative.')
-    max_bytes=int(os.getenv('MAX_UPLOAD_MB','200')) * 1024 * 1024
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','400')) * 1024 * 1024
     try:
         files=get_google_drive_client().resolve_selection(
             payload.folder_ids,
@@ -769,11 +769,11 @@ async def create_drive_review(payload: CreateDriveReview):
         media_kind = detect_media_kind(file_name, drive_file.mime_type)
     except ValueError as exc:
         raise HTTPException(415, str(exc)) from None
-    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '200')) * 1024 * 1024
+    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '400')) * 1024 * 1024
     if not drive_file.can_download:
         raise HTTPException(403, 'This Google Drive file cannot be downloaded by the service account.')
     if drive_file.size is not None and drive_file.size > max_bytes:
-        raise HTTPException(413, f'Max upload is {os.getenv("MAX_UPLOAD_MB", "200")} MB')
+        raise HTTPException(413, f'Max upload is {os.getenv("MAX_UPLOAD_MB", "400")} MB')
 
     meta = review_meta(
         payload.ad_copy,
@@ -828,11 +828,11 @@ async def start_chunked_upload(request: Request):
     except (TypeError, ValueError):
         raise HTTPException(400, 'Invalid upload size') from None
 
-    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '200')) * 1024 * 1024
+    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '400')) * 1024 * 1024
     if size <= 0:
         raise HTTPException(400, 'The creative file is empty.')
     if size > max_bytes:
-        raise HTTPException(413, f'Max upload is {os.getenv("MAX_UPLOAD_MB", "200")} MB')
+        raise HTTPException(413, f'Max upload is {os.getenv("MAX_UPLOAD_MB", "400")} MB')
 
     try:
         media_kind = detect_media_kind(file_name, content_type)

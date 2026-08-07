@@ -121,7 +121,7 @@ def _matching_drive_files(
     folder = drive.get_file(automation.folder_id)
     if folder.mime_type != FOLDER_MIME_TYPE:
         raise ValueError('The automation source must be a Google Drive folder.')
-    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '200')) * 1024 * 1024
+    max_bytes = int(os.getenv('MAX_UPLOAD_MB', '400')) * 1024 * 1024
     local_now = _scheduled_local_time(automation, scheduled_for)
     pattern = rendered_file_pattern(automation, local_now).casefold()
     pending=deque([folder.file_id])

@@ -57,7 +57,7 @@
     "GOOGLE_DRIVE_FOLDER_ID": "16zD3i1-QnFcrfxXECtjf7T0zbUfzcCAd",
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
     "JOB_WORKER_CONCURRENCY": "4",
-    "MAX_UPLOAD_MB": "200",
+    "MAX_UPLOAD_MB": "400",
     "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash",
     "OPENROUTER_VISION_ENABLED": "true",
     "OPENROUTER_VISION_MODEL": "minimax/minimax-m3",

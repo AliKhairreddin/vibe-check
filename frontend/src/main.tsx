@@ -704,7 +704,7 @@ function ReviewWorkspace() {
                     onChange={(event) => setSelectedFiles(Array.from(event.currentTarget.files ?? []))}
                   />
                   <p id="creative-help" className="text-xs leading-5 text-muted-foreground">
-                    MP4, JPG, PNG, or WebP · up to 200 MB each · batches start four at a time
+                    MP4, JPG, PNG, or WebP · up to 400 MB each · batches start four at a time
                   </p>
                 </div>
               )}

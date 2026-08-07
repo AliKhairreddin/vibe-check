@@ -2146,7 +2146,7 @@ async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatc
     class FakeDrive:
         def download_file(self, file, path, *, max_bytes, progress_callback):
             assert file == drive_file
-            assert max_bytes == 200 * 1024 * 1024
+            assert max_bytes == 400 * 1024 * 1024
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'creative')
             progress_callback(8, 8)
@@ -2154,7 +2154,7 @@ async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatc
 
     monkeypatch.setattr(review_queue, 'get_google_drive_client', lambda: FakeDrive())
     monkeypatch.setattr(review_queue, 'set_status', lambda *args, **kwargs: statuses.append(args))
-    monkeypatch.setenv('MAX_UPLOAD_MB', '200')
+    monkeypatch.setenv('MAX_UPLOAD_MB', '400')
     job=review_queue.QueuedReviewJob(
         'job-id',
         destination,

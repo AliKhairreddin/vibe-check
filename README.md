@@ -28,7 +28,7 @@ The system is intentionally hybrid:
 - Evaluates one evidence bundle against every active offer with saved guidelines; inactive or unconfigured offers remain visible as N/A.
 - Applies offer-scoped current internal rules above source guidelines on exact conflicts, while recording every override that changes a run decision.
 - Uses a four-level verdict model: green, yellow, orange, and red.
-- Handles files up to 200 MB through retryable 8 MB chunks.
+- Handles files up to 400 MB through retryable 8 MB chunks.
 - Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.
 - Supports folder-first Google Drive browsing, whole-folder selection, drill-down file selection, and exact-ID deduplication.
