@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v18";
+const BACKEND_INSTANCE = "primary-v19";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -165,6 +165,13 @@ export class ReviewBackend extends Container<Env> {
       headers.set("x-app-password", optionalSecrets.APP_PASSWORD);
     }
     try {
+      if (await hasDueAutomations(this.env)) {
+        this.renewActivityTimeout();
+        console.log(JSON.stringify({
+          event: "review_backend_kept_awake_for_durable_work",
+        }));
+        return;
+      }
       const response = await this.containerFetch(
         "http://localhost/api/internal/queue-state",
         { headers },
