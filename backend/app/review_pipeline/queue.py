@@ -54,8 +54,14 @@ _stopping_workers = False
 _workers_requested_to_stop: set[asyncio.Task[None]] = set()
 _active_jobs: set[str] = set()
 _queue_diagnostics: dict[str, int | str] = {
+    'cancelled_count': 0,
+    'dequeued_count': 0,
+    'enqueued_count': 0,
     'failure_count': 0,
+    'finished_count': 0,
     'last_error_type': '',
+    'started_count': 0,
+    'terminal_count': 0,
 }
 _automation_heartbeat_jobs: dict[str, tuple[str, str]] = {}
 _automation_heartbeat_ref_counts: dict[tuple[str, str], int] = {}
@@ -149,9 +155,15 @@ def _job_timeout_seconds() -> int:
 def queue_state() -> dict[str, int | str]:
     return {
         'active': len(_active_jobs),
+        'cancelled_count': int(_queue_diagnostics['cancelled_count']),
+        'dequeued_count': int(_queue_diagnostics['dequeued_count']),
+        'enqueued_count': int(_queue_diagnostics['enqueued_count']),
         'failure_count': int(_queue_diagnostics['failure_count']),
+        'finished_count': int(_queue_diagnostics['finished_count']),
         'last_error_type': str(_queue_diagnostics['last_error_type']),
         'pending': _queue.qsize(),
+        'started_count': int(_queue_diagnostics['started_count']),
+        'terminal_count': int(_queue_diagnostics['terminal_count']),
         'workers': len(_workers),
     }
 
@@ -278,6 +290,9 @@ async def enqueue_job(
             drive_file,
             recovery_payload,
         ))
+        _queue_diagnostics['enqueued_count'] = int(
+            _queue_diagnostics['enqueued_count']
+        ) + 1
     except BaseException:
         await _release_automation_heartbeat(job_id)
         raise
@@ -400,18 +415,27 @@ async def _restore_recovery_file(job: QueuedReviewJob) -> None:
 async def _process_queue(worker_index: int) -> None:
     while True:
         job = await _queue.get()
+        _queue_diagnostics['dequeued_count'] = int(
+            _queue_diagnostics['dequeued_count']
+        ) + 1
         _active_jobs.add(job.job_id)
         _register_automation_heartbeat(job.job_id, job.meta)
         terminal = False
         try:
             async with asyncio.timeout(_job_timeout_seconds()):
                 set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
+                _queue_diagnostics['started_count'] = int(
+                    _queue_diagnostics['started_count']
+                ) + 1
                 await _restore_recovery_file(job)
                 await _download_drive_file(job)
                 await process_job(job.job_id, job.media_path, job.media_kind, job.meta)
             record = await asyncio.to_thread(get_status, job.job_id)
             terminal = record.status in {JobStatus.complete, JobStatus.failed}
         except asyncio.CancelledError:
+            _queue_diagnostics['cancelled_count'] = int(
+                _queue_diagnostics['cancelled_count']
+            ) + 1
             raise
         except Exception as exc:
             _queue_diagnostics['failure_count'] = int(
@@ -472,6 +496,9 @@ async def _process_queue(worker_index: int) -> None:
         finally:
             await _release_automation_heartbeat(job.job_id)
             if terminal:
+                _queue_diagnostics['terminal_count'] = int(
+                    _queue_diagnostics['terminal_count']
+                ) + 1
                 await delete_job_payload(job.job_id)
             if job.drive_file is not None and job.media_path is not None:
                 for path in (
@@ -486,4 +513,7 @@ async def _process_queue(worker_index: int) -> None:
                             job.job_id,
                         )
             _active_jobs.discard(job.job_id)
+            _queue_diagnostics['finished_count'] = int(
+                _queue_diagnostics['finished_count']
+            ) + 1
             _queue.task_done()
