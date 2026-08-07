@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v20";
+const BACKEND_INSTANCE = "primary-v21";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -227,20 +227,18 @@ export default {
     ctx.waitUntil((async () => {
       if (!await hasDueAutomations(env)) return;
       const backend = env.REVIEW_BACKEND.getByName(BACKEND_INSTANCE);
-      const [response, recoveryResponse] = await Promise.all([
-        backend.fetch(request),
-        backend.fetch(new Request(
-          new URL("/api/internal/review-recovery", baseUrl),
-          { method: "POST", headers },
-        )),
-      ]);
-      if (!response.ok) {
-        throw new Error(`Automation tick failed with status ${response.status}`);
-      }
+      const recoveryResponse = await backend.fetch(new Request(
+        new URL("/api/internal/review-recovery", baseUrl),
+        { method: "POST", headers },
+      ));
       if (!recoveryResponse.ok) {
         throw new Error(
           `Review recovery failed with status ${recoveryResponse.status}`,
         );
+      }
+      const response = await backend.fetch(request);
+      if (!response.ok) {
+        throw new Error(`Automation tick failed with status ${response.status}`);
       }
     })());
   },

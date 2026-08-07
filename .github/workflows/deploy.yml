@@ -72,3 +72,31 @@ jobs:
 
       - name: Deploy Cloudflare
         run: pnpm exec wrangler deploy
+
+      - name: Wait for Cloudflare container rollout
+        run: |
+          app_id=$(pnpm exec wrangler containers list --json | jq -r '.[] | select(.name == "vibe-check-reviewbackend") | .id')
+          if [ -z "$app_id" ]; then
+            echo "::error::Cloudflare container application was not found"
+            exit 1
+          fi
+          for attempt in $(seq 1 90); do
+            info=$(pnpm exec wrangler containers info "$app_id")
+            errors=$(echo "$info" | jq '.health.errors | length')
+            healthy=$(echo "$info" | jq '.health.instances.healthy')
+            rollout=$(echo "$info" | jq -r '.active_rollout_id // empty')
+            if [ "$errors" -gt 0 ]; then
+              echo "$info"
+              echo "::error::Cloudflare container rollout reported an error"
+              exit 1
+            fi
+            if [ -z "$rollout" ] && [ "$healthy" -ge 1 ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Timed out waiting for the Cloudflare container rollout"
+          exit 1
+
+      - name: Activate Worker after container rollout
+        run: pnpm exec wrangler deploy --containers-rollout=none
