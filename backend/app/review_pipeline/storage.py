@@ -354,7 +354,7 @@ def _update_local_batch_item(
     message:str='',
     claim_notification:bool=False,
 )->tuple[ReviewBatch,bool]:
-    batch=get_batch(batch_id) if not convex_enabled() else ReviewBatch.model_validate(read_json(batch_path(batch_id)))
+    batch=get_batch(batch_id)
     found=False
     for item in batch.items:
         if item.item_id != item_id:

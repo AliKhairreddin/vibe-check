@@ -19,7 +19,7 @@ from app.review_pipeline import queue as review_queue
 from app.review_pipeline import recovery as review_recovery
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
-from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewRequestMeta
+from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewBatch, ReviewBatchItem, ReviewRequestMeta
 from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
@@ -3683,3 +3683,44 @@ def test_worker_scheduled_recovery_precedes_automation_eligibility_gate():
     )
 
     assert recovery_request < automation_gate
+
+
+def test_batch_item_update_rehydrates_missing_local_batch_from_convex(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', 'https://convex.example')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', 'secret')
+    remote_batch = ReviewBatch(
+        batch_id='restart-batch',
+        created_at=100,
+        updated_at=100,
+        expected_count=1,
+        items=[ReviewBatchItem(
+            item_id='restart-item',
+            file_name='creative.mp4',
+            media_kind='video',
+        )],
+    )
+
+    def fake_convex_call(kind, path, args):
+        assert kind == 'query'
+        assert path == 'batches:getBatch'
+        assert args == {'batchId': 'restart-batch'}
+        return remote_batch.model_dump(mode='json')
+
+    monkeypatch.setattr(review_storage, '_convex_call', fake_convex_call)
+
+    updated, should_notify = review_storage._update_local_batch_item(
+        'restart-batch',
+        'restart-item',
+        status='queued',
+        job_id='restart-job',
+        message='Queued for processing',
+    )
+
+    assert should_notify is False
+    assert updated.items[0].status == 'queued'
+    assert updated.items[0].job_id == 'restart-job'
+    assert review_storage.batch_path('restart-batch').exists()
