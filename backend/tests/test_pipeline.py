@@ -866,6 +866,19 @@ def test_seeded_offer_policies_cover_every_live_offer_with_current_rules():
         for override in profiles['smart-financial'].internal_overrides
         if override.override_id == 'discounts-and-rate-claims'
     )
+    kissterra_agent_rule = next(
+        override.guidance
+        for override in profiles['kissterra'].internal_overrides
+        if override.override_id == 'urgency-and-agent-sentiment'
+    )
+    assert 'words “agent” and “agents” are prohibited' in kissterra_agent_rule
+    assert '“skip the agent” with wording' in kissterra_agent_rule
+    assert 'Convenience framing and non-commission complaints are allowed' not in kissterra_agent_rule
+    assert all(
+        'compliances_guidelines_2026-08-06.pdf' in override.rationale
+        for profile in profiles.values()
+        for override in profile.internal_overrides
+    )
 
 def test_offer_profiles_persist_guidelines_and_offer_scoped_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

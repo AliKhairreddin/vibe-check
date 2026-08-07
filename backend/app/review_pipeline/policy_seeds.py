@@ -7,8 +7,8 @@ from .models import OfferOverride, OfferProfileInput
 
 POLICY_DIR = Path(__file__).with_name('guidelines')
 CURRENT_POLICY_RATIONALE = (
-    'Current internal enforcement policy from “Auto Insurance Compliance Guidelines — '
-    'Current Rules & Examples,” consolidated July 29, 2026. It supersedes the original '
+    'Latest internal enforcement policy from “compliances_guidelines_2026-08-06.pdf,” '
+    'which consolidates rules current as of July 29, 2026. It supersedes the original '
     'written source policy wherever the two conflict.'
 )
 
@@ -23,7 +23,25 @@ def _rule(override_id: str, title: str, guidance: str) -> dict[str, object]:
     }
 
 
-def _common_rules() -> list[dict[str, object]]:
+def _common_rules(*, prohibit_agent_terms: bool = False) -> list[dict[str, object]]:
+    agent_sentiment_guidance = (
+        'Urgency, countdown, scarcity, and time-limited language are prohibited. Commission-based '
+        'accusations against agents or carriers and claims that they hide information or discounts '
+        'are prohibited. '
+    )
+    if prohibit_agent_terms:
+        agent_sentiment_guidance += (
+            'For this offer, the literal words “agent” and “agents” are prohibited in every script, '
+            'image, on-screen text, and copy field, even when used positively or neutrally. Replace '
+            'convenience claims such as “skip the agent” with wording such as “no forms, no phone '
+            'calls.”'
+        )
+    else:
+        agent_sentiment_guidance += (
+            'Convenience framing and non-commission complaints are allowed, including “skip the '
+            'agent,” paperwork complaints, slow service, or repeated-call complaints.'
+        )
+
     return [
         _rule(
             'current-policy-scope',
@@ -35,10 +53,7 @@ def _common_rules() -> list[dict[str, object]]:
         _rule(
             'urgency-and-agent-sentiment',
             'Urgency and agent/carrier sentiment',
-            'Urgency, countdown, scarcity, and time-limited language are prohibited. Commission-based '
-            'accusations against agents or carriers and claims that they hide information or discounts '
-            'are prohibited. Convenience framing and non-commission complaints are allowed, including '
-            '“skip the agent,” paperwork complaints, slow service, or repeated-call complaints.',
+            agent_sentiment_guidance,
         ),
         _rule(
             'audience-and-fear-imagery',
@@ -128,7 +143,7 @@ OFFER_POLICY_SEEDS: dict[str, dict[str, object]] = {
         'official_file': 'kissterra_connect_guidelines.md',
         'is_default': False,
         'overrides': [
-            *_common_rules(),
+            *_common_rules(prohibit_agent_terms=True),
             _rule(
                 'government-wording',
                 'Government imagery and wording',
