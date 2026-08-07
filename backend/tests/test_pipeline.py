@@ -2269,6 +2269,75 @@ def test_manual_payload_persists_manifest_and_media(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_recovery_manifests_load_concurrently(monkeypatch):
+    active=0
+    max_active=0
+    started=asyncio.Event()
+    release=asyncio.Event()
+
+    class FakeResponse:
+        def __init__(self, job_id):
+            self.job_id=job_id
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'version':review_recovery.PAYLOAD_VERSION,
+                'job_id':self.job_id,
+                'file_name':f'{self.job_id}.mp4',
+                'file_size':12,
+                'media_kind':'video',
+                'meta':{'ad_copy':'Caption'},
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url):
+            nonlocal active, max_active
+            active += 1
+            max_active=max(max_active, active)
+            if active == 3:
+                started.set()
+            await release.wait()
+            active -= 1
+            return FakeResponse(url.rsplit('/', 1)[-1])
+
+    monkeypatch.setattr(
+        review_recovery,
+        '_list_payload_rows_sync',
+        lambda job_ids: [
+            {
+                'jobId':job_id,
+                'manifestUrl':f'https://example.test/{job_id}',
+                'mediaUrl':f'https://example.test/media/{job_id}',
+            }
+            for job_id in job_ids
+        ],
+    )
+    monkeypatch.setattr(review_recovery.httpx, 'AsyncClient', FakeClient)
+
+    load=asyncio.create_task(
+        review_recovery.load_recovery_payloads(['job-1', 'job-2', 'job-3'])
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release.set()
+    recovered=await load
+
+    assert max_active == 3
+    assert set(recovered) == {'job-1', 'job-2', 'job-3'}
+
+
+@pytest.mark.anyio
 async def test_startup_recovery_requeues_durable_jobs_and_fails_missing_jobs(
     tmp_path,
     monkeypatch,

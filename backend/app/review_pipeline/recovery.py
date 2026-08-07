@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 PAYLOAD_VERSION = 1
 UPLOAD_TIMEOUT = httpx.Timeout(125.0, connect=20.0)
 DOWNLOAD_TIMEOUT = httpx.Timeout(300.0, connect=20.0)
+MANIFEST_DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+MANIFEST_DOWNLOAD_CONCURRENCY = 8
+MANIFEST_DOWNLOAD_DEADLINE_SECONDS = 35
 INTERRUPTED_MESSAGE = (
     'Review processing was interrupted and its durable recovery copy is unavailable. '
     'Please re-upload this creative to retry.'
@@ -303,58 +306,67 @@ def _drive_file(value: Any) -> DriveFile | None:
     )
 
 
-def _load_payloads_sync(job_ids: list[str]) -> dict[str, RecoveredReviewPayload]:
-    recovered: dict[str, RecoveredReviewPayload] = {}
-    with httpx.Client(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
-        for offset in range(0, len(job_ids), 100):
-            rows = storage._convex_call(
-                'query',
-                'reviewPayloads:listForJobs',
-                {'jobIds': job_ids[offset:offset + 100]},
-            )
-            if not isinstance(rows, list):
-                raise RuntimeError('Review payload lookup returned an invalid response.')
-            for row in rows:
-                job_id = row.get('jobId') if isinstance(row, dict) else None
-                try:
-                    manifest_url = row.get('manifestUrl') if isinstance(row, dict) else None
-                    if not isinstance(job_id, str) or not isinstance(manifest_url, str):
-                        continue
-                    response = client.get(manifest_url)
-                    response.raise_for_status()
-                    manifest = response.json()
-                    if (
-                        not isinstance(manifest, dict)
-                        or manifest.get('version') != PAYLOAD_VERSION
-                        or manifest.get('job_id') != job_id
-                    ):
-                        raise RuntimeError('Review payload manifest is invalid.')
-                    media_kind = manifest.get('media_kind')
-                    if media_kind not in {'video', 'image', 'copy_only'}:
-                        raise RuntimeError('Review payload media type is invalid.')
-                    file_name = str(manifest.get('file_name') or '')
-                    if media_kind != 'copy_only' and not Path(file_name).name:
-                        raise RuntimeError('Review payload file name is invalid.')
-                    media_url = row.get('mediaUrl')
-                    recovered[job_id] = RecoveredReviewPayload(
-                        job_id=job_id,
-                        file_name=file_name,
-                        file_size=(
-                            int(manifest['file_size'])
-                            if manifest.get('file_size') is not None
-                            else None
-                        ),
-                        media_kind=media_kind,
-                        meta=ReviewRequestMeta.model_validate(manifest.get('meta')),
-                        media_url=media_url if isinstance(media_url, str) else None,
-                        drive_file=_drive_file(manifest.get('drive_file')),
-                    )
-                except Exception:
-                    logger.exception(
-                        'Could not load durable recovery manifest for job %s.',
-                        job_id or 'unknown',
-                    )
-    return recovered
+def _list_payload_rows_sync(job_ids: list[str]) -> list[dict[str, Any]]:
+    payload_rows: list[dict[str, Any]] = []
+    for offset in range(0, len(job_ids), 100):
+        rows = storage._convex_call(
+            'query',
+            'reviewPayloads:listForJobs',
+            {'jobIds': job_ids[offset:offset + 100]},
+        )
+        if not isinstance(rows, list):
+            raise RuntimeError('Review payload lookup returned an invalid response.')
+        payload_rows.extend(row for row in rows if isinstance(row, dict))
+    return payload_rows
+
+
+async def _load_payload_row(
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+    row: dict[str, Any],
+) -> RecoveredReviewPayload | None:
+    job_id = row.get('jobId')
+    try:
+        manifest_url = row.get('manifestUrl')
+        if not isinstance(job_id, str) or not isinstance(manifest_url, str):
+            return None
+        async with semaphore:
+            async with asyncio.timeout(MANIFEST_DOWNLOAD_DEADLINE_SECONDS):
+                response = await client.get(manifest_url)
+        response.raise_for_status()
+        manifest = response.json()
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get('version') != PAYLOAD_VERSION
+            or manifest.get('job_id') != job_id
+        ):
+            raise RuntimeError('Review payload manifest is invalid.')
+        media_kind = manifest.get('media_kind')
+        if media_kind not in {'video', 'image', 'copy_only'}:
+            raise RuntimeError('Review payload media type is invalid.')
+        file_name = str(manifest.get('file_name') or '')
+        if media_kind != 'copy_only' and not Path(file_name).name:
+            raise RuntimeError('Review payload file name is invalid.')
+        media_url = row.get('mediaUrl')
+        return RecoveredReviewPayload(
+            job_id=job_id,
+            file_name=file_name,
+            file_size=(
+                int(manifest['file_size'])
+                if manifest.get('file_size') is not None
+                else None
+            ),
+            media_kind=media_kind,
+            meta=ReviewRequestMeta.model_validate(manifest.get('meta')),
+            media_url=media_url if isinstance(media_url, str) else None,
+            drive_file=_drive_file(manifest.get('drive_file')),
+        )
+    except Exception:
+        logger.exception(
+            'Could not load durable recovery manifest for job %s.',
+            job_id if isinstance(job_id, str) else 'unknown',
+        )
+        return None
 
 
 async def load_recovery_payloads(
@@ -362,7 +374,25 @@ async def load_recovery_payloads(
 ) -> dict[str, RecoveredReviewPayload]:
     if not job_ids:
         return {}
-    return await asyncio.to_thread(_load_payloads_sync, job_ids)
+    rows = await asyncio.to_thread(_list_payload_rows_sync, job_ids)
+    semaphore = asyncio.Semaphore(MANIFEST_DOWNLOAD_CONCURRENCY)
+    async with httpx.AsyncClient(
+        timeout=MANIFEST_DOWNLOAD_TIMEOUT,
+        follow_redirects=True,
+        limits=httpx.Limits(
+            max_connections=MANIFEST_DOWNLOAD_CONCURRENCY,
+            max_keepalive_connections=MANIFEST_DOWNLOAD_CONCURRENCY,
+        ),
+    ) as client:
+        loaded = await asyncio.gather(*(
+            _load_payload_row(client, semaphore, row)
+            for row in rows
+        ))
+    return {
+        payload.job_id: payload
+        for payload in loaded
+        if payload is not None
+    }
 
 
 def _restore_media_sync(payload: RecoveredReviewPayload, destination: Path) -> None:
