@@ -315,6 +315,11 @@ def admin_check(request:Request):
     return {'authorized':True}
 
 
+@app.get('/api/health')
+def health_check():
+    return {'status':'ok', 'queue':queue_state()}
+
+
 @app.post('/api/automations/internal/tick')
 async def tick_review_automations(request:Request):
     require_automation_secret(request)

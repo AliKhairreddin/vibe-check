@@ -2169,6 +2169,35 @@ def test_queue_uses_bounded_parallel_workers(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_health_endpoint_reports_safe_queue_diagnostics(monkeypatch):
+    monkeypatch.setattr(
+        'app.main.queue_state',
+        lambda: {
+            'active':2,
+            'failure_count':1,
+            'last_error_type':'RuntimeError',
+            'pending':3,
+            'workers':4,
+        },
+    )
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response=await client.get('/api/health')
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'status':'ok',
+        'queue':{
+            'active':2,
+            'failure_count':1,
+            'last_error_type':'RuntimeError',
+            'pending':3,
+            'workers':4,
+        },
+    }
+
+
+@pytest.mark.anyio
 async def test_enqueue_persists_manual_payload_before_marking_job_queued(monkeypatch):
     queue=asyncio.Queue()
     events=[]

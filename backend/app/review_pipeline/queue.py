@@ -53,6 +53,10 @@ _workers: list[asyncio.Task[None]] = []
 _stopping_workers = False
 _workers_requested_to_stop: set[asyncio.Task[None]] = set()
 _active_jobs: set[str] = set()
+_queue_diagnostics: dict[str, int | str] = {
+    'failure_count': 0,
+    'last_error_type': '',
+}
 _automation_heartbeat_jobs: dict[str, tuple[str, str]] = {}
 _automation_heartbeat_ref_counts: dict[tuple[str, str], int] = {}
 _automation_heartbeat_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
@@ -142,9 +146,11 @@ def _job_timeout_seconds() -> int:
     return max(60, min(configured, MAX_JOB_TIMEOUT_SECONDS))
 
 
-def queue_state() -> dict[str, int]:
+def queue_state() -> dict[str, int | str]:
     return {
         'active': len(_active_jobs),
+        'failure_count': int(_queue_diagnostics['failure_count']),
+        'last_error_type': str(_queue_diagnostics['last_error_type']),
         'pending': _queue.qsize(),
         'workers': len(_workers),
     }
@@ -174,9 +180,19 @@ def _worker_finished(task: asyncio.Task[None], worker_index: int) -> None:
     if _stopping_workers or stop_requested:
         return
     if task.cancelled():
+        _queue_diagnostics['failure_count'] = int(
+            _queue_diagnostics['failure_count']
+        ) + 1
+        _queue_diagnostics['last_error_type'] = 'CancelledError'
         logger.error('Queue worker %s was cancelled unexpectedly; restarting.', worker_index + 1)
     else:
         error=task.exception()
+        _queue_diagnostics['failure_count'] = int(
+            _queue_diagnostics['failure_count']
+        ) + 1
+        _queue_diagnostics['last_error_type'] = (
+            type(error).__name__ if error is not None else 'UnexpectedExit'
+        )
         logger.error(
             'Queue worker %s stopped unexpectedly; restarting. error_type=%s',
             worker_index + 1,
@@ -398,6 +414,10 @@ async def _process_queue(worker_index: int) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            _queue_diagnostics['failure_count'] = int(
+                _queue_diagnostics['failure_count']
+            ) + 1
+            _queue_diagnostics['last_error_type'] = type(exc).__name__
             logger.exception(
                 'Queue worker %s failed while processing job %s',
                 worker_index + 1,
