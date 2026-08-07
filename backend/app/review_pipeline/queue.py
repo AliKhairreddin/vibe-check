@@ -154,19 +154,23 @@ def _job_timeout_seconds() -> int:
     return max(60, min(configured, MAX_JOB_TIMEOUT_SECONDS))
 
 
-def queue_state() -> dict[str, int | str]:
+def queue_state() -> dict[str, int | str | bool]:
     return {
         'active': len(_active_jobs),
         'cancelled_count': int(_queue_diagnostics['cancelled_count']),
         'dequeued_count': int(_queue_diagnostics['dequeued_count']),
+        'drain_locked': _drain_lock.locked(),
         'enqueued_count': int(_queue_diagnostics['enqueued_count']),
         'failure_count': int(_queue_diagnostics['failure_count']),
         'finished_count': int(_queue_diagnostics['finished_count']),
         'last_error_type': str(_queue_diagnostics['last_error_type']),
         'pending': _queue.qsize(),
+        'recovery_locked': _recovery_lock.locked(),
         'started_count': int(_queue_diagnostics['started_count']),
         'terminal_count': int(_queue_diagnostics['terminal_count']),
+        'unfinished': int(_queue._unfinished_tasks),
         'workers': len(_workers),
+        'workers_done': sum(worker.done() for worker in _workers),
     }
 
 

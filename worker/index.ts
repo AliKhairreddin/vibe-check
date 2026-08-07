@@ -237,6 +237,21 @@ export default {
           `Review recovery failed with status ${recoveryResponse.status}`,
         );
       }
+      const recoveryResult = await recoveryResponse.clone().json() as {
+        already_draining?: boolean;
+        drained?: boolean;
+        queue?: { active?: number; pending?: number };
+        recovered?: { failed?: number; requeued?: number };
+      };
+      console.log(JSON.stringify({
+        event: "review_recovery_tick",
+        alreadyDraining: recoveryResult.already_draining ?? false,
+        drained: recoveryResult.drained ?? false,
+        active: recoveryResult.queue?.active ?? 0,
+        pending: recoveryResult.queue?.pending ?? 0,
+        failed: recoveryResult.recovered?.failed ?? 0,
+        requeued: recoveryResult.recovered?.requeued ?? 0,
+      }));
       const response = await backend.fetch(request);
       if (!response.ok) {
         throw new Error(`Automation tick failed with status ${response.status}`);
