@@ -16,6 +16,7 @@ from app.review_pipeline import jobs as review_jobs
 from app.review_pipeline import live_scan_storage
 from app.review_pipeline import llm as review_llm
 from app.review_pipeline import queue as review_queue
+from app.review_pipeline import recovery as review_recovery
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
 from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewRequestMeta
@@ -768,6 +769,29 @@ async def test_openrouter_requires_api_key_instead_of_returning_placeholder(monk
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
 
     with pytest.raises(RuntimeError, match='OPENROUTER_API_KEY'):
+        await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+
+
+@pytest.mark.anyio
+async def test_openrouter_request_has_hard_wall_clock_deadline(monkeypatch):
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            assert timeout == 120
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            await asyncio.Event().wait()
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
+    monkeypatch.setattr(review_llm, '_request_deadline_seconds', lambda: 0.01)
+
+    with pytest.raises(TimeoutError):
         await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
 
 
@@ -2143,6 +2167,185 @@ def test_queue_uses_bounded_parallel_workers(monkeypatch):
     monkeypatch.setenv('JOB_WORKER_CONCURRENCY', 'not-a-number')
     assert review_queue._worker_count() == 4
 
+
+@pytest.mark.anyio
+async def test_enqueue_persists_manual_payload_before_marking_job_queued(monkeypatch):
+    queue=asyncio.Queue()
+    events=[]
+    monkeypatch.setattr(review_queue, '_queue', queue)
+
+    async def fake_persist(*args):
+        events.append('persist')
+
+    def fake_set_status(*args, **kwargs):
+        events.append('status')
+        return SimpleNamespace(status=JobStatus.queued)
+
+    monkeypatch.setattr(review_queue, 'persist_job_payload', fake_persist)
+    monkeypatch.setattr(review_queue, 'set_status', fake_set_status)
+
+    await review_queue.enqueue_job(
+        'durable-job',
+        None,
+        'copy_only',
+        ReviewRequestMeta(ad_copy='Durable copy'),
+        'Ad copy',
+    )
+
+    assert events == ['persist', 'status']
+    assert (await queue.get()).job_id == 'durable-job'
+
+
+def test_manual_payload_persists_manifest_and_media(tmp_path, monkeypatch):
+    media_path=tmp_path/'creative.mp4'
+    media_path.write_bytes(b'video-content')
+    uploads=[]
+    convex_calls=[]
+
+    def fake_upload(value, content_type):
+        uploads.append((value, content_type))
+        return f'storage-{len(uploads)}'
+
+    def fake_convex_call(kind, path, args):
+        convex_calls.append((kind, path, args))
+        return {'jobId':'durable-job'}
+
+    monkeypatch.setattr(review_recovery.storage, 'convex_enabled', lambda: True)
+    monkeypatch.setattr(review_recovery, '_upload_blob', fake_upload)
+    monkeypatch.setattr(review_recovery.storage, '_convex_call', fake_convex_call)
+
+    review_recovery._persist_job_payload_sync(
+        'durable-job',
+        media_path,
+        'video',
+        ReviewRequestMeta(ad_copy='Caption'),
+        media_path.name,
+        media_path.stat().st_size,
+        None,
+    )
+
+    manifest=json.loads(uploads[0][0])
+    assert manifest['job_id'] == 'durable-job'
+    assert manifest['meta']['ad_copy'] == 'Caption'
+    assert uploads[1] == (media_path, 'application/octet-stream')
+    assert convex_calls[-1] == (
+        'mutation',
+        'reviewPayloads:save',
+        {
+            'jobId':'durable-job',
+            'manifestStorageId':'storage-1',
+            'mediaStorageId':'storage-2',
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_startup_recovery_requeues_durable_jobs_and_fails_missing_jobs(
+    tmp_path,
+    monkeypatch,
+):
+    recovered=review_recovery.RecoveredReviewPayload(
+        job_id='recoverable',
+        file_name='creative.mp4',
+        file_size=12,
+        media_kind='video',
+        meta=ReviewRequestMeta(ad_copy='Caption'),
+        media_url='https://example.test/creative',
+    )
+    enqueued=[]
+    failed=[]
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(
+        review_queue,
+        'list_interrupted_reviews',
+        lambda: [
+            review_recovery.InterruptedReview(
+                job_id=job_id,
+                file_name='creative.mp4',
+                file_size=12,
+                source_kind=None,
+                source_file_id=None,
+                source_url=None,
+                batch_id=None,
+                batch_item_id=None,
+                offer_ids=('acp',),
+                has_ad_copy=False,
+            )
+            for job_id in ('recoverable', 'missing')
+        ],
+    )
+
+    async def fake_load(job_ids):
+        assert job_ids == ['recoverable', 'missing']
+        return {'recoverable':recovered}
+
+    async def fake_enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    def fake_fail(job_ids):
+        failed.extend(job_ids)
+        return job_ids
+
+    monkeypatch.setattr(review_queue, 'load_recovery_payloads', fake_load)
+    monkeypatch.setattr(review_queue, 'enqueue_job', fake_enqueue)
+    monkeypatch.setattr(review_queue, 'fail_unrecoverable_jobs', fake_fail)
+
+    result=await review_queue.recover_interrupted_jobs()
+
+    assert result == {'failed':1, 'requeued':1}
+    assert failed == ['missing']
+    assert enqueued[0][0][0] == 'recoverable'
+    assert enqueued[0][1] == {
+        'file_size':12,
+        'drive_file':None,
+        'persist_payload':False,
+        'recovery_payload':recovered,
+    }
+    assert (tmp_path/'recoverable'/'request.json').exists()
+
+
+def test_startup_recovery_reconstructs_google_drive_job_without_saved_payload(
+    monkeypatch,
+):
+    profile=OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Policy',
+        enabled=True,
+        is_default=True,
+    )
+    outcome=OfferOutcome(
+        offer_id='acp',
+        offer_name='ACP',
+        evaluation_state='evaluated',
+        message='Evaluated using the saved official guidelines.',
+    )
+    monkeypatch.setattr(
+        review_recovery.storage,
+        'resolve_review_offer_snapshot',
+        lambda: ([profile], [outcome]),
+    )
+    review=review_recovery.InterruptedReview(
+        job_id='drive-job',
+        file_name='creative.mp4',
+        file_size=42,
+        source_kind='google_drive_file',
+        source_file_id='drive-file',
+        source_url='https://drive.google.com/file/d/drive-file/view',
+        batch_id='batch',
+        batch_item_id='item',
+        offer_ids=('acp',),
+        has_ad_copy=False,
+    )
+
+    payload=review_recovery.reconstruct_drive_payloads([review])['drive-job']
+
+    assert payload.media_kind == 'video'
+    assert payload.drive_file is not None
+    assert payload.drive_file.file_id == 'drive-file'
+    assert payload.meta.batch_id == 'batch'
+    assert payload.meta.offer_ids == ['acp']
+
 @pytest.mark.anyio
 async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatch):
     destination=tmp_path/'job'/'creative.mp4'
@@ -2294,6 +2497,48 @@ async def test_process_queue_continues_after_start_status_failure(monkeypatch):
 
     assert processed == ['second']
     assert ('first', JobStatus.failed, 100, 'Queue processing failed: RuntimeError') in status_calls
+
+
+@pytest.mark.anyio
+async def test_queue_hard_timeout_fails_job_and_releases_worker(monkeypatch):
+    queue=asyncio.Queue()
+    status_calls=[]
+    deleted=[]
+    monkeypatch.setattr(review_queue, '_queue', queue)
+    monkeypatch.setattr(review_queue, '_active_jobs', set())
+    monkeypatch.setattr(review_queue, '_job_timeout_seconds', lambda: 0.01)
+
+    def fake_set_status(job_id, status, progress, message=''):
+        status_calls.append((job_id, status, progress, message))
+
+    async def blocked_process_job(*args):
+        await asyncio.Event().wait()
+
+    async def fake_delete(job_id):
+        deleted.append(job_id)
+
+    monkeypatch.setattr(review_queue, 'set_status', fake_set_status)
+    monkeypatch.setattr(review_queue, 'process_job', blocked_process_job)
+    monkeypatch.setattr(review_queue, 'delete_job_payload', fake_delete)
+
+    await queue.put(review_queue.QueuedReviewJob(
+        'timed-out',
+        None,
+        'copy_only',
+        ReviewRequestMeta(ad_copy='Copy'),
+    ))
+    worker=asyncio.create_task(review_queue._process_queue(0))
+    try:
+        await asyncio.wait_for(queue.join(), timeout=1)
+    finally:
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+
+    assert status_calls[-1][:3] == ('timed-out', JobStatus.failed, 100)
+    assert status_calls[-1][3].startswith('Queue processing timed out after ')
+    assert deleted == ['timed-out']
+    assert not review_queue._active_jobs
 
 def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

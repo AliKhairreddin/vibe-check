@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 
 // Bump the instance name when a new container image must replace an already-awake instance.
-const BACKEND_INSTANCE = "primary-v12";
+const BACKEND_INSTANCE = "primary-v13";
 type OptionalSecrets = Env & {
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
@@ -107,10 +107,12 @@ export class ReviewBackend extends Container<Env> {
       GOOGLE_DRIVE_FOLDER_ID: env.GOOGLE_DRIVE_FOLDER_ID,
       GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON: env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON,
       JOB_DATA_DIR: env.JOB_DATA_DIR,
+      JOB_PROCESSING_TIMEOUT_SECONDS: env.JOB_PROCESSING_TIMEOUT_SECONDS,
       JOB_WORKER_CONCURRENCY: env.JOB_WORKER_CONCURRENCY,
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB,
       OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
       OPENROUTER_MODEL: env.OPENROUTER_MODEL,
+      OPENROUTER_REQUEST_TIMEOUT_SECONDS: env.OPENROUTER_REQUEST_TIMEOUT_SECONDS,
       OPENROUTER_VISION_ENABLED: env.OPENROUTER_VISION_ENABLED,
       OPENROUTER_VISION_MODEL: env.OPENROUTER_VISION_MODEL,
       OPENROUTER_VISION_MAX_FRAMES: env.OPENROUTER_VISION_MAX_FRAMES,
@@ -124,6 +126,63 @@ export class ReviewBackend extends Container<Env> {
       TELEGRAM_CHAT_ID: optionalSecrets.TELEGRAM_CHAT_ID ?? "",
       TELEGRAM_MESSAGE_THREAD_ID: optionalSecrets.TELEGRAM_MESSAGE_THREAD_ID ?? "",
     };
+  }
+
+  override onStart(): void {
+    console.log(JSON.stringify({ event: "review_backend_started" }));
+  }
+
+  override onStop(
+    { exitCode, reason }: Parameters<Container<Env>["onStop"]>[0],
+  ): void {
+    console.log(JSON.stringify({
+      event: "review_backend_stopped",
+      exitCode,
+      reason,
+    }));
+  }
+
+  override onError(error: unknown): never {
+    console.error(JSON.stringify({
+      event: "review_backend_error",
+      errorType: error instanceof Error ? error.name : typeof error,
+    }));
+    throw error;
+  }
+
+  override async onActivityExpired(): Promise<void> {
+    const optionalSecrets = this.env as OptionalSecrets;
+    const headers = new Headers({
+      "x-automation-secret": this.env.CONVEX_HTTP_SECRET,
+    });
+    if (optionalSecrets.APP_PASSWORD) {
+      headers.set("x-app-password", optionalSecrets.APP_PASSWORD);
+    }
+    try {
+      const response = await this.containerFetch(
+        "http://localhost/api/internal/queue-state",
+        { headers },
+      );
+      if (!response.ok) {
+        throw new Error(`Queue state returned ${response.status}`);
+      }
+      const state = await response.json() as { active?: number; pending?: number };
+      if ((state.active ?? 0) > 0 || (state.pending ?? 0) > 0) {
+        console.log(JSON.stringify({
+          event: "review_backend_kept_awake",
+          active: state.active ?? 0,
+          pending: state.pending ?? 0,
+        }));
+        return;
+      }
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "review_backend_idle_check_failed",
+        errorType: error instanceof Error ? error.name : typeof error,
+      }));
+      return;
+    }
+    await this.stop();
   }
 }
 

@@ -61,7 +61,13 @@ from .review_pipeline.storage import (
     set_review_source,
     upsert_offer_profile,
 )
-from .review_pipeline.queue import enqueue_job, start_job_workers, stop_job_workers
+from .review_pipeline.queue import (
+    enqueue_job,
+    queue_state,
+    recover_interrupted_jobs,
+    start_job_workers,
+    stop_job_workers,
+)
 from .review_pipeline.media import detect_media_kind
 from .review_pipeline.drive import (
     FOLDER_MIME_TYPE,
@@ -253,6 +259,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception('Could not reconcile interrupted automation jobs at startup.')
     await start_job_workers()
+    try:
+        recovered=await recover_interrupted_jobs()
+        if recovered['requeued']:
+            logger.warning(
+                'Requeued %s interrupted review(s) from durable payload storage.',
+                recovered['requeued'],
+            )
+        if recovered['failed']:
+            logger.warning(
+                'Marked %s interrupted review(s) as failed because their upload was unavailable.',
+                recovered['failed'],
+            )
+    except Exception:
+        logger.exception('Could not reconcile interrupted manual reviews at startup.')
     start_background_task(deliver_batch_notifications_in_background())
     yield
     await stop_job_workers()
@@ -306,6 +326,12 @@ async def tick_review_automations(request:Request):
     results=await run_due_review_automations()
     start_background_task(deliver_batch_notifications_in_background())
     return {'runs':[result.model_dump(mode='json') for result in results]}
+
+
+@app.get('/api/internal/queue-state')
+def internal_queue_state(request:Request):
+    require_automation_secret(request)
+    return queue_state()
 
 
 @app.get('/api/automations', response_model=ReviewAutomationList)

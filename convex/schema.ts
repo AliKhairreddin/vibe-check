@@ -8,6 +8,13 @@ export default defineSchema({
     key: v.string(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
+  reviewPayloads: defineTable({
+    createdAt: v.number(),
+    jobId: v.string(),
+    manifestStorageId: v.id("_storage"),
+    mediaStorageId: v.optional(v.id("_storage")),
+    updatedAt: v.number(),
+  }).index("by_job_id", ["jobId"]),
   reviewAutomations: defineTable({
     automationId: v.string(),
     createdAt: v.number(),
@@ -101,6 +108,12 @@ export default defineSchema({
     .index("by_job_id", ["jobId"])
     .index("by_file_name", ["fileName"])
     .index("by_created_at", ["createdAt"])
+    .index("by_status_deleted_automation_updated", [
+      "status",
+      "deletedAt",
+      "automationRunId",
+      "updatedAt",
+    ])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewOfferStats: defineTable({
     createdAt: v.number(),

@@ -11,9 +11,19 @@ from .drive import DriveFile, get_google_drive_client
 from .jobs import process_job
 from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
-from .storage import set_status
+from .storage import get_status, job_dir, set_status, write_json
 from .live_scan_storage import finish_live_review
 from .telegram import finish_batch_item_and_notify
+from .recovery import (
+    RecoveredReviewPayload,
+    delete_job_payload,
+    fail_unrecoverable_jobs,
+    list_interrupted_reviews,
+    load_recovery_payloads,
+    persist_job_payload,
+    reconstruct_drive_payloads,
+    restore_media,
+)
 from .automation_storage import (
     heartbeat_automation_run,
     record_review_automation_job_result,
@@ -24,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_WORKER_CONCURRENCY = 4
 MAX_WORKER_CONCURRENCY = 8
+DEFAULT_JOB_TIMEOUT_SECONDS = 30 * 60
+MAX_JOB_TIMEOUT_SECONDS = 2 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -33,12 +45,14 @@ class QueuedReviewJob:
     media_kind: MediaKind
     meta: ReviewRequestMeta
     drive_file: DriveFile | None = None
+    recovery_payload: RecoveredReviewPayload | None = None
 
 
 _queue: asyncio.Queue[QueuedReviewJob] = asyncio.Queue()
 _workers: list[asyncio.Task[None]] = []
 _stopping_workers = False
 _workers_requested_to_stop: set[asyncio.Task[None]] = set()
+_active_jobs: set[str] = set()
 _automation_heartbeat_jobs: dict[str, tuple[str, str]] = {}
 _automation_heartbeat_ref_counts: dict[tuple[str, str], int] = {}
 _automation_heartbeat_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
@@ -117,6 +131,25 @@ def _worker_count() -> int:
     return max(1, min(configured, MAX_WORKER_CONCURRENCY))
 
 
+def _job_timeout_seconds() -> int:
+    try:
+        configured = int(os.getenv(
+            'JOB_PROCESSING_TIMEOUT_SECONDS',
+            str(DEFAULT_JOB_TIMEOUT_SECONDS),
+        ))
+    except ValueError:
+        configured = DEFAULT_JOB_TIMEOUT_SECONDS
+    return max(60, min(configured, MAX_JOB_TIMEOUT_SECONDS))
+
+
+def queue_state() -> dict[str, int]:
+    return {
+        'active': len(_active_jobs),
+        'pending': _queue.qsize(),
+        'workers': len(_workers),
+    }
+
+
 async def start_job_workers() -> None:
     if _workers:
         return
@@ -186,7 +219,20 @@ async def enqueue_job(
     file_name: str,
     file_size: int | None = None,
     drive_file: DriveFile | None = None,
+    *,
+    persist_payload: bool = True,
+    recovery_payload: RecoveredReviewPayload | None = None,
 ):
+    if persist_payload:
+        await persist_job_payload(
+            job_id,
+            media_path,
+            media_kind,
+            meta,
+            file_name,
+            file_size,
+            drive_file,
+        )
     position = _queue.qsize() + 1
     message = 'Queued for processing'
     if position > _worker_count():
@@ -208,11 +254,76 @@ async def enqueue_job(
     )
     _register_automation_heartbeat(job_id, meta)
     try:
-        await _queue.put(QueuedReviewJob(job_id, media_path, media_kind, meta, drive_file))
+        await _queue.put(QueuedReviewJob(
+            job_id,
+            media_path,
+            media_kind,
+            meta,
+            drive_file,
+            recovery_payload,
+        ))
     except BaseException:
         await _release_automation_heartbeat(job_id)
         raise
     return record
+
+
+async def recover_interrupted_jobs() -> dict[str, int]:
+    interrupted = await asyncio.to_thread(list_interrupted_reviews)
+    job_ids = [review.job_id for review in interrupted]
+    if not job_ids:
+        return {'failed': 0, 'requeued': 0}
+    payloads = await load_recovery_payloads(job_ids)
+    reconstructed = await asyncio.to_thread(
+        reconstruct_drive_payloads,
+        [review for review in interrupted if review.job_id not in payloads],
+    )
+    payloads.update(reconstructed)
+    requeued = 0
+    unrecoverable_ids: set[str] = set()
+    for job_id in job_ids:
+        payload = payloads.get(job_id)
+        if payload is None:
+            unrecoverable_ids.add(job_id)
+            continue
+        if (
+            payload.media_kind != 'copy_only'
+            and payload.drive_file is None
+            and payload.media_url is None
+        ):
+            unrecoverable_ids.add(job_id)
+            continue
+        file_name = Path(payload.file_name).name
+        media_path = (
+            job_dir(job_id) / file_name
+            if payload.media_kind != 'copy_only'
+            else None
+        )
+        write_json(
+            job_dir(job_id) / 'request.json',
+            payload.meta.model_dump(mode='json'),
+        )
+        try:
+            await enqueue_job(
+                job_id,
+                media_path,
+                payload.media_kind,
+                payload.meta,
+                file_name,
+                file_size=payload.file_size,
+                drive_file=payload.drive_file,
+                persist_payload=job_id in reconstructed,
+                recovery_payload=payload,
+            )
+        except Exception:
+            logger.exception('Could not requeue interrupted review %s.', job_id)
+            continue
+        requeued += 1
+    failed = await asyncio.to_thread(
+        fail_unrecoverable_jobs,
+        list(unrecoverable_ids),
+    )
+    return {'failed': len(failed), 'requeued': requeued}
 
 
 async def _download_drive_file(job: QueuedReviewJob) -> None:
@@ -252,14 +363,38 @@ async def _download_drive_file(job: QueuedReviewJob) -> None:
     )
 
 
+async def _restore_recovery_file(job: QueuedReviewJob) -> None:
+    payload = job.recovery_payload
+    if (
+        payload is None
+        or payload.media_url is None
+        or job.media_path is None
+        or job.drive_file is not None
+    ):
+        return
+    set_status(
+        job.job_id,
+        JobStatus.queued,
+        1,
+        'Restoring uploaded creative after processing restart',
+    )
+    await restore_media(payload, job.media_path)
+
+
 async def _process_queue(worker_index: int) -> None:
     while True:
         job = await _queue.get()
+        _active_jobs.add(job.job_id)
         _register_automation_heartbeat(job.job_id, job.meta)
+        terminal = False
         try:
-            set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
-            await _download_drive_file(job)
-            await process_job(job.job_id, job.media_path, job.media_kind, job.meta)
+            async with asyncio.timeout(_job_timeout_seconds()):
+                set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
+                await _restore_recovery_file(job)
+                await _download_drive_file(job)
+                await process_job(job.job_id, job.media_path, job.media_kind, job.meta)
+            record = await asyncio.to_thread(get_status, job.job_id)
+            terminal = record.status in {JobStatus.complete, JobStatus.failed}
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -269,12 +404,18 @@ async def _process_queue(worker_index: int) -> None:
                 job.job_id,
             )
             try:
+                message = (
+                    f'Queue processing timed out after {_job_timeout_seconds() // 60} minutes'
+                    if isinstance(exc, TimeoutError)
+                    else f'Queue processing failed: {type(exc).__name__}'
+                )
                 set_status(
                     job.job_id,
                     JobStatus.failed,
                     100,
-                    f'Queue processing failed: {type(exc).__name__}',
+                    message,
                 )
+                terminal = True
                 try:
                     release_review_automation_claim(job.meta)
                 except Exception:
@@ -300,7 +441,7 @@ async def _process_queue(worker_index: int) -> None:
                         job.meta.batch_item_id or '',
                         status='failed',
                         job_id=job.job_id,
-                        message=f'Queue processing failed: {type(exc).__name__}',
+                        message=message,
                     )
             except Exception:
                 logger.exception(
@@ -310,6 +451,8 @@ async def _process_queue(worker_index: int) -> None:
                 )
         finally:
             await _release_automation_heartbeat(job.job_id)
+            if terminal:
+                await delete_job_payload(job.job_id)
             if job.drive_file is not None and job.media_path is not None:
                 for path in (
                     job.media_path,
@@ -322,4 +465,5 @@ async def _process_queue(worker_index: int) -> None:
                             'Could not remove temporary Drive file for job %s.',
                             job.job_id,
                         )
+            _active_jobs.discard(job.job_id)
             _queue.task_done()

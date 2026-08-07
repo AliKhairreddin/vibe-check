@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import base64, io, json, os, re
+import asyncio, base64, io, json, os, re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ DEFAULT_VISION_MODEL = 'minimax/minimax-m3'
 DEFAULT_MAX_FRAMES = 12
 DEFAULT_MAX_IMAGE_EDGE = 1024
 DEFAULT_JPEG_QUALITY = 75
+DEFAULT_REQUEST_DEADLINE_SECONDS = 180
 
 VISION_SYSTEM_PROMPT = """You are a visual evidence extractor for ad creative review.
 Return strict JSON only. Do not make the final compliance decision.
@@ -247,11 +248,18 @@ async def observe_frames_with_openrouter(frames_dir:Path, frame_records:list[dic
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            response=await client.post(
-                OPENROUTER_CHAT_COMPLETIONS_URL,
-                headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},
-                json=payload,
-            )
+            async with asyncio.timeout(max(30, min(
+                _int_env(
+                    'OPENROUTER_REQUEST_TIMEOUT_SECONDS',
+                    DEFAULT_REQUEST_DEADLINE_SECONDS,
+                ),
+                10 * 60,
+            ))):
+                response=await client.post(
+                    OPENROUTER_CHAT_COMPLETIONS_URL,
+                    headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},
+                    json=payload,
+                )
             response.raise_for_status()
             text=response.json()['choices'][0]['message']['content']
         observations, model_limitations=_parse_visual_response(text, included)
@@ -262,6 +270,14 @@ async def observe_frames_with_openrouter(frames_dir:Path, frame_records:list[dic
             'observations':[],
             'frame_count':len(included),
             'limitations':limitations + [f'OpenRouter vision review failed with HTTP {exc.response.status_code}.'],
+        }
+    except TimeoutError:
+        return {
+            'source':'unavailable',
+            'model':model,
+            'observations':[],
+            'frame_count':len(included),
+            'limitations':limitations + ['OpenRouter vision review exceeded the hard request deadline.'],
         }
     except (httpx.HTTPError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return {

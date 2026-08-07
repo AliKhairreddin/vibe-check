@@ -5,6 +5,18 @@ import { getConvexSize, v, type Value } from "convex/values";
 type ResultStatus = "green" | "yellow" | "orange" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
 const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
+const INTERRUPTIBLE_STATUSES = [
+  "queued",
+  "downloading_from_drive",
+  "processing_video",
+  "processing_image",
+  "extracting_audio",
+  "extracting_frames",
+  "running_ocr",
+  "analyzing_visuals",
+  "preparing_transcript",
+  "reviewing_with_llm",
+];
 
 type OfferResultEntry = {
   internalDisposition: string | null;
@@ -845,6 +857,117 @@ export const listRecent = query({
       .order("desc")
       .take(limit);
     return reviews.map(publicReview);
+  },
+});
+
+export const listInterrupted = query({
+  args: {
+    secret: v.string(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const limit = Math.max(1, Math.min(args.limit, 500));
+    const reviews = [];
+    for (const status of INTERRUPTIBLE_STATUSES) {
+      const remaining = limit - reviews.length;
+      if (remaining <= 0) break;
+      const matches = await ctx.db
+        .query("reviews")
+        .withIndex("by_status_deleted_automation_updated", (query) =>
+          query
+            .eq("status", status)
+            .eq("deletedAt", undefined)
+            .eq("automationRunId", undefined)
+        )
+        .order("asc")
+        .take(remaining);
+      reviews.push(...matches);
+    }
+    return reviews.map((review) => ({
+      batchId: review.batchId,
+      batchItemId: review.batchItemId,
+      fileName: review.fileName,
+      fileSize: review.fileSize,
+      hasAdCopy: review.hasAdCopy,
+      jobId: review.jobId,
+      offerIds: review.offerIds,
+      sourceFileId: review.sourceFileId,
+      sourceKind: review.sourceKind,
+      sourceUrl: review.sourceUrl,
+      status: review.status,
+      updatedAt: review.updatedAt,
+    }));
+  },
+});
+
+export const failInterrupted = mutation({
+  args: {
+    secret: v.string(),
+    jobIds: v.array(v.string()),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const now = Date.now();
+    const failedJobIds: string[] = [];
+    const batchItems = new Map<string, Map<string, string>>();
+    for (const jobId of [...new Set(args.jobIds)].slice(0, 100)) {
+      const review = await ctx.db
+        .query("reviews")
+        .withIndex("by_job_id", (query) => query.eq("jobId", jobId))
+        .unique();
+      if (
+        !review
+        || review.deletedAt !== undefined
+        || review.automationRunId !== undefined
+        || TERMINAL_BATCH_STATUSES.has(review.status)
+      ) {
+        continue;
+      }
+      const updated = {
+        ...review,
+        message: args.message,
+        progress: 100,
+        reportReady: false,
+        status: "failed",
+        updatedAt: now,
+      };
+      await ctx.db.patch(review._id, {
+        message: updated.message,
+        progress: updated.progress,
+        reportReady: updated.reportReady,
+        status: updated.status,
+        updatedAt: updated.updatedAt,
+      });
+      await syncReviewOfferStats(ctx, updated, now);
+      failedJobIds.push(jobId);
+      if (review.batchId && review.batchItemId) {
+        const items = batchItems.get(review.batchId) ?? new Map<string, string>();
+        items.set(review.batchItemId, jobId);
+        batchItems.set(review.batchId, items);
+      }
+    }
+
+    for (const [batchId, failedItems] of batchItems) {
+      const batch = await ctx.db
+        .query("reviewBatches")
+        .withIndex("by_batch_id", (query) => query.eq("batchId", batchId))
+        .unique();
+      if (!batch) continue;
+      const items = batch.items.map((item) => failedItems.has(item.itemId) ? {
+        ...item,
+        jobId: failedItems.get(item.itemId),
+        message: args.message,
+        status: "failed",
+      } : item);
+      await ctx.db.patch(batch._id, {
+        items,
+        notificationReady: items.every((item) => TERMINAL_BATCH_STATUSES.has(item.status)),
+        updatedAt: now,
+      });
+    }
+    return { failedJobIds };
   },
 });
 

@@ -14,7 +14,8 @@
       "class_name": "ReviewBackend",
       "image": "./Dockerfile",
       "instance_type": "standard-1",
-      "max_instances": 2
+      "max_instances": 2,
+      "rollout_active_grace_period": 300
     }
   ],
   "durable_objects": {
@@ -56,9 +57,11 @@
     "GOOGLE_AD_COPY_SHEET_URL": "https://docs.google.com/spreadsheets/d/1p3z7ubxNH8yOh_58CD12XOH6XEN80toI7fvkEgnA29o/edit?usp=drive_link",
     "GOOGLE_DRIVE_FOLDER_ID": "16zD3i1-QnFcrfxXECtjf7T0zbUfzcCAd",
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
+    "JOB_PROCESSING_TIMEOUT_SECONDS": "1800",
     "JOB_WORKER_CONCURRENCY": "4",
     "MAX_UPLOAD_MB": "400",
     "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash",
+    "OPENROUTER_REQUEST_TIMEOUT_SECONDS": "180",
     "OPENROUTER_VISION_ENABLED": "true",
     "OPENROUTER_VISION_MODEL": "minimax/minimax-m3",
     "OPENROUTER_VISION_MAX_FRAMES": "12",

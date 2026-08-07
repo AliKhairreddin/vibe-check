@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, re
+import asyncio, json, os, re
 from typing import Any
 
 import httpx
@@ -120,10 +120,22 @@ REVIEW_RESPONSE_SCHEMA = {
     },
 }
 MAX_REVIEW_ATTEMPTS = 2
+DEFAULT_REQUEST_DEADLINE_SECONDS = 180
 
 
 class ComplianceResponseError(ValueError):
     pass
+
+
+def _request_deadline_seconds() -> int:
+    try:
+        configured = int(os.getenv(
+            'OPENROUTER_REQUEST_TIMEOUT_SECONDS',
+            str(DEFAULT_REQUEST_DEADLINE_SECONDS),
+        ))
+    except ValueError:
+        configured = DEFAULT_REQUEST_DEADLINE_SECONDS
+    return max(30, min(configured, 10 * 60))
 
 
 def _load_json(text: str) -> Any:
@@ -528,14 +540,15 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                 'plugins':[{'id':'response-healing'}],
                 'temperature':0,
             }
-            response=await client.post(
-                'https://openrouter.ai/api/v1/chat/completions',
-                headers={
-                    'Authorization':f'Bearer {key}',
-                    'Content-Type':'application/json',
-                },
-                json=payload,
-            )
+            async with asyncio.timeout(_request_deadline_seconds()):
+                response=await client.post(
+                    'https://openrouter.ai/api/v1/chat/completions',
+                    headers={
+                        'Authorization':f'Bearer {key}',
+                        'Content-Type':'application/json',
+                    },
+                    json=payload,
+                )
             response.raise_for_status()
             content=response.json()['choices'][0]['message']['content']
             if not isinstance(content, str):
