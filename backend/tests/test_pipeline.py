@@ -2338,6 +2338,48 @@ async def test_recovery_manifests_load_concurrently(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_recovery_manifest_batch_has_one_bounded_deadline(monkeypatch):
+    cancelled=0
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url):
+            nonlocal cancelled
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled += 1
+                raise
+
+    monkeypatch.setattr(
+        review_recovery,
+        '_list_payload_rows_sync',
+        lambda job_ids: [
+            {'jobId':job_id, 'manifestUrl':f'https://example.test/{job_id}'}
+            for job_id in job_ids
+        ],
+    )
+    monkeypatch.setattr(review_recovery.httpx, 'AsyncClient', FakeClient)
+    monkeypatch.setattr(review_recovery, 'MANIFEST_BATCH_DEADLINE_SECONDS', 0.01)
+
+    recovered=await asyncio.wait_for(
+        review_recovery.load_recovery_payloads([f'job-{index}' for index in range(12)]),
+        timeout=0.5,
+    )
+
+    assert recovered == {}
+    assert cancelled == review_recovery.MANIFEST_DOWNLOAD_CONCURRENCY
+
+
+@pytest.mark.anyio
 async def test_startup_recovery_requeues_durable_jobs_and_fails_missing_jobs(
     tmp_path,
     monkeypatch,

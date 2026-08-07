@@ -23,6 +23,7 @@ DOWNLOAD_TIMEOUT = httpx.Timeout(300.0, connect=20.0)
 MANIFEST_DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 MANIFEST_DOWNLOAD_CONCURRENCY = 8
 MANIFEST_DOWNLOAD_DEADLINE_SECONDS = 35
+MANIFEST_BATCH_DEADLINE_SECONDS = 35
 INTERRUPTED_MESSAGE = (
     'Review processing was interrupted and its durable recovery copy is unavailable. '
     'Please re-upload this creative to retry.'
@@ -384,10 +385,27 @@ async def load_recovery_payloads(
             max_keepalive_connections=MANIFEST_DOWNLOAD_CONCURRENCY,
         ),
     ) as client:
-        loaded = await asyncio.gather(*(
-            _load_payload_row(client, semaphore, row)
+        tasks = [
+            asyncio.create_task(_load_payload_row(client, semaphore, row))
             for row in rows
-        ))
+        ]
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=MANIFEST_BATCH_DEADLINE_SECONDS,
+        )
+        if pending:
+            logger.warning(
+                'Durable recovery manifest batch deadline expired with %s request(s) pending.',
+                len(pending),
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        loaded = [
+            task.result()
+            for task in done
+            if not task.cancelled()
+        ]
     return {
         payload.job_id: payload
         for payload in loaded
