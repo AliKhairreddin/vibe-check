@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
+import { Menu } from '@base-ui/react/menu';
 import { createRoot } from 'react-dom/client';
 import {
   QueryClient,
@@ -27,6 +28,7 @@ import {
 import {
   AlertCircle,
   CalendarClock,
+  ChevronDown,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -95,6 +97,7 @@ import {
   OfferResultsHeader,
   ReviewOfferResultsRail,
   reviewOutcomeForOffer,
+  type OfferColumn,
 } from '@/components/offer-outcomes';
 import {
   deleteReview,
@@ -1723,6 +1726,63 @@ function ProgressPage() {
   );
 }
 
+function PdfDownloadMenu({
+  baseHref,
+  offers,
+  size = 'default',
+}: {
+  baseHref: string;
+  offers: OfferColumn[];
+  size?: 'default' | 'sm';
+}) {
+  return (
+    <Menu.Root>
+      <Menu.Trigger className={buttonVariants({ size })}>
+        <Download data-icon="inline-start" />
+        Download PDF
+        <ChevronDown data-icon="inline-end" />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner sideOffset={6} align="end" className="z-50 outline-none">
+          <Menu.Popup className="min-w-64 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
+            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+              Choose PDF audience
+            </div>
+            <Menu.LinkItem
+              href={baseHref}
+              download
+              closeOnClick
+              className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+            >
+              <Download className="size-4 text-muted-foreground" />
+              <span className="grid">
+                <span className="font-medium">All offers</span>
+                <span className="text-xs text-muted-foreground">Unified internal report</span>
+              </span>
+            </Menu.LinkItem>
+            <div className="my-1 h-px bg-border" />
+            {offers.map((offer) => (
+              <Menu.LinkItem
+                key={offer.offer_id}
+                href={`${baseHref}?offer_id=${encodeURIComponent(offer.offer_id)}`}
+                download
+                closeOnClick
+                className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+              >
+                <Download className="size-4 text-muted-foreground" />
+                <span className="grid">
+                  <span className="font-medium">{offer.offer_name} only</span>
+                  <span className="text-xs text-muted-foreground">Partner-safe report</span>
+                </span>
+              </Menu.LinkItem>
+            ))}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
 function ReportPage() {
   const { jobId } = useParams({ from: '/reviews/$jobId/report' });
   const [selectedOfferId, setSelectedOfferId] = useState('');
@@ -1974,14 +2034,13 @@ function ReportPage() {
             </div>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
-            <a
-              className={cn(buttonVariants({ variant: 'default' }), 'w-fit')}
-              href={`/api/reviews/${jobId}/report.pdf`}
-              download
-            >
-              <Download data-icon="inline-start" />
-              Download PDF
-            </a>
+            <PdfDownloadMenu
+              baseHref={`/api/reviews/${jobId}/report.pdf`}
+              offers={detailedResults.map((result) => ({
+                offer_id: result.offer_id,
+                offer_name: result.offer_name,
+              }))}
+            />
             <a
               className={cn(buttonVariants({ variant: 'outline' }), 'w-fit')}
               href={`/api/reviews/${jobId}/report.json`}
@@ -2142,6 +2201,9 @@ function BatchPage() {
     offerCatalogQuery.data ?? [],
     query.data.items.map((item) => item.offer_outcomes)
   );
+  const pdfOffers = offerColumns.filter((offer) => query.data.items.some((item) =>
+    findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
+  ));
 
   return (
     <Card>
@@ -2155,14 +2217,11 @@ function BatchPage() {
         <CardAction>
           <div className="flex flex-wrap justify-end gap-2">
             {batchComplete ? (
-              <a
-                className={buttonVariants({ size: 'sm' })}
-                href={`/api/batches/${query.data.batch_id}/report.pdf`}
-                download
-              >
-                <Download data-icon="inline-start" />
-                Download batch PDF
-              </a>
+              <PdfDownloadMenu
+                baseHref={`/api/batches/${query.data.batch_id}/report.pdf`}
+                offers={pdfOffers}
+                size="sm"
+              />
             ) : null}
             <Link to="/reviews/new" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
               Back to workspace

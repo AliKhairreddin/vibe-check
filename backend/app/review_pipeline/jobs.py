@@ -9,7 +9,7 @@ from .automation_storage import (
     release_review_automation_claim,
 )
 from .storage import get_status, job_dir, set_report, set_status, write_json
-from .pdf_reports import build_and_store_review_pdf
+from .pdf_reports import build_and_store_review_pdf_variants
 from .live_scan_storage import finish_live_review
 from .telegram import (
     finish_batch_item_and_notify,
@@ -322,7 +322,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         set_report(job_id, report_json, meta.automation_run_id)
         try:
             await anyio.to_thread.run_sync(
-                lambda: build_and_store_review_pdf(
+                lambda: build_and_store_review_pdf_variants(
                     job_id,
                     get_status(job_id),
                     report_json,

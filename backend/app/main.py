@@ -1013,13 +1013,18 @@ def pdf_artifact_response(artifact:PdfArtifact):
 
 
 @app.get('/api/batches/{batch_id}/report.pdf')
-def download_batch_pdf(batch_id:str):
+def download_batch_pdf(batch_id:str, offer_id:str|None=None):
     if not BATCH_ID_PATTERN.fullmatch(batch_id):
         raise HTTPException(404, 'Review batch not found')
+    normalized_offer_id=offer_id.strip().lower() if offer_id else None
+    if normalized_offer_id and not OFFER_ID_PATTERN.fullmatch(normalized_offer_id):
+        raise HTTPException(404, 'Offer report not found')
     try:
-        return pdf_artifact_response(ensure_batch_pdf(batch_id))
+        return pdf_artifact_response(ensure_batch_pdf(batch_id, normalized_offer_id))
     except FileNotFoundError:
         raise HTTPException(404, 'Review batch not found') from None
+    except KeyError:
+        raise HTTPException(404, 'Offer report not found') from None
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
 
@@ -1159,13 +1164,18 @@ def download_report(job_id:str):
 
 
 @app.get('/api/reviews/{job_id}/report.pdf')
-def download_pdf_report(job_id:str):
+def download_pdf_report(job_id:str, offer_id:str|None=None):
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review job not found')
+    normalized_offer_id=offer_id.strip().lower() if offer_id else None
+    if normalized_offer_id and not OFFER_ID_PATTERN.fullmatch(normalized_offer_id):
+        raise HTTPException(404, 'Offer report not found')
     try:
-        return pdf_artifact_response(ensure_review_pdf(job_id))
+        return pdf_artifact_response(ensure_review_pdf(job_id, normalized_offer_id))
     except FileNotFoundError:
         raise HTTPException(404, 'Report not ready') from None
+    except KeyError:
+        raise HTTPException(404, 'Offer report not found') from None
 
 @app.get('/api/reviews/{job_id}/frames/{filename}')
 def frame(job_id:str, filename:str):

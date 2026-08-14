@@ -31,6 +31,7 @@ from app.review_pipeline.media import detect_media_kind, prepare_image_frame
 from app.review_pipeline.pdf_reports import (
     build_and_store_batch_pdf,
     build_and_store_review_pdf,
+    build_and_store_review_pdf_variants,
     generate_review_report_pdf,
     nearest_frame,
     timestamp_label,
@@ -140,6 +141,69 @@ def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
     assert 'Transcript excerpt' in text
     assert 'Call now because you will always save fifty percent.' in text
     assert 'The absolute savings claim is not substantiated.' in text
+
+
+def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    record = JobRecord(
+        job_id='c' * 32,
+        file_name='Partner creative.mp4',
+        offer_ids=['acp', 'kissterra', 'lead-economy', 'smart-financial'],
+    )
+    report = {
+        'schema_version': 2,
+        'primary_offer_id': 'acp',
+        'offer_results': [
+            {'offer_id': 'acp', 'offer_name': 'ACP', 'overall_status': 'green', 'summary': 'ACP summary.', 'findings': []},
+            {'offer_id': 'kissterra', 'offer_name': 'Kissterra', 'overall_status': 'orange', 'summary': 'Kissterra summary.', 'findings': []},
+            {'offer_id': 'lead-economy', 'offer_name': 'Lead Economy', 'overall_status': 'green', 'summary': 'Lead Economy summary.', 'findings': []},
+            {'offer_id': 'smart-financial', 'offer_name': 'Smart Financial', 'overall_status': 'red', 'summary': 'Smart Financial summary.', 'findings': []},
+        ],
+    }
+
+    artifacts = build_and_store_review_pdf_variants(record.job_id, record, report)
+    lead_artifact = next(artifact for artifact in artifacts if 'Lead Economy' in artifact.filename)
+    assert lead_artifact.path is not None
+    text = '\n'.join(page.extract_text() or '' for page in PdfReader(lead_artifact.path).pages)
+    assert 'Lead Economy' in text
+    assert 'ACP' not in text
+    assert 'Kissterra' not in text
+    assert 'Smart Financial' not in text
+
+
+def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    batch = ReviewBatch(
+        batch_id='d' * 32,
+        created_at=1_786_579_200_000,
+        updated_at=1_786_579_200_000,
+        expected_count=1,
+        source_label='Partner uploads',
+        items=[ReviewBatchItem(
+            item_id='e' * 32,
+            file_name='Upload failed before review.mp4',
+            media_kind='video',
+            status='upload_failed',
+            message='Upload failed',
+            offer_outcomes=[
+                OfferOutcome(offer_id='acp', offer_name='ACP', evaluation_state='evaluated', overall_status='orange'),
+                OfferOutcome(offer_id='lead-economy', offer_name='Lead Economy', evaluation_state='evaluated', overall_status='green'),
+                OfferOutcome(offer_id='smart-financial', offer_name='Smart Financial', evaluation_state='evaluated', overall_status='red'),
+            ],
+        )],
+        notification_status='sent',
+    )
+
+    artifact = build_and_store_batch_pdf(batch, 'lead-economy')
+    assert artifact.path is not None
+    text = '\n'.join(page.extract_text() or '' for page in PdfReader(artifact.path).pages)
+    assert 'Lead Economy' in text
+    assert 'ACP' not in text
+    assert 'Smart Financial' not in text
 
 
 def test_batch_pdf_combines_summary_and_individual_reports(tmp_path, monkeypatch):

@@ -104,18 +104,32 @@ class PdfArtifact:
     url: str | None = None
 
 
-def review_pdf_path(job_id: str) -> Path:
-    return storage.job_dir(job_id) / 'report.pdf'
+def review_pdf_path(job_id: str, offer_id: str | None = None) -> Path:
+    suffix = f'-{offer_id}' if offer_id else ''
+    return storage.job_dir(job_id) / f'report{suffix}.pdf'
 
 
-def batch_pdf_path(batch_id: str) -> Path:
-    path = storage.JOB_DATA_DIR / 'batches' / f'{batch_id}-report.pdf'
+def batch_pdf_path(batch_id: str, offer_id: str | None = None) -> Path:
+    suffix = f'-{offer_id}' if offer_id else ''
+    path = storage.JOB_DATA_DIR / 'batches' / f'{batch_id}-report{suffix}.pdf'
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _artifact_path(owner_type: ArtifactOwnerType, owner_id: str) -> Path:
-    return review_pdf_path(owner_id) if owner_type == 'review' else batch_pdf_path(owner_id)
+def _artifact_owner_id(owner_id: str, offer_id: str | None) -> str:
+    return f'{owner_id}:offer:{offer_id}' if offer_id else owner_id
+
+
+def _artifact_path(
+    owner_type: ArtifactOwnerType,
+    owner_id: str,
+    offer_id: str | None,
+) -> Path:
+    return (
+        review_pdf_path(owner_id, offer_id)
+        if owner_type == 'review'
+        else batch_pdf_path(owner_id, offer_id)
+    )
 
 
 def _safe_filename(value: str, fallback: str) -> str:
@@ -125,32 +139,43 @@ def _safe_filename(value: str, fallback: str) -> str:
     return f'{(stem or fallback)[:120]}-report.pdf'
 
 
-def _review_filename(record: JobRecord) -> str:
-    return _safe_filename(record.file_name, record.job_id)
+def _review_filename(record: JobRecord, offer_name: str | None = None) -> str:
+    base_name = Path(record.file_name).stem or record.file_name
+    value = f'{base_name} - {offer_name}' if offer_name else base_name
+    return _safe_filename(value, record.job_id)
 
 
-def _batch_filename(batch: ReviewBatch) -> str:
+def _batch_filename(batch: ReviewBatch, offer_name: str | None = None) -> str:
     label = batch.source_label or f'batch-{batch.batch_id[:8]}'
+    if offer_name:
+        label = f'{label} - {offer_name}'
     return _safe_filename(label, f'batch-{batch.batch_id[:8]}')
 
 
-def get_pdf_artifact(owner_type: ArtifactOwnerType, owner_id: str) -> PdfArtifact | None:
-    local_path = _artifact_path(owner_type, owner_id)
+def get_pdf_artifact(
+    owner_type: ArtifactOwnerType,
+    owner_id: str,
+    offer_id: str | None = None,
+) -> PdfArtifact | None:
+    local_path = _artifact_path(owner_type, owner_id, offer_id)
+    artifact_owner_id = _artifact_owner_id(owner_id, offer_id)
     if local_path.exists() and local_path.stat().st_size:
         filename = local_path.name
         try:
-            filename = (
-                _review_filename(storage.get_status(owner_id))
-                if owner_type == 'review'
-                else _batch_filename(storage.get_batch(owner_id))
-            )
+            if owner_type == 'review':
+                record = storage.get_status(owner_id)
+                offer_name = _offer_name(storage.get_report(owner_id) or {}, offer_id)
+                filename = _review_filename(record, offer_name)
+            else:
+                batch = storage.get_batch(owner_id)
+                filename = _batch_filename(batch, _batch_offer_name(batch, offer_id))
         except (FileNotFoundError, ValueError):
             pass
         return PdfArtifact(filename=filename, path=local_path)
     remote = storage._convex_call(
         'query',
         'reportArtifacts:get',
-        {'ownerType': owner_type, 'ownerId': owner_id},
+        {'ownerType': owner_type, 'ownerId': artifact_owner_id},
     )
     if not isinstance(remote, dict) or not remote.get('url'):
         return None
@@ -204,6 +229,7 @@ def persist_pdf_artifact(
     owner_id: str,
     path: Path,
     filename: str,
+    offer_id: str | None = None,
 ) -> None:
     if not storage.convex_enabled():
         return
@@ -216,7 +242,7 @@ def persist_pdf_artifact(
             {
                 'contentType': PDF_CONTENT_TYPE,
                 'filename': filename,
-                'ownerId': owner_id,
+                'ownerId': _artifact_owner_id(owner_id, offer_id),
                 'ownerType': owner_type,
                 'storageId': storage_id,
             },
@@ -375,6 +401,31 @@ def transcript_excerpt(transcript: dict[str, Any] | None, timestamp: Any) -> str
 def _offer_results(report: dict[str, Any]) -> list[dict[str, Any]]:
     values = report.get('offer_results')
     return [value for value in values if isinstance(value, dict)] if isinstance(values, list) and values else [report]
+
+
+def _offer_result(report: dict[str, Any], offer_id: str) -> dict[str, Any]:
+    result = next((
+        value
+        for value in _offer_results(report)
+        if str(value.get('offer_id') or '').strip().lower() == offer_id
+    ), None)
+    if result is None:
+        raise KeyError(offer_id)
+    return result
+
+
+def _offer_name(report: dict[str, Any], offer_id: str | None) -> str | None:
+    if not offer_id:
+        return None
+    try:
+        result = _offer_result(report, offer_id)
+    except KeyError:
+        return offer_id
+    return _plain(result.get('offer_name') or offer_id)
+
+
+def _report_for_offer(report: dict[str, Any], offer_id: str | None) -> dict[str, Any]:
+    return _offer_result(report, offer_id) if offer_id else report
 
 
 def _all_findings(report: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
@@ -714,56 +765,122 @@ def build_and_store_review_pdf(
     frames: Sequence[dict[str, Any]] = (),
     transcript: dict[str, Any] | None = None,
     ad_copy: str = '',
+    offer_id: str | None = None,
 ) -> PdfArtifact:
-    path = review_pdf_path(job_id)
-    filename = _review_filename(record)
+    selected_report = _report_for_offer(report, offer_id)
+    offer_name = _offer_name(report, offer_id)
+    path = review_pdf_path(job_id, offer_id)
+    filename = _review_filename(record, offer_name)
     generate_review_report_pdf(
         path,
+        record,
+        selected_report,
+        frames_dir=frames_dir,
+        frames=frames,
+        transcript=transcript,
+        ad_copy=ad_copy,
+    )
+    persist_pdf_artifact('review', job_id, path, filename, offer_id)
+    return PdfArtifact(filename=filename, path=path)
+
+
+def build_and_store_review_pdf_variants(
+    job_id: str,
+    record: JobRecord,
+    report: dict[str, Any],
+    *,
+    frames_dir: Path | None = None,
+    frames: Sequence[dict[str, Any]] = (),
+    transcript: dict[str, Any] | None = None,
+    ad_copy: str = '',
+) -> list[PdfArtifact]:
+    artifacts = [build_and_store_review_pdf(
+        job_id,
         record,
         report,
         frames_dir=frames_dir,
         frames=frames,
         transcript=transcript,
         ad_copy=ad_copy,
-    )
-    persist_pdf_artifact('review', job_id, path, filename)
-    return PdfArtifact(filename=filename, path=path)
+    )]
+    for offer in _offer_results(report):
+        offer_id = str(offer.get('offer_id') or '').strip().lower()
+        if not offer_id:
+            continue
+        artifacts.append(build_and_store_review_pdf(
+            job_id,
+            record,
+            report,
+            frames_dir=frames_dir,
+            frames=frames,
+            transcript=transcript,
+            ad_copy=ad_copy,
+            offer_id=offer_id,
+        ))
+    return artifacts
 
 
-def ensure_review_pdf(job_id: str) -> PdfArtifact:
+def ensure_review_pdf(job_id: str, offer_id: str | None = None) -> PdfArtifact:
     record = storage.get_status(job_id)
-    artifact = get_pdf_artifact('review', job_id)
+    if offer_id and offer_id not in record.offer_ids:
+        raise KeyError(offer_id)
+    artifact = get_pdf_artifact('review', job_id, offer_id)
     if artifact is not None:
         return artifact
     report = storage.get_report(job_id)
     if report is None:
         raise FileNotFoundError(job_id)
-    return build_and_store_review_pdf(job_id, record, report)
+    return build_and_store_review_pdf(job_id, record, report, offer_id=offer_id)
 
 
-def _batch_offer_summary(item: Any) -> str:
+def _batch_offer_name(batch: ReviewBatch, offer_id: str | None) -> str | None:
+    if not offer_id:
+        return None
+    for item in batch.items:
+        for outcome in item.offer_outcomes:
+            if outcome.offer_id == offer_id:
+                return outcome.offer_name
+    return offer_id
+
+
+def _batch_offer_status(item: Any, offer_id: str | None) -> str | None:
+    if not offer_id:
+        return getattr(item, 'result', None)
+    for outcome in getattr(item, 'offer_outcomes', None) or []:
+        if outcome.offer_id == offer_id and outcome.evaluation_state == 'evaluated':
+            return outcome.overall_status
+    return None
+
+
+def _batch_offer_summary(item: Any, offer_id: str | None = None) -> str:
     outcomes = getattr(item, 'offer_outcomes', None) or []
     values = []
     for outcome in outcomes:
+        if offer_id and outcome.offer_id != offer_id:
+            continue
         if outcome.evaluation_state != 'evaluated':
             continue
         status = outcome.overall_status or 'not rated'
         values.append(f'{outcome.offer_name}: {status.title()}')
     if values:
         return ' | '.join(values)
+    if offer_id:
+        return 'Not evaluated'
     return str(getattr(item, 'result', None) or getattr(item, 'status', 'not available')).replace('_', ' ').title()
 
 
-def _batch_cover_pdf(batch: ReviewBatch) -> bytes:
+def _batch_cover_pdf(batch: ReviewBatch, offer_id: str | None = None) -> bytes:
     buffer = io.BytesIO()
     pdf = NumberedCanvas(buffer, pagesize=PAGE_SIZE, pageCompression=1)
-    pdf.setTitle(f'Batch {batch.batch_id} - Compliance Evidence Report')
+    offer_name = _batch_offer_name(batch, offer_id)
+    title_prefix = f'{offer_name} ' if offer_name else ''
+    pdf.setTitle(f'{title_prefix}Batch {batch.batch_id} - Compliance Evidence Report')
     rows_per_page = 11
     chunks = [batch.items[index:index + rows_per_page] for index in range(0, len(batch.items), rows_per_page)] or [[]]
     for page_index, items in enumerate(chunks, start=1):
         _header(
             pdf,
-            'Batch Compliance Evidence Report',
+            f'{title_prefix}Batch Compliance Evidence Report',
             f'Batch {batch.batch_id} | Uploaded {_format_date(batch.created_at)}',
         )
         pdf.setFillColor(colors.HexColor('#3d72b4'))
@@ -783,7 +900,7 @@ def _batch_cover_pdf(batch: ReviewBatch) -> bytes:
         pdf.setFont(FONT_BOLD, 8)
         pdf.drawString(46, table_top - 17, 'Creative')
         pdf.drawString(370, table_top - 17, 'Status')
-        pdf.drawString(468, table_top - 17, 'Offer outcomes')
+        pdf.drawString(468, table_top - 17, 'Offer outcome' if offer_id else 'Offer outcomes')
         y = table_top - 26
         for item in items:
             y -= 38
@@ -795,13 +912,14 @@ def _batch_cover_pdf(batch: ReviewBatch) -> bytes:
             pdf.setFillColor(colors.HexColor('#667085'))
             pdf.setFont(FONT_REGULAR, 7)
             pdf.drawString(46, y + 9, _plain(item.media_kind).replace('_', ' ').title())
-            status_color = _status_color(item.result) if item.status == 'complete' else colors.HexColor('#64748b')
+            selected_status = _batch_offer_status(item, offer_id)
+            status_color = _status_color(selected_status) if item.status == 'complete' else colors.HexColor('#64748b')
             pdf.setFillColor(status_color)
             pdf.setFont(FONT_BOLD, 8)
             pdf.drawString(370, y + 15, _plain(item.status).replace('_', ' ').title())
             pdf.setFillColor(colors.HexColor('#263242'))
             pdf.setFont(FONT_REGULAR, 7)
-            pdf.drawString(468, y + 15, _plain(_batch_offer_summary(item))[:70])
+            pdf.drawString(468, y + 15, _plain(_batch_offer_summary(item, offer_id))[:70])
         pdf.setFillColor(colors.HexColor('#667085'))
         pdf.setFont(FONT_REGULAR, 8)
         pdf.drawString(40, 38, f'Batch summary page {page_index} of {len(chunks)}. Individual creative reports follow.')
@@ -810,37 +928,51 @@ def _batch_cover_pdf(batch: ReviewBatch) -> bytes:
     return buffer.getvalue()
 
 
-def build_and_store_batch_pdf(batch: ReviewBatch) -> PdfArtifact:
+def build_and_store_batch_pdf(
+    batch: ReviewBatch,
+    offer_id: str | None = None,
+) -> PdfArtifact:
     if not all(item.status in TERMINAL_BATCH_STATUSES for item in batch.items):
         raise ValueError('Batch PDF is available after every item reaches a terminal state.')
+    if offer_id and not any(
+        outcome.offer_id == offer_id and outcome.evaluation_state == 'evaluated'
+        for item in batch.items
+        for outcome in item.offer_outcomes
+    ):
+        raise KeyError(offer_id)
     writer = PdfWriter()
-    cover_bytes = _batch_cover_pdf(batch)
+    cover_bytes = _batch_cover_pdf(batch, offer_id)
     for page in PdfReader(io.BytesIO(cover_bytes)).pages:
         writer.add_page(page)
     for item in batch.items:
         if item.status != 'complete' or not item.job_id:
             continue
         try:
-            artifact = ensure_review_pdf(item.job_id)
+            artifact = ensure_review_pdf(item.job_id, offer_id)
             report_bytes = read_pdf_artifact(artifact)
             for page in PdfReader(io.BytesIO(report_bytes)).pages:
                 writer.add_page(page)
         except Exception:
             logger.exception('Could not include review PDF for batch item %s.', item.item_id)
-    path = batch_pdf_path(batch.batch_id)
+    path = batch_pdf_path(batch.batch_id, offer_id)
     temporary = path.with_suffix('.tmp.pdf')
     with temporary.open('wb') as output:
         writer.write(output)
     os.replace(temporary, path)
-    filename = _batch_filename(batch)
-    persist_pdf_artifact('batch', batch.batch_id, path, filename)
+    filename = _batch_filename(batch, _batch_offer_name(batch, offer_id))
+    persist_pdf_artifact('batch', batch.batch_id, path, filename, offer_id)
     return PdfArtifact(filename=filename, path=path)
 
 
-def ensure_batch_pdf(batch_id: str, *, force: bool = False) -> PdfArtifact:
+def ensure_batch_pdf(
+    batch_id: str,
+    offer_id: str | None = None,
+    *,
+    force: bool = False,
+) -> PdfArtifact:
     if not force:
-        artifact = get_pdf_artifact('batch', batch_id)
+        artifact = get_pdf_artifact('batch', batch_id, offer_id)
         if artifact is not None:
             return artifact
     batch = storage.get_batch(batch_id)
-    return build_and_store_batch_pdf(batch)
+    return build_and_store_batch_pdf(batch, offer_id)
