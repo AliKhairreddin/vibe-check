@@ -15,6 +15,15 @@ export default defineSchema({
     mediaStorageId: v.optional(v.id("_storage")),
     updatedAt: v.number(),
   }).index("by_job_id", ["jobId"]),
+  reportArtifacts: defineTable({
+    contentType: v.string(),
+    createdAt: v.number(),
+    filename: v.string(),
+    ownerId: v.string(),
+    ownerType: v.union(v.literal("review"), v.literal("batch")),
+    storageId: v.id("_storage"),
+    updatedAt: v.number(),
+  }).index("by_owner_type_and_owner_id", ["ownerType", "ownerId"]),
   reviewAutomations: defineTable({
     automationId: v.string(),
     createdAt: v.number(),

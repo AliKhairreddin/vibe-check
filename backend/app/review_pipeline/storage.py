@@ -982,4 +982,15 @@ def delete_review(job_id:str)->DeletedReview:
     remote=_convex_call('mutation', 'reviews:softDelete', {'jobId':job_id})
     deleted_at=int(remote.get('deleted_at')) if isinstance(remote, dict) else now_ms()
     write_json(JOB_DATA_DIR/job_id/'deleted.json', {'job_id':job_id, 'deleted_at':deleted_at})
+    (JOB_DATA_DIR/job_id/'report.pdf').unlink(missing_ok=True)
+    if convex_enabled():
+        try:
+            _convex_call(
+                'mutation',
+                'reportArtifacts:remove',
+                {'ownerType':'review', 'ownerId':job_id},
+            )
+        except Exception:
+            # The review remains deleted even if artifact cleanup must be retried later.
+            pass
     return DeletedReview(job_id=job_id, deleted_at=deleted_at)

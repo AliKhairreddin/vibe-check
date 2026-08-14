@@ -8,7 +8,8 @@ from .automation_storage import (
     record_review_automation_job_result,
     release_review_automation_claim,
 )
-from .storage import job_dir, set_report, set_status, write_json
+from .storage import get_status, job_dir, set_report, set_status, write_json
+from .pdf_reports import build_and_store_review_pdf
 from .live_scan_storage import finish_live_review
 from .telegram import (
     finish_batch_item_and_notify,
@@ -319,6 +320,20 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         )
         report_json=report.model_dump(mode='json')
         set_report(job_id, report_json, meta.automation_run_id)
+        try:
+            await anyio.to_thread.run_sync(
+                lambda: build_and_store_review_pdf(
+                    job_id,
+                    get_status(job_id),
+                    report_json,
+                    frames_dir=jd/'frames',
+                    frames=frames,
+                    transcript=transcript,
+                    ad_copy=meta.ad_copy,
+                )
+            )
+        except Exception:
+            logger.exception('Could not generate PDF report for job %s.', job_id)
         rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
         try:
             record_review_automation_job_result(meta, job_id)

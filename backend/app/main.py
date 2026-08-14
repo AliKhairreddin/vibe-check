@@ -3,10 +3,11 @@ import asyncio, json, logging, os, re, secrets, shutil, uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
+import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
     BatchFailure,
@@ -77,6 +78,12 @@ from .review_pipeline.drive import (
 )
 from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
+from .review_pipeline.pdf_reports import (
+    PdfArtifact,
+    ensure_batch_pdf,
+    ensure_review_pdf,
+    read_pdf_artifact,
+)
 from .review_pipeline.live_scan_storage import (
     claim_live_review,
     get_live_scan_day,
@@ -989,6 +996,33 @@ def review_batch(batch_id:str):
     except FileNotFoundError:
         raise HTTPException(404, 'Review batch not found') from None
 
+
+def pdf_artifact_response(artifact:PdfArtifact):
+    headers={'content-disposition':f'attachment; filename="{artifact.filename}"'}
+    if artifact.path is not None:
+        return FileResponse(
+            artifact.path,
+            media_type='application/pdf',
+            filename=artifact.filename,
+        )
+    try:
+        content=read_pdf_artifact(artifact)
+    except (FileNotFoundError, httpx.HTTPError):
+        raise HTTPException(503, 'PDF report storage is temporarily unavailable.') from None
+    return Response(content=content, media_type='application/pdf', headers=headers)
+
+
+@app.get('/api/batches/{batch_id}/report.pdf')
+def download_batch_pdf(batch_id:str):
+    if not BATCH_ID_PATTERN.fullmatch(batch_id):
+        raise HTTPException(404, 'Review batch not found')
+    try:
+        return pdf_artifact_response(ensure_batch_pdf(batch_id))
+    except FileNotFoundError:
+        raise HTTPException(404, 'Review batch not found') from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
 @app.post('/api/batches/{batch_id}/items/{item_id}/failed', response_model=ReviewBatch)
 def fail_batch_upload(batch_id:str, item_id:str, payload:BatchFailure):
     if not BATCH_ID_PATTERN.fullmatch(batch_id) or not BATCH_ID_PATTERN.fullmatch(item_id):
@@ -1122,6 +1156,16 @@ def download_report(job_id:str):
     report=get_stored_report(job_id)
     if report is None: raise HTTPException(404,'Report not ready')
     return JSONResponse(report, headers={'content-disposition':f'attachment; filename="{job_id}-report.json"'})
+
+
+@app.get('/api/reviews/{job_id}/report.pdf')
+def download_pdf_report(job_id:str):
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Review job not found')
+    try:
+        return pdf_artifact_response(ensure_review_pdf(job_id))
+    except FileNotFoundError:
+        raise HTTPException(404, 'Report not ready') from None
 
 @app.get('/api/reviews/{job_id}/frames/{filename}')
 def frame(job_id:str, filename:str):

@@ -371,6 +371,12 @@ def finish_batch_item_and_notify(
         offer_outcomes=offer_outcomes,
         message=message,
     )
+    if all(item.status in {'complete', 'failed', 'upload_failed'} for item in batch.items):
+        try:
+            from .pdf_reports import ensure_batch_pdf
+            ensure_batch_pdf(batch_id)
+        except Exception:
+            logger.exception('Could not generate combined PDF report for batch %s.', batch_id)
     if should_notify:
         success = send_batch_message(batch)
         mark_batch_notification(batch_id, success)

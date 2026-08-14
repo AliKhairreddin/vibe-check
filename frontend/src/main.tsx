@@ -1975,6 +1975,14 @@ function ReportPage() {
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
             <a
+              className={cn(buttonVariants({ variant: 'default' }), 'w-fit')}
+              href={`/api/reviews/${jobId}/report.pdf`}
+              download
+            >
+              <Download data-icon="inline-start" />
+              Download PDF
+            </a>
+            <a
               className={cn(buttonVariants({ variant: 'outline' }), 'w-fit')}
               href={`/api/reviews/${jobId}/report.json`}
             >
@@ -2129,6 +2137,7 @@ function BatchPage() {
 
   const completeCount = query.data.items.filter((item) => item.status === 'complete').length;
   const failedCount = query.data.items.filter((item) => isFailedBatchStatus(item.status)).length;
+  const batchComplete = query.data.items.every((item) => isTerminalBatchStatus(item.status));
   const offerColumns = getOfferColumns(
     offerCatalogQuery.data ?? [],
     query.data.items.map((item) => item.offer_outcomes)
@@ -2144,9 +2153,21 @@ function BatchPage() {
           {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
         </CardDescription>
         <CardAction>
-          <Link to="/reviews/new" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-            Back to workspace
-          </Link>
+          <div className="flex flex-wrap justify-end gap-2">
+            {batchComplete ? (
+              <a
+                className={buttonVariants({ size: 'sm' })}
+                href={`/api/batches/${query.data.batch_id}/report.pdf`}
+                download
+              >
+                <Download data-icon="inline-start" />
+                Download batch PDF
+              </a>
+            ) : null}
+            <Link to="/reviews/new" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              Back to workspace
+            </Link>
+          </div>
         </CardAction>
       </CardHeader>
       <CardContent>

@@ -28,6 +28,13 @@ from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import ComplianceResponseError, parse_report_json, parse_strict_report_json
 from app.review_pipeline.live_scan_storage import exact_creative_key, normalize_primary_text, primary_text_key
 from app.review_pipeline.media import detect_media_kind, prepare_image_frame
+from app.review_pipeline.pdf_reports import (
+    build_and_store_batch_pdf,
+    build_and_store_review_pdf,
+    generate_review_report_pdf,
+    nearest_frame,
+    timestamp_label,
+)
 from app.review_pipeline.policy_seeds import seeded_offer_inputs
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
@@ -37,6 +44,7 @@ from app.review_pipeline.telegram import build_batch_message, build_live_scan_me
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
 from PIL import Image
+from pypdf import PdfReader
 
 
 @pytest.fixture
@@ -70,6 +78,152 @@ def test_review_request_meta_tracks_optional_ad_copy():
     assert not ReviewRequestMeta().has_ad_copy
     assert not ReviewRequestMeta(ad_copy='   ').has_ad_copy
     assert ReviewRequestMeta(ad_copy='Save up to 20%.').has_ad_copy
+
+
+def test_pdf_evidence_selects_nearest_timestamped_frame():
+    frames = [
+        {'filename': 'frame-0.jpg', 'timestamp': 0.0},
+        {'filename': 'frame-5.jpg', 'timestamp': 5.0},
+        {'filename': 'frame-9.jpg', 'timestamp': 9.0},
+    ]
+    assert nearest_frame(frames, '5.4')['filename'] == 'frame-5.jpg'
+    assert nearest_frame(frames, None)['filename'] == 'frame-0.jpg'
+    assert timestamp_label(65.2) == '01:05'
+
+
+def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
+    frames_dir = tmp_path / 'frames'
+    frames_dir.mkdir()
+    Image.new('RGB', (360, 640), color=(57, 122, 184)).save(frames_dir / 'frame-5.jpg')
+    target = tmp_path / 'review.pdf'
+    record = JobRecord(
+        job_id='a' * 32,
+        file_name='Example creative.mp4',
+        created_at=1_786_579_200_000,
+    )
+    report = {
+        'offer_id': 'acp',
+        'offer_name': 'ACP',
+        'overall_status': 'red',
+        'summary': 'The spoken claim needs a material revision before publication.',
+        'findings': [{
+            'severity': 'high',
+            'source': 'audio',
+            'timestamp_start': '5',
+            'timestamp_end': '10',
+            'evidence': 'You will always save fifty percent.',
+            'policy_reason': 'The absolute savings claim is not substantiated.',
+            'suggested_fix': 'Use qualified, supportable savings language.',
+            'confidence': 'high',
+        }],
+    }
+    generate_review_report_pdf(
+        target,
+        record,
+        report,
+        frames_dir=frames_dir,
+        frames=[{'filename': 'frame-5.jpg', 'timestamp': 5.0}],
+        transcript={
+            'source': 'openrouter',
+            'chunks': [{
+                'timestamp_start': 0.0,
+                'timestamp_end': 10.0,
+                'text': 'Call now because you will always save fifty percent.',
+            }],
+        },
+    )
+
+    reader = PdfReader(target)
+    text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+    assert len(reader.pages) == 2
+    assert 'Audio evidence - 00:05' in text
+    assert 'Transcript excerpt' in text
+    assert 'Call now because you will always save fifty percent.' in text
+    assert 'The absolute savings claim is not substantiated.' in text
+
+
+def test_batch_pdf_combines_summary_and_individual_reports(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    first_id = '1' * 32
+    second_id = '2' * 32
+    first_record = JobRecord(job_id=first_id, file_name='First creative.png')
+    second_record = JobRecord(job_id=second_id, file_name='Second creative.png')
+    finding_report = {
+        'offer_id': 'acp',
+        'offer_name': 'ACP',
+        'overall_status': 'orange',
+        'summary': 'One claim needs review.',
+        'findings': [{
+            'severity': 'medium',
+            'source': 'ad_copy',
+            'timestamp_start': None,
+            'timestamp_end': None,
+            'evidence': 'Guaranteed approval.',
+            'policy_reason': 'Approval cannot be guaranteed.',
+            'suggested_fix': 'Use eligibility language.',
+            'confidence': 'high',
+        }],
+    }
+    green_report = {
+        'offer_id': 'acp',
+        'offer_name': 'ACP',
+        'overall_status': 'green',
+        'summary': 'No policy issue was identified.',
+        'findings': [],
+    }
+    review_storage.set_status(
+        first_id,
+        JobStatus.complete,
+        100,
+        file_name=first_record.file_name,
+    )
+    review_storage.set_status(
+        second_id,
+        JobStatus.complete,
+        100,
+        file_name=second_record.file_name,
+    )
+    build_and_store_review_pdf(first_id, first_record, finding_report, ad_copy='Guaranteed approval.')
+    build_and_store_review_pdf(second_id, second_record, green_report)
+    batch = ReviewBatch(
+        batch_id='b' * 32,
+        created_at=1_786_579_200_000,
+        updated_at=1_786_579_200_000,
+        expected_count=2,
+        source_label='Partner uploads',
+        items=[
+            ReviewBatchItem(
+                item_id='3' * 32,
+                file_name='First creative.png',
+                media_kind='image',
+                status='complete',
+                job_id=first_id,
+                result='orange',
+                message='Complete',
+            ),
+            ReviewBatchItem(
+                item_id='4' * 32,
+                file_name='Second creative.png',
+                media_kind='image',
+                status='complete',
+                job_id=second_id,
+                result='green',
+                message='Complete',
+            ),
+        ],
+        notification_status='sent',
+    )
+
+    artifact = build_and_store_batch_pdf(batch)
+    assert artifact.path is not None
+    reader = PdfReader(artifact.path)
+    text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+    assert len(reader.pages) == 4
+    assert 'Batch Compliance Evidence Report' in text
+    assert 'First creative.png' in text
+    assert 'Second creative.png' in text
 
 def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
     meta=ReviewRequestMeta(ad_copy='Facebook caption text.', notes='Brand note.')

@@ -9,4 +9,6 @@ requests==2.34.2
 opencv-python-headless==4.10.0.84
 Pillow==11.1.0
 pytesseract==0.3.13
+pypdf==6.16.0
 pytest==8.3.4
+reportlab==5.0.0
