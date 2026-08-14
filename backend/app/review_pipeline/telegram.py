@@ -33,6 +33,7 @@ WRAP_WIDTH = 34
 MAX_NAME_CHARS = 140
 MAX_BATCH_MESSAGE_CHARS = 3900
 TELEGRAM_SEND_ATTEMPTS = 3
+TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
 OFFER_DISPLAY_ORDER = (
     ('acp', 'ACP'),
     ('kissterra', 'Kissterra'),
@@ -107,10 +108,13 @@ def send_review_message(
     ad_copy_text: str = '',
     media_kind: MediaKind | None = None,
 ) -> bool:
-    return _send_telegram_message(
+    sent = _send_telegram_message(
         build_review_message(record, report, ad_copy_text, media_kind),
         f'job_id={record.job_id}',
     )
+    if sent:
+        _attach_review_pdf(record, f'job_id={record.job_id}')
+    return sent
 
 
 def build_live_scan_message(
@@ -162,10 +166,13 @@ def send_live_scan_message(
     meta: ReviewRequestMeta,
     media_kind: MediaKind | None = None,
 ) -> bool:
-    return _send_telegram_message(
+    sent = _send_telegram_message(
         build_live_scan_message(record,report,meta,media_kind),
         f'live_scan_job_id={record.job_id}',
     )
+    if sent:
+        _attach_review_pdf(record, f'live_scan_job_id={record.job_id}')
+    return sent
 
 
 def build_batch_message(
@@ -291,10 +298,13 @@ def send_batch_message(batch: ReviewBatch) -> bool:
             item.job_id or 'unavailable',
         )
         return False
-    return _send_telegram_message(
+    sent = _send_telegram_message(
         build_batch_message(batch, reports_by_job_id),
         f'batch_id={batch.batch_id}',
     )
+    if sent:
+        _attach_batch_pdf(batch)
+    return sent
 
 
 def _merge_batch_item_report(item, report: dict[str, Any]) -> dict[str, Any]:
@@ -426,6 +436,124 @@ def _send_telegram_message(text: str, log_context: str) -> bool:
     status_code = getattr(response, 'status_code', None)
     logger.error(
         'Telegram notification failed %s attempts=%s error_type=%s http_status=%s',
+        log_context,
+        attempts or 1,
+        type(last_error).__name__ if last_error is not None else 'UnknownError',
+        status_code if status_code is not None else 'unavailable',
+    )
+    return False
+
+
+def _attach_review_pdf(record: JobRecord, log_context: str) -> bool:
+    try:
+        from .pdf_reports import ensure_review_pdf, read_pdf_artifact
+
+        artifact = ensure_review_pdf(record.job_id)
+        content = read_pdf_artifact(artifact)
+        caption = (
+            '<b>Unified creative PDF</b>\n'
+            f'{html.escape(record.file_name or record.job_id)} · all offers'
+        )
+        return _send_telegram_document(
+            artifact.filename,
+            content,
+            caption,
+            log_context,
+        )
+    except Exception as exc:
+        logger.warning(
+            'Telegram PDF attachment unavailable %s error_type=%s',
+            log_context,
+            type(exc).__name__,
+        )
+        return False
+
+
+def _attach_batch_pdf(batch: ReviewBatch) -> bool:
+    log_context = f'batch_id={batch.batch_id}'
+    try:
+        from .pdf_reports import ensure_batch_pdf, read_pdf_artifact
+
+        artifact = ensure_batch_pdf(batch.batch_id)
+        content = read_pdf_artifact(artifact)
+        caption = (
+            '<b>Unified batch PDF</b>\n'
+            f'All {batch.expected_count} creatives · all offers'
+        )
+        return _send_telegram_document(
+            artifact.filename,
+            content,
+            caption,
+            log_context,
+        )
+    except Exception as exc:
+        logger.warning(
+            'Telegram PDF attachment unavailable %s error_type=%s',
+            log_context,
+            type(exc).__name__,
+        )
+        return False
+
+
+def _send_telegram_document(
+    filename: str,
+    content: bytes,
+    caption: str,
+    log_context: str,
+) -> bool:
+    token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    if not token or not chat_id:
+        return False
+    if not content or len(content) > TELEGRAM_DOCUMENT_MAX_BYTES:
+        logger.warning(
+            'Telegram PDF attachment skipped %s bytes=%s',
+            log_context,
+            len(content),
+        )
+        return False
+
+    payload: dict[str, Any] = {
+        'chat_id': chat_id,
+        'caption': caption,
+        'parse_mode': 'HTML',
+    }
+    message_thread_id = os.getenv('TELEGRAM_MESSAGE_THREAD_ID', '').strip()
+    if message_thread_id:
+        payload['message_thread_id'] = message_thread_id
+
+    last_error: Exception | None = None
+    attempts = 0
+    try:
+        with httpx.Client(timeout=30) as client:
+            for attempt in range(1, TELEGRAM_SEND_ATTEMPTS + 1):
+                attempts = attempt
+                try:
+                    response = client.post(
+                        f'https://api.telegram.org/bot{token}/sendDocument',
+                        data=payload,
+                        files={
+                            'document': (
+                                filename,
+                                content,
+                                'application/pdf',
+                            ),
+                        },
+                    )
+                    response.raise_for_status()
+                    return True
+                except Exception as exc:
+                    last_error = exc
+                    if attempt >= TELEGRAM_SEND_ATTEMPTS or not _is_retryable_telegram_error(exc):
+                        break
+                    time.sleep(_telegram_retry_delay(exc, attempt))
+    except Exception as exc:
+        last_error = exc
+
+    response = getattr(last_error, 'response', None)
+    status_code = getattr(response, 'status_code', None)
+    logger.error(
+        'Telegram PDF attachment failed %s attempts=%s error_type=%s http_status=%s',
         log_context,
         attempts or 1,
         type(last_error).__name__ if last_error is not None else 'UnknownError',

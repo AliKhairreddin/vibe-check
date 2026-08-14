@@ -17,6 +17,7 @@ import {
   Link,
   Outlet,
   RouterProvider,
+  useNavigate,
   useParams,
 } from '@tanstack/react-router';
 import {
@@ -38,6 +39,7 @@ import {
   History,
   Laptop,
   LayoutDashboard,
+  Layers3,
   LoaderCircle,
   Moon,
   RefreshCw,
@@ -106,6 +108,7 @@ import {
   createReview,
   type Finding,
   getBatch,
+  getBatches,
   getReport,
   getReviewSources,
   getStatus,
@@ -118,6 +121,7 @@ import {
   type OfferResult,
   type ResultStatus,
   type ReviewBatch,
+  type ReviewBatchItem,
   type ReviewHistoryItem,
   type Status,
 } from '@/lib/api';
@@ -1026,6 +1030,21 @@ type HistoryDeleteRequest = {
   ids: string[];
   label: string;
 };
+type HistoryEntry =
+  | {
+      createdAt: number | null;
+      entryKey: string;
+      kind: 'review';
+      review: ReviewHistoryItem;
+    }
+  | {
+      batch?: ReviewBatch;
+      batchId: string;
+      createdAt: number | null;
+      entryKey: string;
+      kind: 'batch';
+      reviews: ReviewHistoryItem[];
+    };
 
 function HistoryCard({
   allHistory = false,
@@ -1046,6 +1065,7 @@ function HistoryCard({
   onRetry: () => void;
   reviews: ReviewHistoryItem[];
 }) {
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [offerFilter, setOfferFilter] = useState('all');
   const [resultFilter, setResultFilter] = useState<HistoryResultFilter>('all');
@@ -1058,6 +1078,20 @@ function HistoryCard({
     queryFn: listOfferCatalog,
     staleTime: 60_000,
   });
+  const batchIds = useMemo(
+    () => Array.from(new Set(reviews.flatMap((review) => review.batch_id ? [review.batch_id] : []))),
+    [reviews]
+  );
+  const batchesQuery = useQuery({
+    queryKey: ['batches', 'history', batchIds],
+    queryFn: () => getBatches(batchIds),
+    enabled: batchIds.length > 0,
+    staleTime: 30_000,
+  });
+  const historyEntries = useMemo(
+    () => buildHistoryEntries(reviews, batchesQuery.data ?? []),
+    [batchesQuery.data, reviews]
+  );
   const offerColumns = useMemo(
     () => getOfferColumns(
       offerCatalogQuery.data ?? [],
@@ -1092,24 +1126,23 @@ function HistoryCard({
     },
   });
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
-  const filteredReviews = useMemo(() => {
-    return reviews.filter((review) => {
-      if (normalizedSearch && !reviewMatchesSearch(review, normalizedSearch)) return false;
-      if (typeFilter === 'creative' && review.has_creative === false) return false;
-      if (typeFilter === 'copy_only' && review.has_creative !== false) return false;
-      return reviewMatchesResultFilter(
-        review,
+  const filteredEntries = useMemo(() => {
+    return historyEntries.filter((entry) => {
+      if (normalizedSearch && !historyEntryMatchesSearch(entry, normalizedSearch)) return false;
+      if (!historyEntryMatchesTypeFilter(entry, typeFilter)) return false;
+      return historyEntryMatchesResultFilter(
+        entry,
         offerColumns,
         offerFilter,
         resultFilter
       );
     });
   }, [
+    historyEntries,
     normalizedSearch,
     offerColumns,
     offerFilter,
     resultFilter,
-    reviews,
     typeFilter,
   ]);
   const filtersActive = Boolean(
@@ -1118,17 +1151,14 @@ function HistoryCard({
     resultFilter !== 'all' ||
     typeFilter !== 'all'
   );
-  const selectableVisibleIds = filteredReviews
-    .filter(isReviewDeletable)
-    .map((review) => review.job_id);
+  const selectableVisibleIds = Array.from(new Set(
+    filteredEntries.flatMap(deletableHistoryEntryIds)
+  ));
   const allVisibleSelected = selectableVisibleIds.length > 0 &&
     selectableVisibleIds.every((jobId) => selectedReviewIds.has(jobId));
   const someVisibleSelected = !allVisibleSelected &&
     selectableVisibleIds.some((jobId) => selectedReviewIds.has(jobId));
   const selectedCount = selectedReviewIds.size;
-  const selectedReviews = reviews.filter((review) =>
-    selectedReviewIds.has(review.job_id)
-  );
 
   useEffect(() => {
     setSelectedReviewIds(new Set());
@@ -1141,13 +1171,29 @@ function HistoryCard({
     setTypeFilter('all');
   }
 
-  function toggleReviewSelection(jobId: string) {
+  function toggleEntrySelection(entry: HistoryEntry) {
+    const entryIds = deletableHistoryEntryIds(entry);
+    const entrySelected = entryIds.length > 0 &&
+      entryIds.every((jobId) => selectedReviewIds.has(jobId));
     setSelectedReviewIds((current) => {
       const next = new Set(current);
-      if (next.has(jobId)) next.delete(jobId);
-      else next.add(jobId);
+      for (const jobId of entryIds) {
+        if (entrySelected) next.delete(jobId);
+        else next.add(jobId);
+      }
       return next;
     });
+  }
+
+  function openHistoryEntry(entry: HistoryEntry) {
+    if (entry.kind === 'batch') {
+      void navigate({ to: '/batches/$batchId', params: { batchId: entry.batchId } });
+      return;
+    }
+    const to = entry.review.report_ready
+      ? '/reviews/$jobId/report' as const
+      : '/reviews/$jobId' as const;
+    void navigate({ to, params: { jobId: entry.review.job_id } });
   }
 
   function toggleVisibleSelection() {
@@ -1174,17 +1220,17 @@ function HistoryCard({
           </CardTitle>
           <CardDescription>
             {allHistory
-              ? 'Browse every saved review, loading older records as needed.'
-              : 'Your 50 most recent reviews, with results across every offer.'}
+              ? 'Browse every saved upload. Multi-creative uploads appear as one batch.'
+              : 'Recent uploads, with multi-creative batches grouped into one row.'}
           </CardDescription>
           <CardAction>
             <div className="flex items-center gap-2">
               <Badge variant="outline">
                 {filtersActive
-                  ? `${filteredReviews.length} of ${reviews.length}`
+                  ? `${filteredEntries.length} of ${historyEntries.length}`
                   : allHistory
-                    ? `${reviews.length}${hasMore ? '+' : ''} loaded`
-                    : `${reviews.length} recent`}
+                    ? `${historyEntries.length}${hasMore ? '+' : ''} loaded`
+                    : `${historyEntries.length} recent`}
               </Badge>
               {!allHistory ? (
                 <Link
@@ -1296,10 +1342,10 @@ function HistoryCard({
                       variant="destructive"
                       size="xs"
                       onClick={() => setDeleteRequest({
-                        ids: selectedReviews.map((review) => review.job_id),
-                        label: selectedReviews.length === 1
-                          ? selectedReviews[0].file_name || selectedReviews[0].job_id
-                          : `${selectedReviews.length} selected reviews`,
+                        ids: Array.from(selectedReviewIds),
+                        label: selectedCount === 1
+                          ? '1 selected review'
+                          : `${selectedCount} selected reviews`,
                       })}
                     >
                       <Trash2 />
@@ -1327,7 +1373,7 @@ function HistoryCard({
               <Skeleton className="h-10" />
               <Skeleton className="h-24" />
             </div>
-          ) : filteredReviews.length ? (
+          ) : filteredEntries.length ? (
             <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
               <Table className="min-w-[60rem] table-fixed">
                 <TableHeader className="sticky top-0 z-10 bg-card">
@@ -1341,7 +1387,7 @@ function HistoryCard({
                         onChange={toggleVisibleSelection}
                       />
                     </TableHead>
-                    <TableHead className="h-11 w-72 text-xs text-muted-foreground">Review</TableHead>
+                    <TableHead className="h-11 w-72 text-xs text-muted-foreground">Upload</TableHead>
                     <TableHead className="h-11 w-32 text-xs text-muted-foreground">Uploaded</TableHead>
                     <TableHead className="h-11 w-20 text-xs text-muted-foreground">Status</TableHead>
                     <TableHead className="h-11 w-80 text-xs text-muted-foreground">
@@ -1351,46 +1397,94 @@ function HistoryCard({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredReviews.map((review) => {
-                    const selected = selectedReviewIds.has(review.job_id);
-                    const deletable = isReviewDeletable(review);
+                  {filteredEntries.map((entry) => {
+                    const entryIds = deletableHistoryEntryIds(entry);
+                    const selected = entryIds.length > 0 &&
+                      entryIds.every((jobId) => selectedReviewIds.has(jobId));
+                    const partiallySelected = !selected &&
+                      entryIds.some((jobId) => selectedReviewIds.has(jobId));
+                    const label = historyEntryLabel(entry);
+                    const subtitle = historyEntrySubtitle(entry);
                     return (
-                      <TableRow key={review.job_id} data-state={selected ? 'selected' : undefined}>
+                      <TableRow
+                        key={entry.entryKey}
+                        role="link"
+                        tabIndex={0}
+                        className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        data-state={selected || partiallySelected ? 'selected' : undefined}
+                        onClick={(event) => {
+                          if (!isInteractiveRowTarget(event.target)) openHistoryEntry(entry);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !isInteractiveRowTarget(event.target)) {
+                            openHistoryEntry(entry);
+                          }
+                        }}
+                      >
                         <TableCell className="px-2 py-1.5">
                           <HistoryCheckbox
                             checked={selected}
-                            disabled={!deletable}
-                            ariaLabel={`Select ${review.file_name || review.job_id}`}
-                            onChange={() => toggleReviewSelection(review.job_id)}
+                            indeterminate={partiallySelected}
+                            disabled={!entryIds.length}
+                            ariaLabel={`Select ${label}`}
+                            onChange={() => toggleEntrySelection(entry)}
                           />
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
-                          <span
-                            className="block truncate font-medium"
-                            title={review.file_name || review.job_id}
-                          >
-                            {review.file_name || review.job_id}
+                          <span className="flex min-w-0 items-center gap-2">
+                            {entry.kind === 'batch' ? (
+                              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
+                                <Layers3 className="size-3.5" aria-hidden="true" />
+                              </span>
+                            ) : null}
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium" title={label}>{label}</span>
+                              {subtitle ? (
+                                <span className="block truncate text-xs text-muted-foreground" title={subtitle}>
+                                  {subtitle}
+                                </span>
+                              ) : null}
+                            </span>
                           </span>
                         </TableCell>
                         <TableCell
                           className="px-2 py-1.5 text-xs text-muted-foreground"
-                          title={formatDateTime(review.created_at)}
+                          title={formatDateTime(entry.createdAt)}
                         >
-                          {formatHistoryDateTime(review.created_at)}
+                          {formatHistoryDateTime(entry.createdAt)}
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
-                          <StatusBadge status={review.status} />
+                          <StatusBadge status={historyEntryStatus(entry)} />
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
-                          <ReviewOfferResultsRail offers={offerColumns} review={review} />
+                          {entry.kind === 'batch' ? (
+                            <div className="flex min-w-64 items-center justify-between gap-3 rounded-md border border-dashed bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+                              <span>
+                                View {historyEntryItemCount(entry)} individual result{historyEntryItemCount(entry) === 1 ? '' : 's'}
+                              </span>
+                              <span className="font-medium text-foreground">Open batch →</span>
+                            </div>
+                          ) : (
+                            <ReviewOfferResultsRail offers={offerColumns} review={entry.review} />
+                          )}
                         </TableCell>
                         <TableCell className="px-2 py-1.5 text-right">
                           <div className="flex min-w-max justify-end gap-1">
-                            {review.report_ready ? (
+                            {entry.kind === 'batch' ? (
+                              <Link
+                                to="/batches/$batchId"
+                                params={{ batchId: entry.batchId }}
+                                aria-label={`Open ${label}`}
+                                className={cn(buttonVariants({ variant: 'outline', size: 'xs' }))}
+                              >
+                                <Layers3 data-icon="inline-start" />
+                                Open batch
+                              </Link>
+                            ) : entry.review.report_ready ? (
                               <Link
                                 to="/reviews/$jobId/report"
-                                params={{ jobId: review.job_id }}
-                                aria-label={`Open report for ${review.file_name || review.job_id}`}
+                                params={{ jobId: entry.review.job_id }}
+                                aria-label={`Open report for ${label}`}
                                 className={cn(buttonVariants({ variant: 'outline', size: 'xs' }))}
                               >
                                 <FileJson data-icon="inline-start" />
@@ -1399,23 +1493,23 @@ function HistoryCard({
                             ) : (
                               <Link
                                 to="/reviews/$jobId"
-                                params={{ jobId: review.job_id }}
-                                aria-label={`View job for ${review.file_name || review.job_id}`}
+                                params={{ jobId: entry.review.job_id }}
+                                aria-label={`View job for ${label}`}
                                 className={cn(buttonVariants({ variant: 'ghost', size: 'xs' }))}
                               >
                                 Job
                               </Link>
                             )}
-                            {allHistory && deletable ? (
+                            {allHistory && entryIds.length ? (
                               <Button
                                 type="button"
                                 variant="ghost"
                                 size="icon-xs"
-                                aria-label={`Remove ${review.file_name || review.job_id} from history`}
+                                aria-label={`Remove ${label} from history`}
                                 title="Remove from history and dashboard stats"
                                 onClick={() => setDeleteRequest({
-                                  ids: [review.job_id],
-                                  label: review.file_name || review.job_id,
+                                  ids: entryIds,
+                                  label,
                                 })}
                               >
                                 <Trash2 />
@@ -1566,6 +1660,179 @@ function HistoryCheckbox({
 
 function isReviewDeletable(review: ReviewHistoryItem) {
   return review.report_ready || review.status === 'failed';
+}
+
+function buildHistoryEntries(
+  reviews: ReviewHistoryItem[],
+  batches: ReviewBatch[]
+): HistoryEntry[] {
+  const batchById = new Map(batches.map((batch) => [batch.batch_id, batch]));
+  const reviewsByBatchId = new Map<string, ReviewHistoryItem[]>();
+  for (const review of reviews) {
+    if (!review.batch_id) continue;
+    const grouped = reviewsByBatchId.get(review.batch_id) ?? [];
+    grouped.push(review);
+    reviewsByBatchId.set(review.batch_id, grouped);
+  }
+
+  const seenBatches = new Set<string>();
+  return reviews.flatMap((review): HistoryEntry[] => {
+    if (!review.batch_id) {
+      return [{
+        createdAt: review.created_at ?? null,
+        entryKey: `review:${review.job_id}`,
+        kind: 'review',
+        review,
+      }];
+    }
+    if (seenBatches.has(review.batch_id)) return [];
+    seenBatches.add(review.batch_id);
+    const batch = batchById.get(review.batch_id);
+    const groupedReviews = reviewsByBatchId.get(review.batch_id) ?? [review];
+    return [{
+      batch,
+      batchId: review.batch_id,
+      createdAt: batch?.created_at ?? groupedReviews[0]?.created_at ?? null,
+      entryKey: `batch:${review.batch_id}`,
+      kind: 'batch',
+      reviews: groupedReviews,
+    }];
+  });
+}
+
+function historyEntryBatchItems(entry: Extract<HistoryEntry, { kind: 'batch' }>): ReviewBatchItem[] {
+  if (entry.batch) return entry.batch.items;
+  return entry.reviews.map((review) => ({
+    file_name: review.file_name,
+    item_id: review.batch_item_id ?? review.job_id,
+    job_id: review.job_id,
+    media_kind: review.has_creative === false
+      ? 'copy_only'
+      : /\.(?:jpe?g|png|webp)$/i.test(review.file_name)
+        ? 'image'
+        : 'video',
+    message: review.message,
+    offer_outcomes: review.offer_outcomes,
+    result: normalizeResultStatus(review.overall_status),
+    status: review.status,
+  }));
+}
+
+function historyEntryItemCount(entry: Extract<HistoryEntry, { kind: 'batch' }>) {
+  return entry.batch?.expected_count ?? historyEntryBatchItems(entry).length;
+}
+
+function historyEntryLabel(entry: HistoryEntry) {
+  if (entry.kind === 'review') return entry.review.file_name || entry.review.job_id;
+  const count = historyEntryItemCount(entry);
+  const copyOnly = historyEntryBatchItems(entry).every((item) => item.media_kind === 'copy_only');
+  return copyOnly
+    ? `Batch · ${count} copy review${count === 1 ? '' : 's'}`
+    : `Batch · ${count} creative${count === 1 ? '' : 's'}`;
+}
+
+function historyEntrySubtitle(entry: HistoryEntry) {
+  if (entry.kind === 'review') return '';
+  if (entry.batch?.source_label) return entry.batch.source_label;
+  const names = historyEntryBatchItems(entry).map((item) => item.file_name).filter(Boolean);
+  if (!names.length) return `Batch ${entry.batchId.slice(0, 8)}`;
+  const preview = names.slice(0, 2).join(', ');
+  return names.length > 2 ? `${preview} +${names.length - 2} more` : preview;
+}
+
+function historyEntryStatus(entry: HistoryEntry) {
+  if (entry.kind === 'review') return entry.review.status;
+  const statuses = historyEntryBatchItems(entry).map((item) => item.status);
+  const terminal = statuses.filter((status) => isTerminalBatchStatus(status)).length;
+  const failed = statuses.filter((status) => isFailedBatchStatus(status)).length;
+  if (terminal !== statuses.length) return 'in_progress';
+  if (!failed) return 'complete';
+  if (failed === statuses.length) return 'failed';
+  return 'complete_with_failures';
+}
+
+function deletableHistoryEntryIds(entry: HistoryEntry) {
+  if (entry.kind === 'review') {
+    return isReviewDeletable(entry.review) ? [entry.review.job_id] : [];
+  }
+  return historyEntryBatchItems(entry).flatMap((item) =>
+    item.job_id && (item.status === 'complete' || item.status === 'failed')
+      ? [item.job_id]
+      : []
+  );
+}
+
+function historyEntryMatchesSearch(entry: HistoryEntry, normalizedSearch: string) {
+  if (entry.kind === 'review') return reviewMatchesSearch(entry.review, normalizedSearch);
+  return [
+    entry.batchId,
+    entry.batch?.source_label,
+    historyEntryLabel(entry),
+    historyEntryStatus(entry),
+    formatStatus(historyEntryStatus(entry)),
+    formatDateTime(entry.createdAt),
+    ...historyEntryBatchItems(entry).flatMap((item) => [
+      item.file_name,
+      item.job_id,
+      item.status,
+      item.message,
+      item.result,
+      ...(item.offer_outcomes ?? []).flatMap((outcome) => [
+        outcome.offer_id,
+        outcome.offer_name,
+        outcome.overall_status,
+        outcome.creative_result,
+        outcome.ad_copy_result,
+        outcome.message,
+      ]),
+    ]),
+  ].some((value) => value?.toLocaleLowerCase().includes(normalizedSearch));
+}
+
+function historyEntryMatchesTypeFilter(entry: HistoryEntry, typeFilter: HistoryTypeFilter) {
+  if (typeFilter === 'all') return true;
+  if (entry.kind === 'review') {
+    return typeFilter === 'creative'
+      ? entry.review.has_creative !== false
+      : entry.review.has_creative === false;
+  }
+  const items = historyEntryBatchItems(entry);
+  return typeFilter === 'creative'
+    ? items.some((item) => item.media_kind !== 'copy_only')
+    : items.some((item) => item.media_kind === 'copy_only');
+}
+
+function historyEntryMatchesResultFilter(
+  entry: HistoryEntry,
+  offerColumns: ReturnType<typeof getOfferColumns>,
+  offerFilter: string,
+  resultFilter: HistoryResultFilter
+) {
+  if (entry.kind === 'review') {
+    return reviewMatchesResultFilter(entry.review, offerColumns, offerFilter, resultFilter);
+  }
+  if (offerFilter === 'all' && resultFilter === 'all') return true;
+  const relevantOffers = offerFilter === 'all'
+    ? offerColumns
+    : offerColumns.filter((offer) => offer.offer_id === offerFilter);
+  const outcomes = historyEntryBatchItems(entry).flatMap((item) =>
+    relevantOffers.map((offer) => batchOutcomeForOffer(item, offer))
+  );
+  if (resultFilter === 'na') {
+    return outcomes.some((outcome) => !outcome || outcome.evaluation_state !== 'evaluated');
+  }
+  if (resultFilter !== 'all') {
+    return outcomes.some((outcome) =>
+      outcome?.evaluation_state === 'evaluated' && outcome.overall_status === resultFilter
+    );
+  }
+  return outcomes.some((outcome) => outcome?.evaluation_state === 'evaluated');
+}
+
+function isInteractiveRowTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(
+    target.closest('a, button, input, select, textarea, [role="button"], [role="menuitem"]')
+  );
 }
 
 function reviewMatchesSearch(review: ReviewHistoryItem, normalizedSearch: string) {
@@ -1728,10 +1995,12 @@ function ProgressPage() {
 
 function PdfDownloadMenu({
   baseHref,
+  contentLabel = 'This creative',
   offers,
   size = 'default',
 }: {
   baseHref: string;
+  contentLabel?: string;
   offers: OfferColumn[];
   size?: 'default' | 'sm';
 }) {
@@ -1806,7 +2075,7 @@ function PdfDownloadMenu({
           <Menu.Positioner sideOffset={6} align="end" className="z-50 outline-none">
             <Menu.Popup className="min-w-64 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
               <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                Choose PDF audience
+                Choose PDF version
               </div>
               <Menu.LinkItem
                 {...downloadLinkProps(baseHref)}
@@ -1815,8 +2084,8 @@ function PdfDownloadMenu({
               >
                 <Download className="size-4 text-muted-foreground" />
                 <span className="grid">
-                  <span className="font-medium">All offers</span>
-                  <span className="text-xs text-muted-foreground">Unified internal report</span>
+                  <span className="font-medium">Unified · all offers</span>
+                  <span className="text-xs text-muted-foreground">{contentLabel} · every offer result</span>
                 </span>
               </Menu.LinkItem>
               <div className="my-1 h-px bg-border" />
@@ -1832,7 +2101,7 @@ function PdfDownloadMenu({
                     <Download className="size-4 text-muted-foreground" />
                     <span className="grid">
                       <span className="font-medium">{offer.offer_name} only</span>
-                      <span className="text-xs text-muted-foreground">Partner-safe report</span>
+                      <span className="text-xs text-muted-foreground">{contentLabel} · one offer</span>
                     </span>
                   </Menu.LinkItem>
                 );
@@ -2232,6 +2501,7 @@ function ReportPage() {
 
 function BatchPage() {
   const { batchId } = useParams({ from: '/batches/$batchId' });
+  const navigate = useNavigate();
   const query = useQuery({
     queryKey: ['batch', batchId],
     queryFn: () => getBatch(batchId),
@@ -2270,20 +2540,29 @@ function BatchPage() {
     findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
   ));
 
+  function openBatchItem(item: ReviewBatchItem) {
+    if (!item.job_id) return;
+    const to = item.status === 'complete'
+      ? '/reviews/$jobId/report' as const
+      : '/reviews/$jobId' as const;
+    void navigate({ to, params: { jobId: item.job_id } });
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle as="h1" className="text-xl">
-          Batch uploaded {formatDate(query.data.created_at)}
+          Batch report
         </CardTitle>
         <CardDescription>
-          {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
+          Uploaded {formatDate(query.data.created_at)} · {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
         </CardDescription>
         <CardAction>
           <div className="flex flex-wrap justify-end gap-2">
             {batchComplete ? (
               <PdfDownloadMenu
                 baseHref={`/api/batches/${query.data.batch_id}/report.pdf`}
+                contentLabel={`All ${query.data.expected_count} creative${query.data.expected_count === 1 ? '' : 's'}`}
                 offers={pdfOffers}
                 size="sm"
               />
@@ -2295,6 +2574,12 @@ function BatchPage() {
         </CardAction>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 grid gap-1">
+          <h2 className="text-sm font-medium">Individual creative results</h2>
+          <p className="text-xs text-muted-foreground">
+            Open any row for that creative’s detailed report and individual PDF options.
+          </p>
+        </div>
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -2310,7 +2595,22 @@ function BatchPage() {
             </TableHeader>
             <TableBody>
               {query.data.items.map((item) => (
-                <TableRow key={item.item_id}>
+                <TableRow
+                  key={item.item_id}
+                  role={item.job_id ? 'link' : undefined}
+                  tabIndex={item.job_id ? 0 : undefined}
+                  className={cn(
+                    item.job_id && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset'
+                  )}
+                  onClick={(event) => {
+                    if (item.job_id && !isInteractiveRowTarget(event.target)) openBatchItem(item);
+                  }}
+                  onKeyDown={(event) => {
+                    if (item.job_id && event.key === 'Enter' && !isInteractiveRowTarget(event.target)) {
+                      openBatchItem(item);
+                    }
+                  }}
+                >
                   <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
                   <TableCell className="min-w-64 max-w-md">
                     <span className="block truncate font-medium">{item.file_name}</span>
@@ -2333,6 +2633,14 @@ function BatchPage() {
                       >
                         <FileJson data-icon="inline-start" />
                         Open report
+                      </Link>
+                    ) : item.job_id ? (
+                      <Link
+                        to="/reviews/$jobId"
+                        params={{ jobId: item.job_id }}
+                        className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                      >
+                        View job
                       </Link>
                     ) : (
                       <span className="text-sm text-muted-foreground">—</span>

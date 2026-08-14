@@ -22,6 +22,36 @@ type BatchItem = {
   status: string;
 };
 
+const publicOfferOutcomeValidator = v.object({
+  ad_copy_result: v.union(v.string(), v.null()),
+  creative_result: v.union(v.string(), v.null()),
+  evaluation_state: v.string(),
+  message: v.string(),
+  offer_id: v.string(),
+  offer_name: v.string(),
+  overall_status: v.union(v.string(), v.null()),
+  with_override: v.boolean(),
+});
+
+const publicBatchValidator = v.object({
+  batch_id: v.string(),
+  created_at: v.number(),
+  expected_count: v.number(),
+  source_label: v.union(v.string(), v.null()),
+  items: v.array(v.object({
+    file_name: v.string(),
+    item_id: v.string(),
+    job_id: v.union(v.string(), v.null()),
+    media_kind: v.string(),
+    message: v.string(),
+    offer_outcomes: v.array(publicOfferOutcomeValidator),
+    result: v.union(v.string(), v.null()),
+    status: v.string(),
+  })),
+  notification_status: v.string(),
+  updated_at: v.number(),
+});
+
 const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 const NOTIFICATION_LEASE_MS = 15 * 60 * 1000;
 const MAX_NOTIFICATION_ATTEMPTS = 3;
@@ -124,6 +154,25 @@ export const getBatch = query({
     requireSecret(args.secret);
     const batch = await findBatch(ctx, args.batchId);
     return batch ? publicBatch(batch) : null;
+  },
+});
+
+export const getBatches = query({
+  args: {
+    secret: v.string(),
+    batchIds: v.array(v.string()),
+  },
+  returns: v.array(publicBatchValidator),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const batchIds = [...new Set(args.batchIds)];
+    if (batchIds.length > 100) {
+      throw new Error("At most 100 review batches can be loaded at once");
+    }
+    const batches = await Promise.all(
+      batchIds.map((batchId) => findBatch(ctx, batchId)),
+    );
+    return batches.flatMap((batch) => batch ? [publicBatch(batch)] : []);
   },
 });
 

@@ -343,6 +343,23 @@ def get_batch(batch_id:str)->ReviewBatch:
         raise FileNotFoundError(batch_id)
     return ReviewBatch.model_validate(read_json(path))
 
+def get_batches(batch_ids:list[str])->list[ReviewBatch]:
+    unique_batch_ids=list(dict.fromkeys(batch_id for batch_id in batch_ids if batch_id))[:100]
+    if not unique_batch_ids:
+        return []
+    remote=_convex_call('query', 'batches:getBatches', {'batchIds':unique_batch_ids})
+    if remote is not None:
+        return [ReviewBatch.model_validate(batch) for batch in remote]
+    if convex_enabled():
+        return []
+    batches=[]
+    for batch_id in unique_batch_ids:
+        path=batch_path(batch_id)
+        if not path.exists():
+            continue
+        batches.append(ReviewBatch.model_validate(read_json(path)))
+    return batches
+
 def _update_local_batch_item(
     batch_id:str,
     item_id:str,

@@ -678,6 +678,20 @@ export async function getBatch(id: string): Promise<ReviewBatch> {
   return requestJson<ReviewBatch>(`/api/batches/${id}`);
 }
 
+export async function getBatches(ids: string[]): Promise<ReviewBatch[]> {
+  const batchIds = Array.from(new Set(ids.filter(Boolean)));
+  if (!batchIds.length) return [];
+  const chunks = Array.from(
+    { length: Math.ceil(batchIds.length / 100) },
+    (_, index) => batchIds.slice(index * 100, (index + 1) * 100)
+  );
+  const batches = await Promise.all(chunks.map((chunk) => {
+    const params = new URLSearchParams({ batch_ids: chunk.join(',') });
+    return requestJson<ReviewBatch[]>(`/api/batches?${params}`);
+  }));
+  return batches.flat();
+}
+
 export async function reportBatchUploadFailure(
   batchId: string,
   itemId: string,

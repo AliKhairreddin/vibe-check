@@ -39,7 +39,7 @@ from app.review_pipeline.pdf_reports import (
 )
 from app.review_pipeline.policy_seeds import seeded_offer_inputs
 from app.review_pipeline.ocr import normalize_text, dedupe_ocr
-from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
+from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_batches, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
 from app.review_pipeline.automation_storage import claim_automation_files, claim_automation_run, finish_automation_run, list_review_automations, upsert_review_automation
 from app.review_pipeline.source_links import resolve_review_sources
 from app.review_pipeline.telegram import build_batch_message, build_live_scan_message, build_review_message, finish_batch_item_and_notify, send_review_message
@@ -3401,6 +3401,94 @@ async def test_batch_api_registers_pending_uploads_before_reviews_start(tmp_path
     assert fetched.status_code == 200
     assert fetched.json()['expected_count'] == 2
     assert fetched.json()['source_label'] == 'Summer campaign'
+
+@pytest.mark.anyio
+async def test_batch_api_bulk_loads_history_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    first_id='a' * 32
+    second_id='b' * 32
+    missing_id='c' * 32
+    create_batch(first_id, [
+        CreateBatchItem(item_id='1' * 32, file_name='one.png', media_kind='image'),
+        CreateBatchItem(item_id='2' * 32, file_name='two.png', media_kind='image'),
+    ], source_label='First upload')
+    create_batch(second_id, [
+        CreateBatchItem(item_id='3' * 32, file_name='three.mp4', media_kind='video'),
+        CreateBatchItem(item_id='4' * 32, file_name='four.mp4', media_kind='video'),
+    ], source_label='Second upload')
+
+    assert [batch.batch_id for batch in get_batches([second_id, first_id, second_id])] == [
+        second_id,
+        first_id,
+    ]
+
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response=await client.get(
+            f'/api/batches?batch_ids={second_id},{missing_id},{first_id}'
+        )
+
+    assert response.status_code == 200
+    assert [batch['batch_id'] for batch in response.json()] == [second_id, first_id]
+    assert [batch['expected_count'] for batch in response.json()] == [2, 2]
+
+def test_telegram_document_uses_new_chat_and_thread_without_logging_token(monkeypatch):
+    token='document-token-that-must-not-be-logged'
+    monkeypatch.setenv('TELEGRAM_BOT_TOKEN', token)
+    monkeypatch.setenv('TELEGRAM_CHAT_ID', '-5372132412')
+    monkeypatch.setenv('TELEGRAM_MESSAGE_THREAD_ID', '42')
+    calls=[]
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout=timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, url, data, files):
+            calls.append((url, data, files))
+            return httpx.Response(200, request=httpx.Request('POST', url))
+
+    monkeypatch.setattr('app.review_pipeline.telegram.httpx.Client', FakeClient)
+
+    assert review_telegram._send_telegram_document(
+        'batch-report.pdf',
+        b'%PDF-test',
+        '<b>Unified batch PDF</b>',
+        'batch_id=test',
+    )
+    assert len(calls) == 1
+    url,data,files=calls[0]
+    assert url.endswith('/sendDocument')
+    assert data['chat_id'] == '-5372132412'
+    assert data['message_thread_id'] == '42'
+    assert files['document'] == ('batch-report.pdf', b'%PDF-test', 'application/pdf')
+
+def test_batch_telegram_attaches_unified_pdf_after_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    create_batch('attach-pdf', [
+        CreateBatchItem(item_id='item1', file_name='one.png', media_kind='image'),
+        CreateBatchItem(item_id='item2', file_name='two.png', media_kind='image'),
+    ])
+    batch=get_batch('attach-pdf')
+    for item in batch.items:
+        item.status='upload_failed'
+        item.message='Upload failed'
+    attached=[]
+    monkeypatch.setattr(review_telegram, '_send_telegram_message', lambda *args: True)
+    monkeypatch.setattr(review_telegram, '_attach_batch_pdf', lambda value: attached.append(value) or True)
+
+    assert review_telegram.send_batch_message(batch)
+    assert attached == [batch]
 
 def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     token='secret-token-that-must-not-be-logged'

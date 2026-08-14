@@ -48,6 +48,7 @@ from .review_pipeline.storage import (
     delete_review,
     disable_offer_profile,
     get_batch,
+    get_batches,
     get_report as get_stored_report,
     get_offer_profile_revision,
     get_status,
@@ -986,6 +987,19 @@ def create_review_batch(payload:CreateReviewBatch):
         payload.items,
         source_label=payload.source_label,
     )
+
+@app.get('/api/batches', response_model=list[ReviewBatch])
+def review_batches(batch_ids:str=''):
+    normalized=list(dict.fromkeys(
+        batch_id.strip().lower()
+        for batch_id in batch_ids.split(',')
+        if batch_id.strip()
+    ))
+    if len(normalized) > MAX_BATCH_ITEMS:
+        raise HTTPException(400, f'Load no more than {MAX_BATCH_ITEMS} batches at once.')
+    if any(not BATCH_ID_PATTERN.fullmatch(batch_id) for batch_id in normalized):
+        raise HTTPException(400, 'Invalid batch id')
+    return get_batches(normalized)
 
 @app.get('/api/batches/{batch_id}', response_model=ReviewBatch)
 def review_batch(batch_id:str):
