@@ -33,6 +33,7 @@ from app.review_pipeline.pdf_reports import (
     build_and_store_review_pdf,
     build_and_store_review_pdf_variants,
     generate_review_report_pdf,
+    get_pdf_artifact,
     nearest_frame,
     timestamp_label,
 )
@@ -149,7 +150,7 @@ def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, mon
     monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
     record = JobRecord(
         job_id='c' * 32,
-        file_name='Partner creative.mp4',
+        file_name='Partner creative.v2.mp4',
         offer_ids=['acp', 'kissterra', 'lead-economy', 'smart-financial'],
     )
     report = {
@@ -165,12 +166,41 @@ def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, mon
 
     artifacts = build_and_store_review_pdf_variants(record.job_id, record, report)
     lead_artifact = next(artifact for artifact in artifacts if 'Lead Economy' in artifact.filename)
+    assert lead_artifact.filename == 'Partner creative.v2 - Lead Economy-report.pdf'
     assert lead_artifact.path is not None
     text = '\n'.join(page.extract_text() or '' for page in PdfReader(lead_artifact.path).pages)
     assert 'Lead Economy' in text
     assert 'ACP' not in text
     assert 'Kissterra' not in text
     assert 'Smart Financial' not in text
+
+
+def test_remote_offer_pdf_uses_current_offer_filename(tmp_path, monkeypatch):
+    job_id = 'f' * 32
+    record = JobRecord(
+        job_id=job_id,
+        file_name='Creative.version.2.mp4',
+        offer_ids=['lead-economy'],
+    )
+    report = {
+        'offer_id': 'lead-economy',
+        'offer_name': 'Lead Economy',
+        'overall_status': 'green',
+        'summary': 'Ready.',
+        'findings': [],
+    }
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'get_status', lambda _job_id: record)
+    monkeypatch.setattr(review_storage, 'get_report', lambda _job_id: report)
+    monkeypatch.setattr(review_storage, '_convex_call', lambda *_args, **_kwargs: {
+        'filename': 'stale-download-name.html',
+        'url': 'https://example.com/report.pdf',
+    })
+
+    artifact = get_pdf_artifact('review', job_id, 'lead-economy')
+
+    assert artifact is not None
+    assert artifact.filename == 'Creative.version.2 - Lead Economy-report.pdf'
 
 
 def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monkeypatch):

@@ -1735,51 +1735,116 @@ function PdfDownloadMenu({
   offers: OfferColumn[];
   size?: 'default' | 'sm';
 }) {
+  const [downloadingHref, setDownloadingHref] = useState('');
+  const [downloadError, setDownloadError] = useState('');
+
+  async function startDownload(href: string) {
+    if (downloadingHref) return;
+    setDownloadingHref(href);
+    setDownloadError('');
+    try {
+      const response = await fetch(href, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`PDF request failed with status ${response.status}.`);
+      }
+      const blob = await response.blob();
+      const signature = await blob.slice(0, 5).text();
+      if (signature !== '%PDF-') {
+        throw new Error('The server returned a non-PDF response.');
+      }
+      const disposition = response.headers.get('content-disposition') ?? '';
+      const encodedName = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1];
+      const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+      let filename = 'vibe-check-report.pdf';
+      try {
+        filename = encodedName ? decodeURIComponent(encodedName) : (quotedName || filename);
+      } catch {
+        filename = quotedName || filename;
+      }
+      filename = filename.split(/[\\/]/).pop() || 'vibe-check-report.pdf';
+      if (!filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
+
+      const objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    } catch {
+      setDownloadError('The PDF could not be downloaded. Refresh the page and try again.');
+    } finally {
+      setDownloadingHref('');
+    }
+  }
+
+  function downloadLinkProps(href: string) {
+    return {
+      href,
+      onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+        event.preventDefault();
+        void startDownload(href);
+      },
+    };
+  }
+
   return (
-    <Menu.Root>
-      <Menu.Trigger className={buttonVariants({ size })}>
-        <Download data-icon="inline-start" />
-        Download PDF
-        <ChevronDown data-icon="inline-end" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner sideOffset={6} align="end" className="z-50 outline-none">
-          <Menu.Popup className="min-w-64 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
-            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-              Choose PDF audience
-            </div>
-            <Menu.LinkItem
-              href={baseHref}
-              download
-              closeOnClick
-              className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
-            >
-              <Download className="size-4 text-muted-foreground" />
-              <span className="grid">
-                <span className="font-medium">All offers</span>
-                <span className="text-xs text-muted-foreground">Unified internal report</span>
-              </span>
-            </Menu.LinkItem>
-            <div className="my-1 h-px bg-border" />
-            {offers.map((offer) => (
+    <div className="grid w-fit gap-1">
+      <Menu.Root>
+        <Menu.Trigger className={buttonVariants({ size })} disabled={Boolean(downloadingHref)}>
+          {downloadingHref ? (
+            <LoaderCircle data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <Download data-icon="inline-start" />
+          )}
+          {downloadingHref ? 'Preparing PDF' : 'Download PDF'}
+          <ChevronDown data-icon="inline-end" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={6} align="end" className="z-50 outline-none">
+            <Menu.Popup className="min-w-64 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
+              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                Choose PDF audience
+              </div>
               <Menu.LinkItem
-                key={offer.offer_id}
-                href={`${baseHref}?offer_id=${encodeURIComponent(offer.offer_id)}`}
-                download
+                {...downloadLinkProps(baseHref)}
                 closeOnClick
                 className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
               >
                 <Download className="size-4 text-muted-foreground" />
                 <span className="grid">
-                  <span className="font-medium">{offer.offer_name} only</span>
-                  <span className="text-xs text-muted-foreground">Partner-safe report</span>
+                  <span className="font-medium">All offers</span>
+                  <span className="text-xs text-muted-foreground">Unified internal report</span>
                 </span>
               </Menu.LinkItem>
-            ))}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+              <div className="my-1 h-px bg-border" />
+              {offers.map((offer) => {
+                const href = `${baseHref}?offer_id=${encodeURIComponent(offer.offer_id)}`;
+                return (
+                  <Menu.LinkItem
+                    key={offer.offer_id}
+                    {...downloadLinkProps(href)}
+                    closeOnClick
+                    className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                  >
+                    <Download className="size-4 text-muted-foreground" />
+                    <span className="grid">
+                      <span className="font-medium">{offer.offer_name} only</span>
+                      <span className="text-xs text-muted-foreground">Partner-safe report</span>
+                    </span>
+                  </Menu.LinkItem>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+      {downloadError ? (
+        <p role="alert" className="max-w-72 text-xs text-destructive">{downloadError}</p>
+      ) : null}
+    </div>
   );
 }
 

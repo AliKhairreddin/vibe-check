@@ -133,7 +133,7 @@ def _artifact_path(
 
 
 def _safe_filename(value: str, fallback: str) -> str:
-    stem = Path(value).stem.strip() if value else ''
+    stem = str(value).strip() if value else ''
     stem = re.sub(r'[^A-Za-z0-9._ -]+', '-', stem)
     stem = re.sub(r'\s+', ' ', stem).strip(' .-_')
     return f'{(stem or fallback)[:120]}-report.pdf'
@@ -179,8 +179,19 @@ def get_pdf_artifact(
     )
     if not isinstance(remote, dict) or not remote.get('url'):
         return None
+    filename = str(remote.get('filename') or local_path.name)
+    try:
+        if owner_type == 'review':
+            record = storage.get_status(owner_id)
+            offer_name = _offer_name(storage.get_report(owner_id) or {}, offer_id)
+            filename = _review_filename(record, offer_name)
+        else:
+            batch = storage.get_batch(owner_id)
+            filename = _batch_filename(batch, _batch_offer_name(batch, offer_id))
+    except (FileNotFoundError, ValueError):
+        pass
     return PdfArtifact(
-        filename=str(remote.get('filename') or local_path.name),
+        filename=filename,
         url=str(remote['url']),
     )
 
