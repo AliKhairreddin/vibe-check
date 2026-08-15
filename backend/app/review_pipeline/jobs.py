@@ -10,6 +10,7 @@ from .automation_storage import (
 )
 from .storage import get_status, job_dir, set_report, set_status, write_json
 from .pdf_reports import build_and_store_review_pdf_variants
+from .evidence_frames import persist_review_evidence_frames
 from .live_scan_storage import finish_live_review
 from .telegram import (
     finish_batch_item_and_notify,
@@ -326,6 +327,17 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         )
         report_json=report.model_dump(mode='json')
         set_report(job_id, report_json, meta.automation_run_id)
+        try:
+            await anyio.to_thread.run_sync(
+                lambda: persist_review_evidence_frames(
+                    job_id,
+                    report_json,
+                    jd/'frames',
+                    frames,
+                )
+            )
+        except Exception:
+            logger.exception('Could not persist evidence frames for job %s.', job_id)
         try:
             await anyio.to_thread.run_sync(
                 lambda: build_and_store_review_pdf_variants(

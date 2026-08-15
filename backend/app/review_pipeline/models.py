@@ -529,6 +529,10 @@ class ReviewBatch(BaseModel):
     notification_status: str = 'pending'
 
 
+class ClientReviewDecisionInput(BaseModel):
+    decision: Literal['approved', 'disapproved']
+
+
 class ReviewAutomationInput(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     enabled: bool = False

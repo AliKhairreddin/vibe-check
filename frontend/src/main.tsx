@@ -21,12 +21,6 @@ import {
   useParams,
 } from '@tanstack/react-router';
 import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table';
-import {
   AlertCircle,
   CalendarClock,
   ChevronDown,
@@ -91,6 +85,11 @@ import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
 import { LiveScansPage } from '@/components/live-scans-page';
 import {
+  KissterraDashboardPage,
+  KissterraReviewDetailPage,
+} from '@/components/client-dashboard';
+import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
+import {
   batchOutcomeForOffer,
   findOfferOutcome,
   getOfferColumns,
@@ -110,6 +109,7 @@ import {
   getBatch,
   getBatches,
   getReport,
+  getReviewEvidence,
   getReviewSources,
   getStatus,
   listOfferCatalog,
@@ -123,6 +123,7 @@ import {
   type ReviewBatch,
   type ReviewBatchItem,
   type ReviewHistoryItem,
+  type ReviewEvidenceFrame,
   type Status,
 } from '@/lib/api';
 
@@ -340,7 +341,21 @@ function ShellLink({
   );
 }
 
-const rootRoute = createRootRoute({ component: AppShell });
+function isKissterraPortalLocation() {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname.startsWith('/kissterra')
+    || window.location.hostname.split('.')[0]?.toLowerCase() === 'kissterra';
+}
+
+function RootLayout() {
+  return isKissterraPortalLocation() ? <Outlet /> : <AppShell />;
+}
+
+function HomePage() {
+  return isKissterraPortalLocation() ? <KissterraDashboardPage /> : <DashboardPage />;
+}
+
+const rootRoute = createRootRoute({ component: RootLayout });
 
 function ReviewWorkspace() {
   const [sceneDetection, setSceneDetection] = useState(false);
@@ -1380,6 +1395,7 @@ function HistoryCard({
                         onChange={toggleVisibleSelection}
                       />
                     </TableHead>
+                    <TableHead className="h-11 w-16 px-2 text-xs text-muted-foreground">Creative</TableHead>
                     <TableHead className="h-11 w-72 text-xs text-muted-foreground">Upload</TableHead>
                     <TableHead className="h-11 w-32 text-xs text-muted-foreground">Uploaded</TableHead>
                     <TableHead className="h-11 w-20 text-xs text-muted-foreground">Status</TableHead>
@@ -1421,6 +1437,15 @@ function HistoryCard({
                             disabled={!entryIds.length}
                             ariaLabel={`Select ${label}`}
                             onChange={() => toggleEntrySelection(entry)}
+                          />
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <CreativeThumbnail
+                            alt={`Preview of ${label}`}
+                            className="size-10"
+                            jobId={entry.kind === 'review'
+                              ? entry.review.has_creative === false ? null : entry.review.job_id
+                              : entry.reviews.find((review) => review.has_creative !== false)?.job_id ?? null}
                           />
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
@@ -2119,6 +2144,11 @@ function ReportPage() {
     queryFn: () => getReviewSources(jobId),
     enabled: Boolean(query.data),
   });
+  const evidenceQuery = useQuery({
+    queryKey: ['evidence', jobId],
+    queryFn: () => getReviewEvidence(jobId),
+    enabled: Boolean(query.data),
+  });
   const offerResults: OfferResult[] = query.data
     ? query.data.offer_results?.length
       ? query.data.offer_results
@@ -2143,46 +2173,6 @@ function ReportPage() {
   const activeOffer = detailedResults.find((result) => result.offer_id === selectedOfferId)
     ?? detailedResults[0];
   const offerColumns = getOfferColumns([], [offerOutcomes]);
-  const column = createColumnHelper<Finding>();
-  const table = useReactTable({
-    data: activeOffer?.findings ?? [],
-    columns: [
-      column.accessor('severity', {
-        header: 'Severity',
-        cell: (info) => <SeverityBadge severity={info.getValue()} />,
-      }),
-      column.accessor(
-        (row) =>
-          `${row.timestamp_start ?? ''}${row.timestamp_end ? ` - ${row.timestamp_end}` : ''}`,
-        { id: 'timestamp', header: 'Timestamp' }
-      ),
-      column.accessor('source', {
-        header: 'Source',
-        cell: (info) => <Badge variant="outline">{formatSource(info.getValue())}</Badge>,
-      }),
-      column.accessor('evidence', { header: 'Evidence' }),
-      column.accessor('policy_reason', { header: 'Policy reason' }),
-      column.accessor('internal_override', {
-        header: 'Internal treatment',
-        cell: (info) => {
-          const override = info.getValue();
-          return override ? (
-            <div className="grid min-w-48 gap-1">
-              <Badge variant="secondary" className="w-fit">
-                {formatStatus(override.disposition)}
-              </Badge>
-              <span className="text-xs font-medium">{override.title || override.override_id}</span>
-              {override.rationale ? (
-                <span className="text-xs text-muted-foreground">{override.rationale}</span>
-              ) : null}
-            </div>
-          ) : <span className="text-sm text-muted-foreground">No internal exception</span>;
-        },
-      }),
-      column.accessor('suggested_fix', { header: 'Suggested fix' }),
-    ],
-    getCoreRowModel: getCoreRowModel(),
-  });
 
   if (query.isLoading) {
     return (
@@ -2308,12 +2298,21 @@ function ReportPage() {
           </CardAction>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-            {activeOffer.summary}
-          </p>
-          <p className="text-sm font-medium">
-            {resultDescription(activeOffer.overall_status)}
-          </p>
+          <div className="flex flex-col gap-4 sm:flex-row">
+            <CreativeThumbnail
+              alt={`Preview for review ${jobId}`}
+              className="h-40 w-32"
+              jobId={jobId}
+            />
+            <div className="grid content-start gap-3">
+              <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
+                {activeOffer.summary}
+              </p>
+              <p className="text-sm font-medium">
+                {resultDescription(activeOffer.overall_status)}
+              </p>
+            </div>
+          </div>
           {activeOffer.internal_disposition === 'accepted_with_override' ? (
             <Alert>
               <CheckCircle2 />
@@ -2414,47 +2413,41 @@ function ReportPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Findings</CardTitle>
-          <CardDescription>{activeOffer.findings.length} effective-policy findings returned</CardDescription>
+          <CardTitle className="text-xl">Findings with creative evidence</CardTitle>
+          <CardDescription>
+            {activeOffer.findings.length} effective-policy finding{activeOffer.findings.length === 1 ? '' : 's'} paired with the closest saved frame
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHead>
-                  ))}
-                </TableRow>
+          {activeOffer.findings.length ? (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {activeOffer.findings.map((finding, index) => (
+                <ReviewFindingCard
+                  key={`${finding.source}-${finding.timestamp_start ?? 'none'}-${index}`}
+                  finding={finding}
+                  frame={nearestReviewEvidenceFrame(
+                    evidenceQuery.data?.frames ?? [],
+                    finding.timestamp_start
+                  )}
+                  index={index + 1}
+                  jobId={jobId}
+                />
               ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        className="max-w-[22rem] whitespace-normal align-top"
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={table.getAllColumns().length}>
-                    No findings were returned.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-            </Table>
-          </div>
+            </div>
+          ) : (
+            <div className="grid min-h-40 place-items-center rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-6 text-center">
+              <div className="grid gap-2">
+                <CheckCircle2 className="mx-auto size-6 text-emerald-600" />
+                <p className="font-medium">No findings were returned</p>
+                <p className="text-sm text-muted-foreground">The creative is ready to run under this offer’s reviewed policy.</p>
+              </div>
+            </div>
+          )}
+          {evidenceQuery.error ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Saved frames are temporarily unavailable; the finding text is still complete.
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -2577,6 +2570,7 @@ function BatchPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-16">Creative</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Status</TableHead>
@@ -2604,6 +2598,12 @@ function BatchPage() {
                     }
                   }}
                 >
+                  <TableCell className="align-top">
+                    <CreativeThumbnail
+                      alt={`Preview of ${item.file_name}`}
+                      jobId={item.media_kind === 'copy_only' ? null : item.job_id}
+                    />
+                  </TableCell>
                   <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
                   <TableCell className="w-80 min-w-64 max-w-80 whitespace-normal align-top">
                     <span className="block truncate font-medium">{item.file_name}</span>
@@ -2787,6 +2787,95 @@ function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
   if (severity === 'high') return <Badge variant="destructive">High</Badge>;
   if (severity === 'medium') return <Badge variant="secondary">Medium</Badge>;
   return <Badge variant="outline">Low</Badge>;
+}
+
+function ReviewFindingCard({
+  finding,
+  frame,
+  index,
+  jobId,
+}: {
+  finding: Finding;
+  frame: ReviewEvidenceFrame | null;
+  index: number;
+  jobId: string;
+}) {
+  return (
+    <article className="flex gap-3 rounded-xl border bg-card p-3">
+      {frame ? (
+        <CreativeEvidenceImage
+          alt={`Evidence frame for finding ${index}`}
+          filename={frame.filename}
+          jobId={jobId}
+        />
+      ) : (
+        <span className="grid h-32 w-24 shrink-0 place-items-center rounded-lg border bg-muted/30 px-2 text-center text-[11px] font-medium text-muted-foreground sm:h-36 sm:w-28">
+          {formatSource(finding.source)}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline">#{index}</Badge>
+          <SeverityBadge severity={finding.severity} />
+          <Badge variant="outline">{formatSource(finding.source)}</Badge>
+          {finding.timestamp_start ? (
+            <Badge variant="secondary">{formatFindingTimestamp(finding.timestamp_start)}</Badge>
+          ) : null}
+        </div>
+        <p className="mt-3 text-sm font-medium leading-5">{finding.evidence}</p>
+        <div className="mt-3 grid gap-2 text-xs leading-5 text-muted-foreground">
+          <p><span className="font-semibold text-foreground">Policy:</span> {finding.policy_reason}</p>
+          <p><span className="font-semibold text-foreground">Fix:</span> {finding.suggested_fix}</p>
+        </div>
+        {finding.internal_override ? (
+          <div className="mt-3 rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-2 text-xs leading-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">{formatStatus(finding.internal_override.disposition)}</Badge>
+              <span className="font-medium">{finding.internal_override.title || finding.internal_override.override_id}</span>
+            </div>
+            {finding.internal_override.rationale ? (
+              <p className="mt-1 text-muted-foreground">{finding.internal_override.rationale}</p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function nearestReviewEvidenceFrame(
+  frames: ReviewEvidenceFrame[],
+  timestamp: string | null | undefined
+): ReviewEvidenceFrame | null {
+  if (!frames.length) return null;
+  const target = parseFindingTimestampSeconds(timestamp);
+  if (target === null || Number.isNaN(target)) return frames[0] ?? null;
+  return frames.reduce((nearest, frame) => {
+    if (frame.timestamp === null) return nearest;
+    if (!nearest || nearest.timestamp === null) return frame;
+    return Math.abs(frame.timestamp - target) < Math.abs(nearest.timestamp - target)
+      ? frame
+      : nearest;
+  }, null as ReviewEvidenceFrame | null) ?? frames[0] ?? null;
+}
+
+function formatFindingTimestamp(value: string) {
+  const seconds = parseFindingTimestampSeconds(value);
+  if (seconds === null || Number.isNaN(seconds)) return value;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.max(0, Math.round(seconds % 60));
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+}
+
+function parseFindingTimestampSeconds(value: string | null | undefined) {
+  if (!value) return null;
+  const parts = value.trim().split(':').map(Number);
+  if (parts.length >= 2 && parts.length <= 3 && parts.every(Number.isFinite)) {
+    const seconds = parts[parts.length - 1] + parts[parts.length - 2] * 60;
+    return parts.length === 3 ? seconds + parts[0] * 3600 : seconds;
+  }
+  const parsed = Number.parseFloat(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function buildReviewForm(
@@ -3037,7 +3126,17 @@ function batchTypeLabel(mediaKind: 'video' | 'image' | 'copy_only') {
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: DashboardPage,
+  component: HomePage,
+});
+const kissterraRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/kissterra',
+  component: KissterraDashboardPage,
+});
+const kissterraReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/kissterra/reviews/$jobId',
+  component: KissterraReviewDetailPage,
 });
 const newReviewRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -3082,6 +3181,8 @@ const automationsRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
+    kissterraRoute,
+    kissterraReviewRoute,
     newReviewRoute,
     historyRoute,
     liveScansRoute,

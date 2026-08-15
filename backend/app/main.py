@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
     BatchFailure,
     AutomationRunResult,
+    ClientReviewDecisionInput,
     ComplianceReport,
     CreateDriveReview,
     CreateReviewBatch,
@@ -55,12 +56,15 @@ from .review_pipeline.storage import (
     job_dir,
     list_reviews,
     list_reviews_page,
+    list_client_reviews,
+    get_client_review_report,
     get_review_stats,
     list_offer_profiles,
     now_ms,
     resolve_active_offer_profiles,
     resolve_review_offer_snapshot,
     set_review_source,
+    set_client_review_decision,
     upsert_offer_profile,
 )
 from .review_pipeline.queue import (
@@ -84,6 +88,11 @@ from .review_pipeline.pdf_reports import (
     ensure_batch_pdf,
     ensure_review_pdf,
     read_pdf_artifact,
+)
+from .review_pipeline.evidence_frames import (
+    list_review_evidence_frames,
+    read_remote_evidence_frame,
+    resolve_review_evidence_frame,
 )
 from .review_pipeline.live_scan_storage import (
     claim_live_review,
@@ -119,7 +128,15 @@ OBSERVATION_DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 MAX_BATCH_ITEMS = 100
 ADMIN_PASSWORD_HEADER = 'x-admin-password'
+CLIENT_PASSWORD_HEADER = 'x-client-password'
 AUTOMATION_SECRET_HEADER = 'x-automation-secret'
+CLIENT_PORTALS = {
+    'kissterra': {
+        'display_name': 'Kissterra',
+        'offer_id': 'kissterra',
+        'password_env': 'KISSTERRA_CLIENT_PASSWORD',
+    },
+}
 logger = logging.getLogger(__name__)
 background_tasks:set[asyncio.Task]=set()
 
@@ -279,7 +296,13 @@ app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], all
 @app.middleware('http')
 async def optional_password_gate(request: Request, call_next):
     password = os.getenv('APP_PASSWORD')
-    if password and request.url.path.startswith('/api') and request.headers.get('x-app-password') != password:
+    is_client_portal = request.url.path.startswith('/api/client/')
+    if (
+        password
+        and request.url.path.startswith('/api')
+        and not is_client_portal
+        and request.headers.get('x-app-password') != password
+    ):
         return JSONResponse({'detail':'Invalid or missing x-app-password'}, status_code=401)
     return await call_next(request)
 
@@ -296,6 +319,27 @@ def require_admin(request:Request)->None:
         raise HTTPException(401, 'Invalid or missing admin password.')
 
 
+def client_portal(client_id:str)->dict[str, str]:
+    config=CLIENT_PORTALS.get(client_id)
+    if config is None:
+        raise HTTPException(404, 'Client portal not found.')
+    return config
+
+
+def require_client(request:Request, client_id:str)->dict[str, str]:
+    config=client_portal(client_id)
+    expected=os.getenv(config['password_env'], '')
+    if not expected:
+        raise HTTPException(
+            503,
+            f'{config["display_name"]} client access is not configured.',
+        )
+    provided=request.headers.get(CLIENT_PASSWORD_HEADER, '')
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(401, 'Invalid or missing client password.')
+    return config
+
+
 def require_automation_secret(request:Request)->None:
     expected=os.getenv('CONVEX_HTTP_SECRET','')
     provided=request.headers.get(AUTOMATION_SECRET_HEADER,'')
@@ -307,6 +351,143 @@ def require_automation_secret(request:Request)->None:
 def admin_check(request:Request):
     require_admin(request)
     return {'authorized':True}
+
+
+def public_client_review(value:dict)->dict:
+    decision=value.get('decision') if isinstance(value.get('decision'), dict) else None
+    return {
+        'ai_status':value.get('aiStatus'),
+        'batch_id':value.get('batchId'),
+        'batch_source_label':value.get('batchSourceLabel'),
+        'created_at':value.get('createdAt'),
+        'decision':({
+            'decided_at':decision.get('decidedAt'),
+            'decision':decision.get('decision'),
+        } if decision else None),
+        'file_name':value.get('fileName'),
+        'job_id':value.get('jobId'),
+        'media_kind':value.get('mediaKind'),
+    }
+
+
+def public_evidence_frames(job_id:str)->list[dict]:
+    return [{
+        'filename':str(frame.get('filename') or ''),
+        'timestamp':frame.get('timestamp'),
+        'url':f'/api/reviews/{job_id}/frames/{frame.get("filename")}',
+    } for frame in list_review_evidence_frames(job_id) if frame.get('filename')]
+
+
+def evidence_frame_response(job_id:str, filename:str)->Response:
+    resolved=resolve_review_evidence_frame(job_id, filename)
+    if isinstance(resolved, Path):
+        return FileResponse(resolved)
+    if isinstance(resolved, str):
+        try:
+            content,content_type=read_remote_evidence_frame(resolved)
+        except httpx.HTTPError:
+            raise HTTPException(404, 'Evidence frame not found') from None
+        return Response(content, media_type=content_type)
+    raise HTTPException(404, 'Evidence frame not found')
+
+
+@app.get('/api/client/{client_id}/check')
+def client_check(client_id:str, request:Request):
+    config=require_client(request, client_id)
+    return {'authorized':True, 'client_id':client_id, 'display_name':config['display_name']}
+
+
+@app.get('/api/client/{client_id}/reviews')
+def client_reviews(client_id:str, request:Request, limit:int=100):
+    config=require_client(request, client_id)
+    reviews=list_client_reviews(client_id, config['offer_id'], limit)
+    return {
+        'client_id':client_id,
+        'display_name':config['display_name'],
+        'reviews':[public_client_review(review) for review in reviews],
+    }
+
+
+@app.get('/api/client/{client_id}/reviews/{job_id}')
+def client_review_detail(client_id:str, job_id:str, request:Request):
+    config=require_client(request, client_id)
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Client review not found')
+    report=get_client_review_report(client_id, config['offer_id'], job_id)
+    if report is None:
+        raise HTTPException(404, 'Client review not found')
+    matching=next((
+        review for review in list_client_reviews(client_id, config['offer_id'], 100)
+        if review.get('jobId') == job_id
+    ), None)
+    try:
+        status=get_status(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Client review not found') from None
+    return {
+        'client_id':client_id,
+        'display_name':config['display_name'],
+        'review':public_client_review(matching or {
+            'aiStatus':report.get('overall_status'),
+            'batchId':status.batch_id,
+            'batchSourceLabel':None,
+            'createdAt':status.created_at or 0,
+            'decision':None,
+            'fileName':status.file_name,
+            'jobId':status.job_id,
+            'mediaKind':'copy_only' if not status.has_creative else (
+                'image' if Path(status.file_name).suffix.lower() in {'.jpg','.jpeg','.png','.webp'} else 'video'
+            ),
+        }),
+        'report':report,
+        'evidence_frames':public_evidence_frames(job_id),
+    }
+
+
+@app.put('/api/client/{client_id}/reviews/{job_id}/decision')
+def decide_client_review(
+    client_id:str,
+    job_id:str,
+    payload:ClientReviewDecisionInput,
+    request:Request,
+):
+    config=require_client(request, client_id)
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Client review not found')
+    try:
+        value=set_client_review_decision(
+            client_id,
+            config['offer_id'],
+            job_id,
+            payload.decision,
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, 'Client review not found') from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {
+        'decided_at':value.get('decidedAt'),
+        'decision':value.get('decision'),
+    }
+
+
+@app.get('/api/client/{client_id}/reviews/{job_id}/thumbnail')
+def client_review_thumbnail(client_id:str, job_id:str, request:Request):
+    config=require_client(request, client_id)
+    if get_client_review_report(client_id, config['offer_id'], job_id) is None:
+        raise HTTPException(404, 'Client review not found')
+    frames=list_review_evidence_frames(job_id)
+    if not frames:
+        raise HTTPException(404, 'Creative thumbnail not found')
+    return evidence_frame_response(job_id, str(frames[0].get('filename') or ''))
+
+
+@app.get('/api/client/{client_id}/reviews/{job_id}/frames/{filename}')
+def client_review_frame(client_id:str, job_id:str, filename:str, request:Request):
+    config=require_client(request, client_id)
+    if get_client_review_report(client_id, config['offer_id'], job_id) is None:
+        raise HTTPException(404, 'Client review not found')
+    return evidence_frame_response(job_id, filename)
 
 
 @app.get('/api/health')
@@ -1191,11 +1372,30 @@ def download_pdf_report(job_id:str, offer_id:str|None=None):
     except KeyError:
         raise HTTPException(404, 'Offer report not found') from None
 
+
+@app.get('/api/reviews/{job_id}/evidence')
+def review_evidence(job_id:str):
+    try:
+        get_status(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Review job not found') from None
+    return {'frames':public_evidence_frames(job_id)}
+
+
+@app.get('/api/reviews/{job_id}/thumbnail')
+def review_thumbnail(job_id:str):
+    frames=list_review_evidence_frames(job_id)
+    if not frames:
+        raise HTTPException(404, 'Creative thumbnail not found')
+    return evidence_frame_response(job_id, str(frames[0].get('filename') or ''))
+
+
 @app.get('/api/reviews/{job_id}/frames/{filename}')
 def frame(job_id:str, filename:str):
-    p=job_dir(job_id)/'frames'/filename
-    if not p.exists(): raise HTTPException(404,'Frame not found')
-    return FileResponse(p)
+    legacy=job_dir(job_id)/'frames'/Path(filename).name
+    if legacy.exists():
+        return FileResponse(legacy)
+    return evidence_frame_response(job_id, filename)
 
 static=Path('frontend/dist')
 if static.exists():

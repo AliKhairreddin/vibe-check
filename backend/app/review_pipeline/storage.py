@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -33,6 +34,8 @@ CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
 CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
 OFFER_SETTINGS_FILE = 'offer_profiles.json'
 OFFER_REVISIONS_FILE = 'offer_profile_revisions.json'
+CLIENT_DECISIONS_FILE = 'client_review_decisions.json'
+REPORT_PDF_LAYOUT_VERSION = 2
 MAX_OFFER_PROFILE_BYTES = 850_000
 MAX_REPORT_RESULT_BYTES = 800_000
 MAX_OFFER_OVERRIDES = 100
@@ -710,6 +713,107 @@ def list_reviews_page(limit:int=50, cursor:str|None=None)->ReviewHistoryPage:
     )
 
 
+def _client_decisions_path()->Path:
+    return JOB_DATA_DIR/'settings'/CLIENT_DECISIONS_FILE
+
+
+def _read_local_client_decisions()->dict[str, dict[str, Any]]:
+    path=_client_decisions_path()
+    if not path.exists():
+        return {}
+    try:
+        value=read_json(path)
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def list_client_reviews(client_id:str, offer_id:str, limit:int=100)->list[dict[str, Any]]:
+    limit=max(1, min(limit, 100))
+    remote=_convex_call('query', 'clientReviews:list', {
+        'clientId':client_id,
+        'offerId':offer_id,
+        'limit':limit,
+    })
+    if isinstance(remote, list):
+        return remote
+    decisions=_read_local_client_decisions()
+    reviews=[]
+    for review in list_reviews(limit):
+        if review.status != JobStatus.complete:
+            continue
+        outcome=next((
+            value for value in review.offer_outcomes
+            if value.offer_id == offer_id and value.evaluation_state == 'evaluated'
+        ), None)
+        if outcome is None or outcome.overall_status is None:
+            continue
+        decision=decisions.get(f'{client_id}:{offer_id}:{review.job_id}')
+        batch_source_label=None
+        if review.batch_id:
+            try:
+                batch_source_label=get_batch(review.batch_id).source_label
+            except FileNotFoundError:
+                pass
+        suffix=Path(review.file_name).suffix.lower()
+        media_kind=(
+            'copy_only' if not review.has_creative
+            else 'image' if suffix in {'.jpg','.jpeg','.png','.webp'}
+            else 'video'
+        )
+        reviews.append({
+            'aiStatus':outcome.overall_status,
+            'batchId':review.batch_id,
+            'batchSourceLabel':batch_source_label,
+            'createdAt':review.created_at or 0,
+            'decision':decision,
+            'fileName':review.file_name,
+            'jobId':review.job_id,
+            'mediaKind':media_kind,
+        })
+    return reviews
+
+
+def get_client_review_report(client_id:str, offer_id:str, job_id:str)->dict[str, Any]|None:
+    remote=_convex_call('query', 'clientReviews:getReport', {
+        'clientId':client_id,
+        'offerId':offer_id,
+        'jobId':job_id,
+    })
+    if remote is not None:
+        return remote if isinstance(remote, dict) else None
+    try:
+        return _report_offer_result(get_report(job_id), offer_id)
+    except FileNotFoundError:
+        return None
+
+
+def set_client_review_decision(
+    client_id:str,
+    offer_id:str,
+    job_id:str,
+    decision:str,
+)->dict[str, Any]:
+    if decision not in {'approved','disapproved'}:
+        raise ValueError('Decision must be approved or disapproved.')
+    remote=_convex_call('mutation', 'clientReviews:decide', {
+        'clientId':client_id,
+        'offerId':offer_id,
+        'jobId':job_id,
+        'decision':decision,
+    })
+    if isinstance(remote, dict):
+        return remote
+    report=_report_offer_result(get_report(job_id), offer_id)
+    if report is None:
+        raise FileNotFoundError(job_id)
+    value={'decidedAt':now_ms(), 'decision':decision}
+    decisions=_read_local_client_decisions()
+    decisions[f'{client_id}:{offer_id}:{job_id}']=value
+    write_json(_client_decisions_path(), decisions)
+    return value
+
+
 def _offer_settings_path()->Path:
     return JOB_DATA_DIR/'settings'/OFFER_SETTINGS_FILE
 
@@ -1030,11 +1134,16 @@ def delete_review(job_id:str)->DeletedReview:
     remote=_convex_call('mutation', 'reviews:softDelete', {'jobId':job_id})
     deleted_at=int(remote.get('deleted_at')) if isinstance(remote, dict) else now_ms()
     write_json(JOB_DATA_DIR/job_id/'deleted.json', {'job_id':job_id, 'deleted_at':deleted_at})
-    artifact_owner_ids=[job_id]
+    artifact_owner_ids=[job_id, f'{job_id}:layout:{REPORT_PDF_LAYOUT_VERSION}']
     for offer_id in record.offer_ids:
         (JOB_DATA_DIR/job_id/f'report-{offer_id}.pdf').unlink(missing_ok=True)
         artifact_owner_ids.append(f'{job_id}:offer:{offer_id}')
+        artifact_owner_ids.append(
+            f'{job_id}:layout:{REPORT_PDF_LAYOUT_VERSION}:offer:{offer_id}'
+        )
     (JOB_DATA_DIR/job_id/'report.pdf').unlink(missing_ok=True)
+    shutil.rmtree(JOB_DATA_DIR/job_id/'evidence_frames', ignore_errors=True)
+    (JOB_DATA_DIR/job_id/'evidence_frames.json').unlink(missing_ok=True)
     if convex_enabled():
         for owner_id in artifact_owner_ids:
             try:
@@ -1046,4 +1155,12 @@ def delete_review(job_id:str)->DeletedReview:
             except Exception:
                 # The review remains deleted even if artifact cleanup must be retried later.
                 pass
+        try:
+            _convex_call(
+                'mutation',
+                'reviewEvidenceFrames:remove',
+                {'jobId':job_id},
+            )
+        except Exception:
+            pass
     return DeletedReview(job_id=job_id, deleted_at=deleted_at)

@@ -10,9 +10,11 @@
 
 import type * as automations from "../automations.js";
 import type * as batches from "../batches.js";
+import type * as clientReviews from "../clientReviews.js";
 import type * as liveScans from "../liveScans.js";
 import type * as offers from "../offers.js";
 import type * as reportArtifacts from "../reportArtifacts.js";
+import type * as reviewEvidenceFrames from "../reviewEvidenceFrames.js";
 import type * as reviewPayloads from "../reviewPayloads.js";
 import type * as reviews from "../reviews.js";
 
@@ -25,9 +27,11 @@ import type {
 declare const fullApi: ApiFromModules<{
   automations: typeof automations;
   batches: typeof batches;
+  clientReviews: typeof clientReviews;
   liveScans: typeof liveScans;
   offers: typeof offers;
   reportArtifacts: typeof reportArtifacts;
+  reviewEvidenceFrames: typeof reviewEvidenceFrames;
   reviewPayloads: typeof reviewPayloads;
   reviews: typeof reviews;
 }>;

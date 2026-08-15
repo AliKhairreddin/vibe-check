@@ -145,10 +145,13 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
 - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` and `GOOGLE_DRIVE_FOLDER_ID` for folder-scoped import;
 - `TELEGRAM_*` for batch completion notifications;
 - `ADMIN_PASSWORD` for protected guideline, internal-rule, revision, and history-removal actions;
+- `KISSTERRA_CLIENT_PASSWORD` for the dedicated Kissterra approval portal;
 - `MAX_UPLOAD_MB` and `JOB_WORKER_CONCURRENCY` for resource limits.
 
 Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository.
 The public offer catalog contains names and version counts only. Full official guidelines and current internal rules require an admin password, which the Settings page keeps in browser session storage after it verifies the password with the backend. Configure production with `pnpm exec wrangler secret put ADMIN_PASSWORD` before using Settings or removing history.
+
+The Kissterra portal is available at `/kissterra`. It only returns Kissterra results, stores the client password in browser session storage after server verification, and persists client approve/disapprove decisions separately from the automated verdict. The route is intentionally host-ready: after DNS and a Cloudflare custom-domain route are added, the same portal can be served from `kissterra.<domain>` without a second frontend.
 
 ## API Overview
 
@@ -163,6 +166,9 @@ The public offer catalog contains names and version counts only. Full official g
 | `GET /api/reviews/{job_id}` | Read job state |
 | `GET /api/reviews/{job_id}/report` | Read structured report JSON |
 | `GET /api/reviews/{job_id}/source` | Resolve safe creative/copy source links |
+| `GET /api/reviews/{job_id}/evidence` | List durable timestamped evidence frames |
+| `GET /api/client/kissterra/reviews` | Password-protected Kissterra batch review queue |
+| `PUT /api/client/kissterra/reviews/{job_id}/decision` | Save a Kissterra approval or disapproval |
 | `POST /api/live-scans/observe` | Ingest live Meta ad observations and queue unseen primary-text reviews |
 | `POST /api/live-scans/creative` | Upload an unseen live creative requested by name |
 | `GET /api/live-scans?date=YYYY-MM-DD` | Read accounts and findings observed live on a date |

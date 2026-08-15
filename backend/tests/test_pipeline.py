@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRec
 from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
+from app.review_pipeline.evidence_frames import persist_review_evidence_frames
 from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
 from app.review_pipeline.llm import ComplianceResponseError, parse_report_json, parse_strict_report_json
@@ -102,9 +104,17 @@ def test_pdf_evidence_selects_nearest_timestamped_frame():
     assert nearest_frame(frames, '5.4')['filename'] == 'frame-5.jpg'
     assert nearest_frame(frames, None)['filename'] == 'frame-0.jpg'
     assert timestamp_label(65.2) == '01:05'
+    assert timestamp_label('01:05') == '01:05'
+    assert nearest_frame(
+        [
+            {'filename': 'frame-5.jpg', 'timestamp': 5},
+            {'filename': 'frame-65.jpg', 'timestamp': 65},
+        ],
+        '01:05',
+    )['filename'] == 'frame-65.jpg'
 
 
-def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
+def test_review_pdf_fits_finding_and_frame_on_single_creative_page(tmp_path):
     frames_dir = tmp_path / 'frames'
     frames_dir.mkdir()
     Image.new('RGB', (360, 640), color=(57, 122, 184)).save(frames_dir / 'frame-5.jpg')
@@ -150,11 +160,13 @@ def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
 
     reader = PdfReader(target)
     text = '\n'.join(page.extract_text() or '' for page in reader.pages)
-    assert len(reader.pages) == 2
-    assert 'Audio evidence - 00:05' in text
-    assert 'Transcript excerpt' in text
-    assert 'Call now because you will always save fifty percent.' in text
-    assert 'The absolute savings claim is not substantiated.' in text
+    assert len(reader.pages) == 1
+    assert 'Creative decision sheet' in text
+    assert '#1 | ACP | Audio | 00:05 | High' in text
+    assert 'You will always save fifty percent.' in text
+    assert 'Fix: Use qualified, supportable savings language.' in text
+    assert 'Transcript excerpt' not in text
+    assert 'Call now because you will always save fifty percent.' not in text
     assert 'This extra summary explanation should not appear' not in text
     assert 'This additional explanation should not appear' not in text
     assert 'Red - Critical stop' in text
@@ -294,7 +306,7 @@ def test_offer_specific_finding_pages_omit_offer_name(tmp_path, monkeypatch):
     assert artifact.path is not None
     text='\n'.join(page.extract_text() or '' for page in PdfReader(artifact.path).pages)
     assert 'Kissterra' not in text
-    assert 'Finding 1 of 1' in text
+    assert '1 finding' in text
 
 
 def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monkeypatch):
@@ -331,7 +343,7 @@ def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monk
     assert 'Smart Financial' not in text
 
 
-def test_batch_pdf_combines_summary_and_individual_reports(tmp_path, monkeypatch):
+def test_batch_pdf_has_exactly_one_page_per_creative(tmp_path, monkeypatch):
     monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
     monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
@@ -409,10 +421,87 @@ def test_batch_pdf_combines_summary_and_individual_reports(tmp_path, monkeypatch
     assert artifact.path is not None
     reader = PdfReader(artifact.path)
     text = '\n'.join(page.extract_text() or '' for page in reader.pages)
-    assert len(reader.pages) == 4
-    assert 'Batch Compliance Evidence Report' in text
+    assert len(reader.pages) == 2
+    assert 'Batch Compliance Evidence Report' not in text
     assert 'First creative.png' in text
     assert 'Second creative.png' in text
+
+
+def test_review_pdf_keeps_twenty_five_findings_on_one_page(tmp_path):
+    target = tmp_path / 'many-findings.pdf'
+    record = JobRecord(job_id='8' * 32, file_name='Many findings.mp4')
+    report = {
+        'offer_id': 'kissterra',
+        'offer_name': 'Kissterra',
+        'overall_status': 'amber',
+        'summary': 'Several concise issues require review.',
+        'findings': [{
+            'severity': 'medium',
+            'source': 'ad_copy',
+            'timestamp_start': None,
+            'timestamp_end': None,
+            'evidence': f'Finding number {index} challenges the policy.',
+            'policy_reason': 'The policy requires a qualified statement.',
+            'suggested_fix': f'Fix finding number {index}.',
+            'confidence': 'high',
+        } for index in range(1, 26)],
+    }
+
+    generate_review_report_pdf(target, record, report)
+
+    reader = PdfReader(target)
+    text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+    assert len(reader.pages) == 1
+    assert '#1 | Kissterra | Ad copy' in text
+    assert '#25 | Kissterra | Ad copy' in text
+    assert 'Finding number 25 challenges the policy.' in text
+
+
+@pytest.mark.anyio
+async def test_saved_evidence_frame_remains_available_after_working_frames_are_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    job_id='7' * 32
+    set_status(job_id, JobStatus.complete, 100, 'Complete', 'Evidence creative.mp4')
+    frames_dir=tmp_path/job_id/'frames'
+    frames_dir.mkdir(parents=True)
+    Image.new('RGB', (240, 320), color=(57, 122, 184)).save(frames_dir/'frame-5.jpg')
+    report={
+        'offer_id':'kissterra',
+        'offer_name':'Kissterra',
+        'overall_status':'amber',
+        'summary':'One issue.',
+        'findings':[{
+            'severity':'medium',
+            'source':'visual',
+            'timestamp_start':'5',
+            'timestamp_end':None,
+            'evidence':'A visual issue appears.',
+            'policy_reason':'Policy reason.',
+            'suggested_fix':'Use a neutral image.',
+            'confidence':'high',
+        }],
+    }
+
+    persist_review_evidence_frames(
+        job_id,
+        report,
+        frames_dir,
+        [{'filename':'frame-5.jpg','timestamp':5.0}],
+    )
+    shutil.rmtree(frames_dir)
+
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        evidence=await client.get(f'/api/reviews/{job_id}/evidence')
+        image=await client.get(f'/api/reviews/{job_id}/frames/frame-5.jpg')
+
+    assert evidence.status_code == 200
+    assert evidence.json()['frames'][0]['timestamp'] == 5.0
+    assert image.status_code == 200
+    assert image.headers['content-type'].startswith('image/')
 
 def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
     meta=ReviewRequestMeta(ad_copy='Facebook caption text.', notes='Brand note.')
@@ -2619,6 +2708,90 @@ async def test_offer_admin_routes_require_password_and_catalog_is_sanitized(tmp_
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
     assert authorized.json()['offers'][0]['official_guidelines']
+
+
+@pytest.mark.anyio
+async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('KISSTERRA_CLIENT_PASSWORD', 'client-secret')
+    job_id='6' * 32
+    set_status(
+        job_id,
+        JobStatus.queued,
+        0,
+        'Queued',
+        'Kissterra creative.mp4',
+        offer_ids=['acp','kissterra'],
+        primary_offer_id='acp',
+    )
+    set_report(job_id, {
+        'schema_version':2,
+        'primary_offer_id':'acp',
+        'offer_results':[
+            {
+                'offer_id':'acp',
+                'offer_name':'ACP',
+                'overall_status':'green',
+                'summary':'ACP-only result must stay hidden.',
+                'findings':[],
+            },
+            {
+                'offer_id':'kissterra',
+                'offer_name':'Kissterra',
+                'overall_status':'amber',
+                'summary':'A Kissterra issue needs review.',
+                'findings':[],
+            },
+        ],
+        'offer_outcomes':[
+            {
+                'offer_id':'acp',
+                'offer_name':'ACP',
+                'evaluation_state':'evaluated',
+                'overall_status':'green',
+            },
+            {
+                'offer_id':'kissterra',
+                'offer_name':'Kissterra',
+                'evaluation_state':'evaluated',
+                'overall_status':'amber',
+            },
+        ],
+        'offer_id':'acp',
+        'offer_name':'ACP',
+        'overall_status':'green',
+        'summary':'ACP-only result must stay hidden.',
+        'findings':[],
+    })
+    set_status(job_id, JobStatus.complete, 100, 'Complete')
+    transport=httpx.ASGITransport(app=app)
+    headers={'x-client-password':'client-secret'}
+
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        unauthorized=await client.get('/api/client/kissterra/reviews')
+        reviews=await client.get('/api/client/kissterra/reviews', headers=headers)
+        detail=await client.get(f'/api/client/kissterra/reviews/{job_id}', headers=headers)
+        missing=await client.get(f'/api/client/kissterra/reviews/{"7" * 32}', headers=headers)
+        decision=await client.put(
+            f'/api/client/kissterra/reviews/{job_id}/decision',
+            headers=headers,
+            json={'decision':'approved'},
+        )
+        updated=await client.get('/api/client/kissterra/reviews', headers=headers)
+
+    assert unauthorized.status_code == 401
+    assert reviews.status_code == 200
+    assert reviews.json()['reviews'][0]['ai_status'] == 'amber'
+    assert detail.status_code == 200
+    assert missing.status_code == 404
+    assert detail.json()['report']['offer_id'] == 'kissterra'
+    assert 'ACP-only result' not in detail.text
+    assert decision.status_code == 200
+    assert decision.json()['decision'] == 'approved'
+    assert updated.json()['reviews'][0]['decision']['decision'] == 'approved'
 
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

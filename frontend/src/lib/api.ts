@@ -180,6 +180,48 @@ export type Report = OfferResult & {
   offer_outcomes?: OfferOutcome[];
 };
 
+export type ReviewEvidenceFrame = {
+  filename: string;
+  timestamp: number | null;
+  url: string;
+};
+
+export type ReviewEvidence = {
+  frames: ReviewEvidenceFrame[];
+};
+
+export type ClientDecisionValue = 'approved' | 'disapproved';
+
+export type ClientReviewDecision = {
+  decided_at: number;
+  decision: ClientDecisionValue;
+};
+
+export type ClientReviewItem = {
+  ai_status: OverallStatus;
+  batch_id: string | null;
+  batch_source_label: string | null;
+  created_at: number;
+  decision: ClientReviewDecision | null;
+  file_name: string;
+  job_id: string;
+  media_kind: 'video' | 'image' | 'copy_only';
+};
+
+export type ClientReviewList = {
+  client_id: string;
+  display_name: string;
+  reviews: ClientReviewItem[];
+};
+
+export type ClientReviewDetail = {
+  client_id: string;
+  display_name: string;
+  review: ClientReviewItem;
+  report: OfferResult;
+  evidence_frames: ReviewEvidenceFrame[];
+};
+
 export type ReviewHistoryItem = Status & {
   overall_status?: Report['overall_status'] | null;
   creative_result?: Report['overall_status'] | null;
@@ -345,6 +387,10 @@ const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 const MAX_CHUNK_ATTEMPTS = 3;
 const ADMIN_PASSWORD_KEY = 'vibe-check-admin-password';
 
+function clientPasswordKey(clientId: string) {
+  return `vibe-check-client-password:${clientId}`;
+}
+
 export function getAdminPassword(): string {
   if (typeof window === 'undefined') return '';
   return window.sessionStorage.getItem(ADMIN_PASSWORD_KEY) ?? '';
@@ -360,6 +406,24 @@ export function setAdminPassword(password: string): void {
 function adminHeaders(headers?: HeadersInit, password = getAdminPassword()): Headers {
   const result = new Headers(headers);
   if (password) result.set('x-admin-password', password);
+  return result;
+}
+
+export function getClientPassword(clientId: string): string {
+  if (typeof window === 'undefined') return '';
+  return window.sessionStorage.getItem(clientPasswordKey(clientId)) ?? '';
+}
+
+export function setClientPassword(clientId: string, password: string): void {
+  if (typeof window === 'undefined') return;
+  const normalized = password.trim();
+  if (normalized) window.sessionStorage.setItem(clientPasswordKey(clientId), normalized);
+  else window.sessionStorage.removeItem(clientPasswordKey(clientId));
+}
+
+function clientHeaders(clientId: string, headers?: HeadersInit, password = getClientPassword(clientId)) {
+  const result = new Headers(headers);
+  if (password) result.set('x-client-password', password);
   return result;
 }
 
@@ -722,4 +786,66 @@ export async function getReport(id: string): Promise<Report> {
 
 export async function getReviewSources(id: string): Promise<ReviewSources> {
   return requestJson<ReviewSources>(`/api/reviews/${id}/source`);
+}
+
+export async function getReviewEvidence(id: string): Promise<ReviewEvidence> {
+  return requestJson<ReviewEvidence>(`/api/reviews/${id}/evidence`);
+}
+
+export async function verifyClientPassword(clientId: string, password: string): Promise<void> {
+  await requestJson(`/api/client/${encodeURIComponent(clientId)}/check`, {
+    headers: clientHeaders(clientId, undefined, password),
+  });
+}
+
+export async function listClientReviews(clientId: string, limit = 100): Promise<ClientReviewList> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return requestJson<ClientReviewList>(
+    `/api/client/${encodeURIComponent(clientId)}/reviews?${params}`,
+    { headers: clientHeaders(clientId) }
+  );
+}
+
+export async function getClientReview(
+  clientId: string,
+  jobId: string
+): Promise<ClientReviewDetail> {
+  return requestJson<ClientReviewDetail>(
+    `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}`,
+    { headers: clientHeaders(clientId) }
+  );
+}
+
+export async function decideClientReview(
+  clientId: string,
+  jobId: string,
+  decision: ClientDecisionValue
+): Promise<ClientReviewDecision> {
+  return requestJson<ClientReviewDecision>(
+    `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/decision`,
+    {
+      method: 'PUT',
+      headers: clientHeaders(clientId, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ decision }),
+    }
+  );
+}
+
+export async function fetchClientReviewImage(
+  clientId: string,
+  jobId: string,
+  filename?: string
+): Promise<Blob> {
+  const suffix = filename
+    ? `/frames/${encodeURIComponent(filename)}`
+    : '/thumbnail';
+  const response = await fetch(
+    `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}${suffix}`,
+    { headers: clientHeaders(clientId) }
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(apiErrorMessage(body, response.status));
+  }
+  return response.blob();
 }

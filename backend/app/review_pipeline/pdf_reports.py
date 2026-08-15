@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 ArtifactOwnerType = Literal['review', 'batch']
 PDF_CONTENT_TYPE = 'application/pdf'
+PDF_LAYOUT_VERSION = 2
 PAGE_SIZE = landscape(letter)
 PAGE_WIDTH, PAGE_HEIGHT = PAGE_SIZE
 TERMINAL_BATCH_STATUSES = {'complete', 'failed', 'upload_failed'}
@@ -123,7 +124,8 @@ def batch_pdf_path(batch_id: str, offer_id: str | None = None) -> Path:
 
 
 def _artifact_owner_id(owner_id: str, offer_id: str | None) -> str:
-    return f'{owner_id}:offer:{offer_id}' if offer_id else owner_id
+    versioned_owner = f'{owner_id}:layout:{PDF_LAYOUT_VERSION}'
+    return f'{versioned_owner}:offer:{offer_id}' if offer_id else versioned_owner
 
 
 def _artifact_path(
@@ -308,14 +310,18 @@ def _google_drive_url(record: JobRecord) -> str | None:
     return url
 
 
-def _draw_google_drive_link(pdf: canvas.Canvas, record: JobRecord) -> None:
+def _draw_google_drive_link(
+    pdf: canvas.Canvas,
+    record: JobRecord,
+    *,
+    x: float = 44,
+    y: float = PAGE_HEIGHT - 117,
+) -> None:
     url = _google_drive_url(record)
     if not url:
         return
     label = 'Google Drive:'
     link_text = 'Open exact creative'
-    x = 44
-    y = PAGE_HEIGHT - 117
     pdf.setFont(FONT_BOLD, 9)
     pdf.setFillColor(colors.HexColor('#3d72b4'))
     pdf.drawString(x, y, label)
@@ -406,10 +412,23 @@ def _format_date(value: int | None) -> str:
 def _timestamp_seconds(value: Any) -> float | None:
     if value in (None, ''):
         return None
+    text = str(value).strip()
+    if ':' in text:
+        parts = text.split(':')
+        if 2 <= len(parts) <= 3:
+            try:
+                numbers = [float(part) for part in parts]
+            except ValueError:
+                pass
+            else:
+                seconds = numbers[-1] + numbers[-2] * 60
+                if len(numbers) == 3:
+                    seconds += numbers[0] * 3600
+                return seconds
     try:
         return float(value)
     except (TypeError, ValueError):
-        match = re.search(r'\d+(?:\.\d+)?', str(value))
+        match = re.search(r'\d+(?:\.\d+)?', text)
         return float(match.group(0)) if match else None
 
 
@@ -831,6 +850,346 @@ def _continuation_page(
     )
 
 
+def _ellipsize_to_width(
+    value: Any,
+    width: float,
+    font_name: str,
+    font_size: float,
+) -> str:
+    text = re.sub(r'\s+', ' ', _plain(value)).strip()
+    if not text or width <= 0:
+        return ''
+    if pdfmetrics.stringWidth(text, font_name, font_size) <= width:
+        return text
+    suffix = '...'
+    available = max(0, width - pdfmetrics.stringWidth(suffix, font_name, font_size))
+    words = text.split()
+    line = ''
+    for word in words:
+        candidate = f'{line} {word}'.strip()
+        if pdfmetrics.stringWidth(candidate, font_name, font_size) > available:
+            break
+        line = candidate
+    if line:
+        return line.rstrip(' ,;:-') + suffix
+    clipped = ''
+    for character in text:
+        if pdfmetrics.stringWidth(clipped + character, font_name, font_size) > available:
+            break
+        clipped += character
+    return clipped.rstrip() + suffix
+
+
+def _draw_wrapped_lines(
+    pdf: canvas.Canvas,
+    value: Any,
+    *,
+    x: float,
+    y_top: float,
+    width: float,
+    font_name: str,
+    font_size: float,
+    leading: float,
+    max_lines: int,
+    color: colors.Color,
+) -> float:
+    text = re.sub(r'\s+', ' ', _plain(value)).strip()
+    if not text or max_lines <= 0:
+        return y_top
+    words = text.split()
+    lines: list[str] = []
+    current = ''
+    while words and len(lines) < max_lines:
+        word = words.pop(0)
+        candidate = f'{current} {word}'.strip()
+        if not current or pdfmetrics.stringWidth(candidate, font_name, font_size) <= width:
+            current = candidate
+            continue
+        lines.append(current)
+        current = word
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if words and lines:
+        remainder = ' '.join([lines[-1], *words])
+        lines[-1] = _ellipsize_to_width(remainder, width, font_name, font_size)
+    pdf.setFillColor(color)
+    pdf.setFont(font_name, font_size)
+    y = y_top
+    for line in lines:
+        pdf.drawString(x, y, line)
+        y -= leading
+    return y
+
+
+def _draw_thumbnail(
+    pdf: canvas.Canvas,
+    image_path: Path | None,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    *,
+    border: colors.Color,
+    label: str = '',
+) -> None:
+    pdf.setFillColor(colors.HexColor('#f7f9fc'))
+    pdf.setStrokeColor(border)
+    pdf.setLineWidth(0.8)
+    pdf.roundRect(x, y, width, height, 3, fill=1, stroke=1)
+    rendered = False
+    if image_path is not None:
+        try:
+            with Image.open(image_path) as image:
+                image_width, image_height = image.size
+            inset = 3
+            scale = min(
+                (width - inset * 2) / max(1, image_width),
+                (height - inset * 2) / max(1, image_height),
+            )
+            draw_width = image_width * scale
+            draw_height = image_height * scale
+            pdf.drawImage(
+                str(image_path),
+                x + (width - draw_width) / 2,
+                y + (height - draw_height) / 2,
+                draw_width,
+                draw_height,
+                preserveAspectRatio=True,
+                mask='auto',
+            )
+            rendered = True
+        except Exception:
+            logger.exception('Could not render compact evidence frame %s.', image_path)
+    if not rendered and label:
+        font_size = 6 if width < 50 else 7
+        pdf.setFillColor(colors.HexColor('#667085'))
+        pdf.setFont(FONT_BOLD, font_size)
+        pdf.drawCentredString(
+            x + width / 2,
+            y + height / 2 - font_size / 3,
+            _ellipsize_to_width(label.upper(), width - 8, FONT_BOLD, font_size),
+        )
+
+
+def _finding_action(finding: dict[str, Any]) -> tuple[str, str]:
+    suggested_fix = _direct_pdf_text(finding.get('suggested_fix'), max_words=18)
+    if suggested_fix:
+        return 'Fix', suggested_fix
+    return 'Policy', _direct_pdf_text(finding.get('policy_reason'), max_words=18)
+
+
+def _draw_finding_card(
+    pdf: canvas.Canvas,
+    *,
+    offer: dict[str, Any],
+    finding: dict[str, Any],
+    index: int,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    frames_dir: Path | None,
+    frames: Sequence[dict[str, Any]],
+    include_offer_names: bool,
+) -> None:
+    source = str(finding.get('source') or 'policy')
+    source_label = SOURCE_LABELS.get(source, source.replace('_', ' ').title())
+    severity = _plain(finding.get('severity') or 'not available').title()
+    severity_color = {
+        'High': STATUS_COLORS['red'],
+        'Medium': STATUS_COLORS['amber'],
+        'Low': colors.HexColor('#3d72b4'),
+    }.get(severity, colors.HexColor('#64748b'))
+    pdf.setFillColor(colors.white)
+    pdf.setStrokeColor(colors.HexColor('#d7dde6'))
+    pdf.setLineWidth(0.65)
+    pdf.roundRect(x, y, width, height, 3, fill=1, stroke=1)
+    pdf.setFillColor(severity_color)
+    pdf.rect(x, y, 3, height, fill=1, stroke=0)
+
+    compact = height < 38
+    frame_width = min(66 if not compact else 34, max(28, height * 1.2))
+    frame_height = max(20, height - 8)
+    frame_x = x + 8
+    frame_y = y + (height - frame_height) / 2
+    frame = nearest_frame(frames, finding.get('timestamp_start')) if source in {
+        'audio', 'onscreen_text', 'visual'
+    } else None
+    _draw_thumbnail(
+        pdf,
+        _frame_path(frames_dir, frame),
+        frame_x,
+        frame_y,
+        frame_width,
+        frame_height,
+        border=severity_color,
+        label=source_label,
+    )
+
+    text_x = frame_x + frame_width + 7
+    text_width = width - (text_x - x) - 8
+    meta_size = 5.6 if compact else 6.5
+    body_size = 5.7 if compact else 7.2
+    action_size = 5.4 if compact else 6.5
+    timestamp = timestamp_label(finding.get('timestamp_start'))
+    offer_name = _plain(offer.get('offer_name') or offer.get('offer_id') or 'Offer')
+    meta_parts = [f'#{index}', source_label, timestamp, severity]
+    if include_offer_names:
+        meta_parts.insert(1, offer_name)
+    meta = ' | '.join(meta_parts)
+    pdf.setFillColor(severity_color)
+    pdf.setFont(FONT_BOLD, meta_size)
+    meta_y = y + height - (8 if compact else 11)
+    pdf.drawString(
+        text_x,
+        meta_y,
+        _ellipsize_to_width(meta, text_width, FONT_BOLD, meta_size),
+    )
+
+    evidence = _direct_pdf_text(finding.get('evidence'), max_words=24)
+    action_label, action = _finding_action(finding)
+    body_y = meta_y - (7 if compact else 11)
+    pdf.setFillColor(colors.HexColor('#111827'))
+    pdf.setFont(FONT_BOLD, body_size)
+    pdf.drawString(
+        text_x,
+        body_y,
+        _ellipsize_to_width(evidence or 'Finding detail unavailable.', text_width, FONT_BOLD, body_size),
+    )
+    action_y = body_y - (7 if compact else 12)
+    pdf.setFillColor(colors.HexColor('#526173'))
+    pdf.setFont(FONT_REGULAR, action_size)
+    action_text = f'{action_label}: {action or "Review the finding before publishing."}'
+    pdf.drawString(
+        text_x,
+        action_y,
+        _ellipsize_to_width(action_text, text_width, FONT_REGULAR, action_size),
+    )
+
+
+def _creative_page(
+    pdf: canvas.Canvas,
+    record: JobRecord,
+    report: dict[str, Any],
+    frames_dir: Path | None,
+    frames: Sequence[dict[str, Any]],
+    *,
+    include_offer_names: bool,
+) -> None:
+    findings = _all_findings(report)
+    offers = _offer_results(report)
+    primary = offers[0] if offers else report
+    title = _plain(record.file_name or record.job_id)
+    subtitle = f'Creative decision sheet | Review job {record.job_id}'
+    _header(pdf, title, subtitle)
+
+    master_frame = frames[0] if frames else None
+    master_path = _frame_path(frames_dir, master_frame)
+    _draw_thumbnail(
+        pdf,
+        master_path,
+        34,
+        454,
+        112,
+        82,
+        border=_status_color(primary.get('overall_status')),
+        label='Copy-only review' if not record.has_creative else 'Creative preview',
+    )
+    pdf.setFillColor(colors.HexColor('#3d72b4'))
+    pdf.setFont(FONT_BOLD, 7.5)
+    pdf.drawString(158, 523, 'CREATIVE')
+    pdf.setFillColor(colors.HexColor('#111827'))
+    pdf.setFont(FONT_BOLD, 10)
+    pdf.drawString(
+        158,
+        507,
+        _ellipsize_to_width(title, 420, FONT_BOLD, 10),
+    )
+    pdf.setFillColor(colors.HexColor('#667085'))
+    pdf.setFont(FONT_REGULAR, 7.5)
+    finding_suffix = '' if len(findings) == 1 else 's'
+    details = f'{_format_date(record.created_at)} | {len(findings)} finding{finding_suffix}'
+    pdf.drawString(158, 492, details)
+    if include_offer_names:
+        names = ', '.join(_plain(offer.get('offer_name') or offer.get('offer_id')) for offer in offers)
+        pdf.drawString(
+            158,
+            479,
+            _ellipsize_to_width(f'Offers: {names}', 420, FONT_REGULAR, 7.5),
+        )
+    summary_y = 464 if include_offer_names else 478
+    _draw_wrapped_lines(
+        pdf,
+        _direct_pdf_text(primary.get('summary') or 'No review summary was returned.', max_words=30),
+        x=158,
+        y_top=summary_y,
+        width=420,
+        font_name=FONT_REGULAR,
+        font_size=7.2,
+        leading=9,
+        max_lines=2,
+        color=colors.HexColor('#526173'),
+    )
+    _draw_status_pill(
+        pdf,
+        PAGE_WIDTH - 184,
+        502,
+        primary.get('overall_status'),
+        _offer_status_label(primary),
+    )
+    _draw_google_drive_link(pdf, record, x=610, y=486)
+
+    pdf.setFillColor(colors.HexColor('#111827'))
+    pdf.setFont(FONT_BOLD, 10)
+    pdf.drawString(34, 435, 'Findings')
+    pdf.setFillColor(colors.HexColor('#667085'))
+    pdf.setFont(FONT_REGULAR, 7)
+    pdf.drawString(100, 435, 'Concise evidence and the recommended action')
+
+    if not findings:
+        pdf.setFillColor(colors.HexColor('#f3faf6'))
+        pdf.setStrokeColor(STATUS_COLORS['green'])
+        pdf.setLineWidth(1)
+        pdf.roundRect(34, 72, PAGE_WIDTH - 68, 340, 5, fill=1, stroke=1)
+        pdf.setFillColor(STATUS_COLORS['green'])
+        pdf.setFont(FONT_BOLD, 17)
+        pdf.drawCentredString(PAGE_WIDTH / 2, 265, 'No policy findings')
+        pdf.setFillColor(colors.HexColor('#526173'))
+        pdf.setFont(FONT_REGULAR, 9)
+        pdf.drawCentredString(PAGE_WIDTH / 2, 244, 'This creative is ready to run under the reviewed policy.')
+        return
+
+    columns = 1 if len(findings) <= 6 else 2
+    rows = (len(findings) + columns - 1) // columns
+    gap_x = 8
+    gap_y = 4
+    area_x = 34
+    area_bottom = 36
+    area_top = 422
+    area_width = PAGE_WIDTH - 68
+    area_height = area_top - area_bottom
+    card_width = (area_width - gap_x * (columns - 1)) / columns
+    card_height = (area_height - gap_y * (rows - 1)) / rows
+    for offset, (offer, finding) in enumerate(findings):
+        column_index = offset // rows
+        row_index = offset % rows
+        x = area_x + column_index * (card_width + gap_x)
+        y = area_top - (row_index + 1) * card_height - row_index * gap_y
+        _draw_finding_card(
+            pdf,
+            offer=offer,
+            finding=finding,
+            index=offset + 1,
+            x=x,
+            y=y,
+            width=card_width,
+            height=card_height,
+            frames_dir=frames_dir,
+            frames=frames,
+            include_offer_names=include_offer_names,
+        )
+
+
 def generate_review_report_pdf(
     target: Path | io.BytesIO,
     record: JobRecord,
@@ -848,7 +1207,7 @@ def generate_review_report_pdf(
     pdf = NumberedCanvas(canvas_target, pagesize=PAGE_SIZE, pageCompression=1)
     pdf.setTitle(f'{record.file_name or record.job_id} - Compliance Evidence Report')
     pdf.setAuthor('Vibe Check')
-    _summary_page(
+    _creative_page(
         pdf,
         record,
         report,
@@ -857,32 +1216,6 @@ def generate_review_report_pdf(
         include_offer_names=include_offer_names,
     )
     pdf.showPage()
-    findings = _all_findings(report)
-    for finding_index, (offer, finding) in enumerate(findings, start=1):
-        remaining = _finding_page(
-            pdf,
-            record,
-            offer,
-            finding,
-            finding_index,
-            len(findings),
-            frames_dir,
-            frames,
-            transcript,
-            ad_copy,
-            include_offer_names=include_offer_names,
-        )
-        pdf.showPage()
-        while remaining:
-            remaining = _continuation_page(
-                pdf,
-                record,
-                offer,
-                finding_index,
-                remaining,
-                include_offer_names=include_offer_names,
-            )
-            pdf.showPage()
     pdf.save()
 
 
@@ -1057,6 +1390,37 @@ def _batch_cover_pdf(batch: ReviewBatch, offer_id: str | None = None) -> bytes:
     return buffer.getvalue()
 
 
+def _failed_creative_pdf(item: Any) -> bytes:
+    buffer = io.BytesIO()
+    pdf = NumberedCanvas(buffer, pagesize=PAGE_SIZE, pageCompression=1)
+    title = _plain(getattr(item, 'file_name', '') or 'Creative unavailable')
+    _header(pdf, title, 'Creative decision sheet')
+    pdf.setFillColor(colors.HexColor('#fff7f7'))
+    pdf.setStrokeColor(STATUS_COLORS['red'])
+    pdf.setLineWidth(1.2)
+    pdf.roundRect(54, 116, PAGE_WIDTH - 108, 350, 6, fill=1, stroke=1)
+    pdf.setFillColor(STATUS_COLORS['red'])
+    pdf.setFont(FONT_BOLD, 18)
+    pdf.drawCentredString(PAGE_WIDTH / 2, 342, 'Review could not be completed')
+    pdf.setFillColor(colors.HexColor('#526173'))
+    pdf.setFont(FONT_REGULAR, 9)
+    _draw_wrapped_lines(
+        pdf,
+        getattr(item, 'message', '') or 'No result is available for this creative.',
+        x=112,
+        y_top=310,
+        width=PAGE_WIDTH - 224,
+        font_name=FONT_REGULAR,
+        font_size=9,
+        leading=13,
+        max_lines=5,
+        color=colors.HexColor('#526173'),
+    )
+    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
+
+
 def build_and_store_batch_pdf(
     batch: ReviewBatch,
     offer_id: str | None = None,
@@ -1070,11 +1434,11 @@ def build_and_store_batch_pdf(
     ):
         raise KeyError(offer_id)
     writer = PdfWriter()
-    cover_bytes = _batch_cover_pdf(batch, offer_id)
-    for page in PdfReader(io.BytesIO(cover_bytes)).pages:
-        writer.add_page(page)
     for item in batch.items:
         if item.status != 'complete' or not item.job_id:
+            failed_bytes = _failed_creative_pdf(item)
+            for page in PdfReader(io.BytesIO(failed_bytes)).pages:
+                writer.add_page(page)
             continue
         try:
             artifact = ensure_review_pdf(item.job_id, offer_id)

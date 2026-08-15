@@ -42,6 +42,7 @@ import {
   type ReviewStats,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { CreativeThumbnail } from '@/components/creative-media';
 import {
   getOfferColumns,
   OfferOutcomeCell,
@@ -562,6 +563,10 @@ function RecentReviewRow({
 }) {
   const content = (
     <>
+      <CreativeThumbnail
+        alt={`Preview of ${review.file_name || review.job_id}`}
+        jobId={review.has_creative === false ? null : review.job_id}
+      />
       <div className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{review.file_name || review.job_id}</span>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">

@@ -15,6 +15,27 @@ export default defineSchema({
     mediaStorageId: v.optional(v.id("_storage")),
     updatedAt: v.number(),
   }).index("by_job_id", ["jobId"]),
+  reviewEvidenceFrames: defineTable({
+    createdAt: v.number(),
+    frames: v.array(v.object({
+      filename: v.string(),
+      storageId: v.id("_storage"),
+      timestamp: v.optional(v.number()),
+    })),
+    jobId: v.string(),
+    updatedAt: v.number(),
+  }).index("by_job_id", ["jobId"]),
+  clientReviewDecisions: defineTable({
+    clientId: v.string(),
+    createdAt: v.number(),
+    decidedAt: v.number(),
+    decision: v.union(v.literal("approved"), v.literal("disapproved")),
+    jobId: v.string(),
+    offerId: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_client_id_and_offer_id_and_job_id", ["clientId", "offerId", "jobId"])
+    .index("by_client_id_and_decided_at", ["clientId", "decidedAt"]),
   reportArtifacts: defineTable({
     contentType: v.string(),
     createdAt: v.number(),
@@ -143,6 +164,12 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_offer_id_deleted_at", ["offerId", "deletedAt"])
+    .index("by_offer_id_and_deleted_at_and_status_and_created_at", [
+      "offerId",
+      "deletedAt",
+      "status",
+      "createdAt",
+    ])
     .index("by_job_id", ["jobId"]),
   reviewOfferReports: defineTable({
     createdAt: v.number(),
