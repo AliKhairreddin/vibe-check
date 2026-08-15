@@ -359,6 +359,9 @@ def _finding_from_item(item: Any, default_status: str | None = None) -> dict[str
             'policy_reason': text,
             'suggested_fix': 'Review the claim against the applicable policy before publishing.',
             'confidence': 'medium',
+            'enforcement_consequence': 'none',
+            'consequence_policy_basis': '',
+            'controlling_internal_rule_id': None,
         }
 
     if not isinstance(item, dict):
@@ -421,6 +424,9 @@ def _finding_from_item(item: Any, default_status: str | None = None) -> dict[str
         'policy_reason': str(policy_reason or evidence or 'Potential policy issue needs human review.'),
         'suggested_fix': str(suggested_fix or 'Review the claim against the applicable policy before publishing.'),
         'confidence': _confidence(_first_present(item, ('confidence', 'certainty'))),
+        'enforcement_consequence': 'none',
+        'consequence_policy_basis': '',
+        'controlling_internal_rule_id': None,
         'internal_override': _internal_override(
             _first_present(item, ('internal_override', 'internalOverride', 'override'))
         ),
@@ -593,7 +599,9 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                             f'verdict rules: {last_error}. Return the complete corrected JSON '
                             'object only. Green must have zero findings. Amber must include low '
                             'or medium findings. Red must include a high finding tied to an '
-                            'explicitly critical enforcement consequence in the supplied policy.'
+                            'explicitly critical enforcement consequence in the supplied policy, '
+                            'including its enforcement_consequence, exact consequence_policy_basis, '
+                            'and controlling_internal_rule_id fields.'
                         ),
                     },
                 ]

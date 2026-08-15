@@ -185,28 +185,43 @@ def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, mon
                 'offer_id': 'acp',
                 'offer_name': 'ACP',
                 'overall_status': 'green',
-                'summary': 'ACP summary.',
+                'summary': 'Ready under the current internal rules.',
                 'findings': [],
                 'internal_disposition': 'accepted_with_override',
             },
-            {'offer_id': 'kissterra', 'offer_name': 'Kissterra', 'overall_status': 'amber', 'summary': 'Kissterra summary.', 'findings': []},
-            {'offer_id': 'lead-economy', 'offer_name': 'Lead Economy', 'overall_status': 'green', 'summary': 'Lead Economy summary.', 'findings': []},
-            {'offer_id': 'smart-financial', 'offer_name': 'Smart Financial', 'overall_status': 'red', 'summary': 'Smart Financial summary.', 'findings': []},
+            {'offer_id': 'kissterra', 'offer_name': 'Kissterra', 'overall_status': 'amber', 'summary': 'One routine issue needs attention.', 'findings': []},
+            {'offer_id': 'lead-economy', 'offer_name': 'Lead Economy', 'overall_status': 'green', 'summary': 'Ready to run.', 'findings': []},
+            {'offer_id': 'smart-financial', 'offer_name': 'Smart Financial', 'overall_status': 'red', 'summary': 'A severe consequence was identified.', 'findings': []},
         ],
     }
 
     artifacts = build_and_store_review_pdf_variants(record.job_id, record, report)
+    combined_artifact = next(
+        artifact
+        for artifact in artifacts
+        if artifact.filename == 'Partner creative.v2-report.pdf'
+    )
+    assert combined_artifact.path is not None
+    combined_text = '\n'.join(
+        page.extract_text() or ''
+        for page in PdfReader(combined_artifact.path).pages
+    )
+    assert 'ACP' in combined_text
+    assert 'Kissterra' in combined_text
+    assert 'Lead Economy' in combined_text
+    assert 'Smart Financial' in combined_text
     lead_artifact = next(artifact for artifact in artifacts if 'Lead Economy' in artifact.filename)
     assert lead_artifact.filename == 'Partner creative.v2 - Lead Economy-report.pdf'
     assert lead_artifact.path is not None
     text = '\n'.join(page.extract_text() or '' for page in PdfReader(lead_artifact.path).pages)
-    assert 'Lead Economy' in text
+    assert 'Lead Economy' not in text
     assert 'ACP' not in text
     assert 'Kissterra' not in text
     assert 'Smart Financial' not in text
     acp_artifact = next(artifact for artifact in artifacts if 'ACP' in artifact.filename)
     assert acp_artifact.path is not None
     acp_text = '\n'.join(page.extract_text() or '' for page in PdfReader(acp_artifact.path).pages)
+    assert 'ACP' not in acp_text
     assert 'Green - Internal exception' in acp_text
 
 
@@ -238,6 +253,50 @@ def test_remote_offer_pdf_uses_current_offer_filename(tmp_path, monkeypatch):
     assert artifact.filename == 'Creative.version.2 - Lead Economy-report.pdf'
 
 
+def test_offer_specific_finding_pages_omit_offer_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    record=JobRecord(
+        job_id='9' * 32,
+        file_name='Partner creative.mp4',
+        offer_ids=['kissterra'],
+    )
+    report={
+        'schema_version':2,
+        'primary_offer_id':'kissterra',
+        'offer_results':[{
+            'offer_id':'kissterra',
+            'offer_name':'Kissterra',
+            'overall_status':'amber',
+            'summary':'One routine issue needs attention.',
+            'findings':[{
+                'severity':'medium',
+                'source':'ad_copy',
+                'timestamp_start':None,
+                'timestamp_end':None,
+                'evidence':'A required disclaimer is missing.',
+                'policy_reason':'The applicable policy requires the disclaimer.',
+                'suggested_fix':'Add the required disclaimer.',
+                'confidence':'high',
+            }],
+        }],
+    }
+
+    artifact=build_and_store_review_pdf(
+        record.job_id,
+        record,
+        report,
+        offer_id='kissterra',
+    )
+
+    assert artifact.filename == 'Partner creative - Kissterra-report.pdf'
+    assert artifact.path is not None
+    text='\n'.join(page.extract_text() or '' for page in PdfReader(artifact.path).pages)
+    assert 'Kissterra' not in text
+    assert 'Finding 1 of 1' in text
+
+
 def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monkeypatch):
     monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
@@ -264,9 +323,10 @@ def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monk
     )
 
     artifact = build_and_store_batch_pdf(batch, 'lead-economy')
+    assert artifact.filename == 'Partner uploads - Lead Economy-report.pdf'
     assert artifact.path is not None
     text = '\n'.join(page.extract_text() or '' for page in PdfReader(artifact.path).pages)
-    assert 'Lead Economy' in text
+    assert 'Lead Economy' not in text
     assert 'ACP' not in text
     assert 'Smart Financial' not in text
 
@@ -908,6 +968,13 @@ def test_strict_openrouter_report_requires_findings_for_non_green_verdicts(
             'policy_reason':'The supplied guideline requires review.',
             'suggested_fix':'Revise the claim.',
             'confidence':'high',
+            'enforcement_consequence':(
+                'payment_withheld_or_forfeited' if severity == 'high' else 'none'
+            ),
+            'consequence_policy_basis':(
+                'Funds will be withheld.' if severity == 'high' else ''
+            ),
+            'controlling_internal_rule_id':None,
         }],
     )))
     assert report.overall_status == overall_status
@@ -918,6 +985,28 @@ def test_strict_openrouter_report_accepts_green_with_no_findings():
     report=parse_strict_report_json(json.dumps(strict_report_payload()))
     assert report.overall_status == 'green'
     assert report.findings == []
+
+
+def test_strict_openrouter_report_rejects_high_finding_without_severe_consequence():
+    payload=strict_report_payload(
+        overall_status='red',
+        findings=[{
+            'severity':'high',
+            'source':'policy',
+            'timestamp_start':None,
+            'timestamp_end':None,
+            'evidence':'A clear ordinary prohibition was observed.',
+            'policy_reason':'The supplied policy prohibits this wording.',
+            'suggested_fix':'Remove the wording.',
+            'confidence':'high',
+            'enforcement_consequence':'none',
+            'consequence_policy_basis':'',
+            'controlling_internal_rule_id':None,
+        }],
+    )
+
+    with pytest.raises(ComplianceResponseError, match='approved enforcement consequence'):
+        parse_strict_report_json(json.dumps(payload))
 
 
 def test_strict_openrouter_report_accepts_green_with_applied_override():
@@ -952,6 +1041,9 @@ async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semant
                 'policy_reason':'The wording could be clearer.',
                 'suggested_fix':'Use more precise wording.',
                 'confidence':'medium',
+                'enforcement_consequence':'none',
+                'consequence_policy_basis':'',
+                'controlling_internal_rule_id':None,
             }],
         ),
     ]
@@ -1948,6 +2040,143 @@ def offer_with_cash_override()->OfferProfile:
             rationale='Approved operationally for ACP.',
         )],
     )
+
+
+def offer_with_global_enforcement_rule(
+    official_guidelines: str = 'Official policy prohibits unsupported claims.',
+)->OfferProfile:
+    seed=seeded_offer_inputs()['acp']
+    enforcement_rule=next(
+        rule
+        for rule in seed.internal_overrides
+        if rule.override_id == 'refund-rebate-and-enforcement'
+    )
+    return OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines=official_guidelines,
+        internal_overrides=[enforcement_rule],
+    )
+
+
+def red_consequence_report(
+    *,
+    consequence='none',
+    basis='',
+    controlling_internal_rule_id=None,
+    policy_reason='The policy prohibits the observed element.',
+)->ComplianceReport:
+    return ComplianceReport.model_validate({
+        'overall_status':'red',
+        'summary':'A critical issue was identified.',
+        'source_results':{
+            'creative':{'status':'red','summary':'Critical creative issue.'},
+            'ad_copy':None,
+        },
+        'findings':[{
+            'severity':'high',
+            'source':'visual',
+            'evidence':'Observed prohibited creative element.',
+            'policy_reason':policy_reason,
+            'suggested_fix':'Remove the prohibited element.',
+            'confidence':'high',
+            'enforcement_consequence':consequence,
+            'consequence_policy_basis':basis,
+            'controlling_internal_rule_id':controlling_internal_rule_id,
+        }],
+    })
+
+
+def test_red_guard_downgrades_clear_violation_without_severe_consequence():
+    report=red_consequence_report()
+
+    changed=review_jobs.enforce_consequence_based_red(
+        report,
+        offer_with_global_enforcement_rule(),
+    )
+
+    assert changed
+    assert report.overall_status == 'amber'
+    assert report.findings[0].severity == 'medium'
+    assert report.findings[0].enforcement_consequence == 'none'
+    assert report.source_results.creative is not None
+    assert report.source_results.creative.status == 'amber'
+    assert 'does not support a severe-consequence red result' in report.summary
+
+
+def test_red_guard_accepts_severe_consequence_from_controlling_internal_rule():
+    report=red_consequence_report(
+        consequence='payment_withheld_or_forfeited',
+        basis='funds-withheld/account-paused risk',
+        controlling_internal_rule_id='refund-rebate-and-enforcement',
+        policy_reason='This is a clear government-angle violation.',
+    )
+
+    changed=review_jobs.enforce_consequence_based_red(
+        report,
+        offer_with_global_enforcement_rule(),
+    )
+
+    assert not changed
+    assert report.overall_status == 'red'
+    assert report.findings[0].severity == 'high'
+
+
+def test_red_guard_rejects_negative_consequence_text_from_global_internal_rule():
+    report=red_consequence_report(
+        consequence='partnership_suspended_or_terminated',
+        basis='partnership suspension/termination',
+        controlling_internal_rule_id='refund-rebate-and-enforcement',
+        policy_reason='This is a clear government-angle violation.',
+    )
+
+    changed=review_jobs.enforce_consequence_based_red(
+        report,
+        offer_with_global_enforcement_rule(),
+    )
+
+    assert changed
+    assert report.overall_status == 'amber'
+
+
+def test_red_guard_internal_severity_rule_overrides_harsher_official_brand_policy():
+    official=(
+        'Large brand angles cause your account to get fully blocked and forced no pay.'
+    )
+    report=red_consequence_report(
+        consequence='account_blocked_disabled_or_terminated',
+        basis='your account to get fully blocked',
+        controlling_internal_rule_id=None,
+    )
+
+    changed=review_jobs.enforce_consequence_based_red(
+        report,
+        offer_with_global_enforcement_rule(official),
+    )
+
+    assert changed
+    assert report.overall_status == 'amber'
+
+
+def test_red_guard_accepts_official_partnership_termination_without_internal_severity_rule():
+    official=(
+        'Violations may result in withholding of payment, suspension, or termination of partnership.'
+    )
+    profile=OfferProfile(
+        offer_id='partner',
+        display_name='Partner',
+        official_guidelines=official,
+    )
+    report=red_consequence_report(
+        consequence='partnership_suspended_or_terminated',
+        basis='suspension, or termination of partnership',
+        controlling_internal_rule_id=None,
+    )
+
+    changed=review_jobs.enforce_consequence_based_red(report, profile)
+
+    assert not changed
+    assert report.overall_status == 'red'
 
 
 @pytest.mark.anyio

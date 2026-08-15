@@ -5,6 +5,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ResultStatus = Literal['green','amber','red']
+EnforcementConsequence = Literal[
+    'none',
+    'payment_withheld_or_forfeited',
+    'campaign_or_account_paused',
+    'account_blocked_disabled_or_terminated',
+    'partnership_suspended_or_terminated',
+]
 ReviewSourceKind = Literal['google_drive_file','google_sheet','meta_ads']
 ReviewSourceStatus = Literal['linked','not_found','ambiguous','unavailable']
 LEGACY_RESULT_STATUSES = {
@@ -92,6 +99,9 @@ class Finding(BaseModel):
     policy_reason: str
     suggested_fix: str
     confidence: Literal['low','medium','high']
+    enforcement_consequence: EnforcementConsequence = 'none'
+    consequence_policy_basis: str = ''
+    controlling_internal_rule_id: str | None = None
     internal_override: AppliedOverride | None = None
 
 class SafeRewrite(BaseModel):
@@ -125,6 +135,26 @@ class LLMFinding(StrictLLMModel):
     policy_reason: str = Field(min_length=1, max_length=1_500)
     suggested_fix: str = Field(min_length=1, max_length=1_500)
     confidence: Literal['low','medium','high']
+    enforcement_consequence: EnforcementConsequence
+    consequence_policy_basis: str = Field(max_length=1_500)
+    controlling_internal_rule_id: str | None
+
+    @model_validator(mode='after')
+    def validate_consequence_matches_severity(self):
+        if self.severity == 'high':
+            if self.enforcement_consequence == 'none':
+                raise ValueError('high severity requires an approved enforcement consequence')
+            if not self.consequence_policy_basis.strip():
+                raise ValueError('high severity requires exact consequence policy text')
+        elif (
+            self.enforcement_consequence != 'none'
+            or self.consequence_policy_basis.strip()
+            or self.controlling_internal_rule_id is not None
+        ):
+            raise ValueError(
+                'low and medium findings must not claim a critical enforcement consequence'
+            )
+        return self
 
 
 class LLMSafeRewrite(StrictLLMModel):

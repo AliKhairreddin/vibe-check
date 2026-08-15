@@ -19,6 +19,7 @@ from .telegram import (
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_internal_override_context, build_policy_context, built_in_acp_profile
+from .enforcement import enforce_consequence_based_red
 from .ocr import run_ocr
 from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
@@ -135,7 +136,6 @@ def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->
             'The model returned duplicate internal override applications; only the first was kept: '
             + ', '.join(sorted(duplicate_ids))
         )
-    report.internal_disposition=_internal_disposition(report)
 
 
 async def _review_offer(
@@ -177,6 +177,8 @@ async def _review_offer(
     if evidence_note not in report.limitations:
         report.limitations.append(evidence_note)
     _validate_applied_overrides(report, profile)
+    enforce_consequence_based_red(report, profile)
+    report.internal_disposition=_internal_disposition(report)
     return OfferComplianceResult.model_validate(
         report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
     )

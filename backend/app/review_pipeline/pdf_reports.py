@@ -558,10 +558,14 @@ def _draw_image_box(
     height: float,
     *,
     callout: str,
-    evidence: bool = False,
+    evidence_status: Any = None,
     placeholder: str = 'No creative frame is available for this report.',
 ) -> None:
-    border = colors.HexColor('#c62828') if evidence else colors.HexColor('#4f83c2')
+    border = (
+        _status_color(evidence_status)
+        if evidence_status is not None
+        else colors.HexColor('#4f83c2')
+    )
     pdf.setFillColor(colors.HexColor('#f7f9fc'))
     pdf.setStrokeColor(border)
     pdf.setLineWidth(2.2)
@@ -606,6 +610,8 @@ def _summary_page(
     report: dict[str, Any],
     frames_dir: Path | None,
     frames: Sequence[dict[str, Any]],
+    *,
+    include_offer_names: bool,
 ) -> None:
     title = f'{record.file_name or record.job_id} - Compliance Evidence Report'
     _header(pdf, title, f'Review job {record.job_id}')
@@ -626,7 +632,11 @@ def _summary_page(
     pdf.setFont(FONT_BOLD, 9)
     pdf.drawString(58, flow_y - 2, 'Creative evidence')
     pdf.drawCentredString(PAGE_WIDTH / 2, flow_y - 2, 'Automated policy review')
-    pdf.drawRightString(PAGE_WIDTH - 58, flow_y - 2, 'Offer outcomes')
+    pdf.drawRightString(
+        PAGE_WIDTH - 58,
+        flow_y - 2,
+        'Offer outcomes' if include_offer_names else 'Overall outcome',
+    )
     pdf.setStrokeColor(colors.HexColor('#111827'))
     pdf.setLineWidth(1.5)
     pdf.line(190, flow_y - 19, 315, flow_y - 19)
@@ -657,7 +667,11 @@ def _summary_page(
     pdf.drawString(412, 378, 'Results summary')
     y = 342
     for offer in offers[:6]:
-        name = _plain(offer.get('offer_name') or offer.get('offer_id') or 'Offer')
+        name = (
+            _plain(offer.get('offer_name') or offer.get('offer_id') or 'Offer')
+            if include_offer_names
+            else 'Overall result'
+        )
         pdf.setFillColor(colors.HexColor('#111827'))
         pdf.setFont(FONT_BOLD, 9)
         pdf.drawString(412, y + 8, name[:42])
@@ -721,6 +735,8 @@ def _finding_page(
     frames: Sequence[dict[str, Any]],
     transcript: dict[str, Any] | None,
     ad_copy: str,
+    *,
+    include_offer_names: bool,
 ) -> list[Any]:
     source = str(finding.get('source') or 'policy')
     source_label = SOURCE_LABELS.get(source, source.replace('_', ' ').title())
@@ -728,7 +744,11 @@ def _finding_page(
     offer_name = _plain(offer.get('offer_name') or offer.get('offer_id') or 'Offer')
     _header(
         pdf,
-        f'{offer_name} finding {index} of {count}',
+        (
+            f'{offer_name} finding {index} of {count}'
+            if include_offer_names
+            else f'Finding {index} of {count}'
+        ),
         f'{record.file_name or record.job_id} | {source_label} | {timestamp}',
     )
     _draw_status_pill(
@@ -762,7 +782,7 @@ def _finding_page(
         342,
         426,
         callout=callout,
-        evidence=True,
+        evidence_status=offer.get('overall_status'),
         placeholder=placeholder,
     )
     pdf.setFillColor(colors.HexColor('#ffffff'))
@@ -785,11 +805,17 @@ def _continuation_page(
     offer: dict[str, Any],
     finding_index: int,
     flowables: Sequence[Any],
+    *,
+    include_offer_names: bool,
 ) -> list[Any]:
     offer_name = _plain(offer.get('offer_name') or offer.get('offer_id') or 'Offer')
     _header(
         pdf,
-        f'{offer_name} finding {finding_index} continued',
+        (
+            f'{offer_name} finding {finding_index} continued'
+            if include_offer_names
+            else f'Finding {finding_index} continued'
+        ),
         record.file_name or record.job_id,
     )
     pdf.setFillColor(colors.HexColor('#ffffff'))
@@ -814,6 +840,7 @@ def generate_review_report_pdf(
     frames: Sequence[dict[str, Any]] = (),
     transcript: dict[str, Any] | None = None,
     ad_copy: str = '',
+    include_offer_names: bool = True,
 ) -> None:
     if isinstance(target, Path):
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -821,7 +848,14 @@ def generate_review_report_pdf(
     pdf = NumberedCanvas(canvas_target, pagesize=PAGE_SIZE, pageCompression=1)
     pdf.setTitle(f'{record.file_name or record.job_id} - Compliance Evidence Report')
     pdf.setAuthor('Vibe Check')
-    _summary_page(pdf, record, report, frames_dir, frames)
+    _summary_page(
+        pdf,
+        record,
+        report,
+        frames_dir,
+        frames,
+        include_offer_names=include_offer_names,
+    )
     pdf.showPage()
     findings = _all_findings(report)
     for finding_index, (offer, finding) in enumerate(findings, start=1):
@@ -836,10 +870,18 @@ def generate_review_report_pdf(
             frames,
             transcript,
             ad_copy,
+            include_offer_names=include_offer_names,
         )
         pdf.showPage()
         while remaining:
-            remaining = _continuation_page(pdf, record, offer, finding_index, remaining)
+            remaining = _continuation_page(
+                pdf,
+                record,
+                offer,
+                finding_index,
+                remaining,
+                include_offer_names=include_offer_names,
+            )
             pdf.showPage()
     pdf.save()
 
@@ -867,6 +909,7 @@ def build_and_store_review_pdf(
         frames=frames,
         transcript=transcript,
         ad_copy=ad_copy,
+        include_offer_names=offer_id is None,
     )
     persist_pdf_artifact('review', job_id, path, filename, offer_id)
     return PdfArtifact(filename=filename, path=path)
@@ -949,7 +992,7 @@ def _batch_offer_summary(item: Any, offer_id: str | None = None) -> str:
         if outcome.evaluation_state != 'evaluated':
             continue
         status = outcome.overall_status or 'not rated'
-        values.append(f'{outcome.offer_name}: {status.title()}')
+        values.append(status.title() if offer_id else f'{outcome.offer_name}: {status.title()}')
     if values:
         return ' | '.join(values)
     if offer_id:
@@ -960,15 +1003,13 @@ def _batch_offer_summary(item: Any, offer_id: str | None = None) -> str:
 def _batch_cover_pdf(batch: ReviewBatch, offer_id: str | None = None) -> bytes:
     buffer = io.BytesIO()
     pdf = NumberedCanvas(buffer, pagesize=PAGE_SIZE, pageCompression=1)
-    offer_name = _batch_offer_name(batch, offer_id)
-    title_prefix = f'{offer_name} ' if offer_name else ''
-    pdf.setTitle(f'{title_prefix}Batch {batch.batch_id} - Compliance Evidence Report')
+    pdf.setTitle(f'Batch {batch.batch_id} - Compliance Evidence Report')
     rows_per_page = 11
     chunks = [batch.items[index:index + rows_per_page] for index in range(0, len(batch.items), rows_per_page)] or [[]]
     for page_index, items in enumerate(chunks, start=1):
         _header(
             pdf,
-            f'{title_prefix}Batch Compliance Evidence Report',
+            'Batch Compliance Evidence Report',
             f'Batch {batch.batch_id} | Uploaded {_format_date(batch.created_at)}',
         )
         pdf.setFillColor(colors.HexColor('#3d72b4'))

@@ -27,12 +27,13 @@ The system is intentionally hybrid:
 - Produces strict JSON reports with separate creative and ad-copy results.
 - Evaluates one evidence bundle against every active offer with saved guidelines; inactive or unconfigured offers remain visible as N/A.
 - Applies offer-scoped current internal rules above source guidelines on exact conflicts, while recording every permitted exception that changes a run decision.
-- Uses a three-level action model: green for ready-to-run results, amber for routine fixes or review, and red only for explicit critical enforcement risk.
+- Uses a three-level action model: green for ready-to-run results, amber for routine fixes or review, and red only when a deterministic server guard verifies an approved severe consequence in the controlling effective policy.
 - Handles files up to 400 MB through retryable 8 MB chunks.
 - Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.
 - Supports folder-first Google Drive browsing, whole-folder selection, drill-down file selection, and exact-ID deduplication.
 - Sends one multi-offer Telegram summary after every item in a batch reaches a terminal state.
+- Generates combined PDFs with offer labels and partner-specific PDFs without the partner name inside the pages; partner names remain in download filenames.
 - Provides an offer-filtered dashboard, cursor-paginated history, recoverable history removal, and direct report/source links.
 - Saves disabled-by-default Drive review automations with timezone, weekday, time, subfolder, and filename-glob controls.
 - Accepts automatic live-ad observations from the bundled Chrome extension, deduplicates media by normalized creative name, and reviews each unique primary text separately as copy-only evidence.
@@ -85,7 +86,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 136 backend tests covering pipeline behavior, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 143 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
