@@ -22,6 +22,14 @@ type BatchItem = {
   status: string;
 };
 
+type BatchReviewState = {
+  batchItemId?: string;
+  deletedAt?: number;
+  jobId: string;
+  message: string;
+  status: string;
+};
+
 const publicOfferOutcomeValidator = v.object({
   ad_copy_result: v.union(v.string(), v.null()),
   creative_result: v.union(v.string(), v.null()),
@@ -106,6 +114,40 @@ async function findBatch(ctx: MutationCtx | QueryCtx, batchId: string) {
     .unique();
 }
 
+async function hydrateBatchItems(
+  ctx: QueryCtx,
+  batchId: string,
+  items: BatchItem[],
+) {
+  const reviews = await ctx.db
+    .query("reviews")
+    .withIndex("by_batch_id", (q) => q.eq("batchId", batchId))
+    .collect() as BatchReviewState[];
+  const reviewByItemId = new Map(
+    reviews.flatMap((review) =>
+      review.deletedAt === undefined && review.batchItemId
+        ? [[review.batchItemId, review] as const]
+        : []
+    ),
+  );
+  return items.map((item) => {
+    const review = reviewByItemId.get(item.itemId);
+    if (!review) return item;
+    if (
+      TERMINAL_BATCH_STATUSES.has(item.status)
+      && !TERMINAL_BATCH_STATUSES.has(review.status)
+    ) {
+      return item;
+    }
+    return {
+      ...item,
+      jobId: review.jobId,
+      message: review.message,
+      status: review.status,
+    };
+  });
+}
+
 export const createBatch = mutation({
   args: {
     secret: v.string(),
@@ -153,7 +195,9 @@ export const getBatch = query({
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const batch = await findBatch(ctx, args.batchId);
-    return batch ? publicBatch(batch) : null;
+    if (!batch) return null;
+    const items = await hydrateBatchItems(ctx, batch.batchId, batch.items);
+    return publicBatch({ ...batch, items });
   },
 });
 
@@ -172,7 +216,12 @@ export const getBatches = query({
     const batches = await Promise.all(
       batchIds.map((batchId) => findBatch(ctx, batchId)),
     );
-    return batches.flatMap((batch) => batch ? [publicBatch(batch)] : []);
+    const hydrated = await Promise.all(batches.map(async (batch) => {
+      if (!batch) return null;
+      const items = await hydrateBatchItems(ctx, batch.batchId, batch.items);
+      return publicBatch({ ...batch, items });
+    }));
+    return hydrated.flatMap((batch) => batch ? [batch] : []);
   },
 });
 

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,9 @@ MAX_REPORT_RESULT_BYTES = 800_000
 MAX_OFFER_OVERRIDES = 100
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 RESULT_STATUSES = {'green','amber','red'}
+TRANSIENT_CONVEX_HTTP_CODES = {408, 409, 425, 429}
+CONVEX_CALL_ATTEMPTS = 4
+CONVEX_RETRY_BASE_SECONDS = 0.2
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
     'yellow': 'amber',
@@ -105,6 +109,31 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
 
+def _convex_call_with_retry(kind:str, path:str, args:dict[str, Any])->Any:
+    """Retry transient Convex transport and contention responses.
+
+    A batch can advance several review jobs simultaneously. Convex already
+    retries optimistic-concurrency conflicts inside a mutation, but a sustained
+    burst can still surface as a transient HTTP error. Progress persistence is
+    idempotent, so retrying the whole call keeps infrastructure contention from
+    being misclassified as a failed creative.
+    """
+    for attempt in range(1, CONVEX_CALL_ATTEMPTS + 1):
+        try:
+            return _convex_call(kind, path, args)
+        except urllib.error.HTTPError as exc:
+            transient = (
+                exc.code in TRANSIENT_CONVEX_HTTP_CODES
+                or exc.code >= 500
+            )
+            if not transient or attempt == CONVEX_CALL_ATTEMPTS:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == CONVEX_CALL_ATTEMPTS:
+                raise
+        time.sleep(CONVEX_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+    raise RuntimeError('Convex retry loop exited unexpectedly.')
+
 def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None, automation_run_id:str|None=None)->JobRecord:
     current_file_name=file_name
     current_file_size=file_size
@@ -167,7 +196,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         review_args['fileSize'] = rec.file_size
     if automation_run_id:
         review_args['automationRunId'] = automation_run_id
-    _convex_call('mutation', 'reviews:upsertStatus', review_args)
+    _convex_call_with_retry('mutation', 'reviews:upsertStatus', review_args)
     if rec.batch_id and rec.batch_item_id:
         _update_local_batch_item(
             rec.batch_id,
@@ -424,7 +453,7 @@ def update_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
     args={'batchId':batch_id,'itemId':item_id,'status':status,'message':message}
     if job_id:
         args['jobId']=job_id
-    remote=_convex_call('mutation', 'batches:updateItemStatus', args)
+    remote=_convex_call_with_retry('mutation', 'batches:updateItemStatus', args)
     return ReviewBatch.model_validate(remote) if remote is not None else local
 
 def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=None, result:str|None=None, offer_outcomes:list[OfferOutcome]|None=None, message:str='')->tuple[ReviewBatch,bool]:
@@ -464,7 +493,7 @@ def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
             }
             for outcome in resolved_outcomes
         ]
-    remote=_convex_call('mutation', 'batches:finishItem', args)
+    remote=_convex_call_with_retry('mutation', 'batches:finishItem', args)
     if remote is None:
         return local,local_should_notify
     return ReviewBatch.model_validate(remote['batch']),bool(remote['shouldNotify'])

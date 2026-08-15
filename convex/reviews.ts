@@ -580,28 +580,6 @@ export const upsertStatus = mutation({
     if (existing) await ctx.db.patch(existing._id, value);
     await syncReviewOfferStats(ctx, review, now);
 
-    if (value.batchId && value.batchItemId) {
-      const batch = await ctx.db
-        .query("reviewBatches")
-        .withIndex("by_batch_id", (q) => q.eq("batchId", value.batchId!))
-        .unique();
-      if (batch) {
-        const items = batch.items.map((item) => item.itemId === value.batchItemId ? {
-          ...item,
-          jobId: args.jobId,
-          message: args.message,
-          status: args.status,
-        } : item);
-        await ctx.db.patch(batch._id, {
-          items,
-          notificationReady: items.every((item) =>
-            TERMINAL_BATCH_STATUSES.has(item.status)
-          ),
-          updatedAt: now,
-        });
-      }
-    }
-
     if (jobState && automationRun) {
       await ctx.db.patch(jobState._id, {
         batchId: value.batchId,
@@ -610,19 +588,6 @@ export const upsertStatus = mutation({
         status: args.status,
         updatedAt: now,
       });
-      if (!["complete", "failed"].includes(args.status)) {
-        await ctx.db.patch(automationRun._id, {
-          leaseExpiresAt: now + 30 * 60 * 1000,
-          updatedAt: now,
-        });
-        const automation = await ctx.db
-          .query("reviewAutomations")
-          .withIndex("by_automation_id", (q) => q.eq("automationId", automationRun.automationId))
-          .unique();
-        if (automation && automation.lastScheduledFor === automationRun.scheduledFor) {
-          await ctx.db.patch(automation._id, { lastRunAt: now, updatedAt: now });
-        }
-      }
     }
 
     return value;

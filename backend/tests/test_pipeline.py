@@ -4345,3 +4345,58 @@ def test_batch_item_update_rehydrates_missing_local_batch_from_convex(
     assert updated.items[0].status == 'queued'
     assert updated.items[0].job_id == 'restart-job'
     assert review_storage.batch_path('restart-batch').exists()
+
+
+def test_convex_progress_write_retries_transient_http_conflicts(monkeypatch):
+    calls=[]
+    sleeps=[]
+
+    def flaky_convex_call(kind, path, args):
+        calls.append((kind, path, args))
+        if len(calls) < 3:
+            raise review_storage.urllib.error.HTTPError(
+                'https://example.convex.cloud/api/mutation',
+                560,
+                'optimistic concurrency conflict',
+                None,
+                None,
+            )
+        return {'ok': True}
+
+    monkeypatch.setattr(review_storage, '_convex_call', flaky_convex_call)
+    monkeypatch.setattr(review_storage.time, 'sleep', sleeps.append)
+
+    result=review_storage._convex_call_with_retry(
+        'mutation',
+        'reviews:upsertStatus',
+        {'jobId': 'review-1'},
+    )
+
+    assert result == {'ok': True}
+    assert len(calls) == 3
+    assert sleeps == [0.2, 0.4]
+
+
+def test_convex_progress_write_does_not_retry_validation_errors(monkeypatch):
+    calls=[]
+
+    def invalid_convex_call(kind, path, args):
+        calls.append((kind, path, args))
+        raise review_storage.urllib.error.HTTPError(
+            'https://example.convex.cloud/api/mutation',
+            400,
+            'invalid arguments',
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(review_storage, '_convex_call', invalid_convex_call)
+
+    with pytest.raises(review_storage.urllib.error.HTTPError):
+        review_storage._convex_call_with_retry(
+            'mutation',
+            'reviews:upsertStatus',
+            {'jobId': 'review-1'},
+        )
+
+    assert len(calls) == 1

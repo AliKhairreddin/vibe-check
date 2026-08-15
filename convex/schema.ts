@@ -115,6 +115,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_job_id", ["jobId"])
+    .index("by_batch_id", ["batchId"])
     .index("by_file_name", ["fileName"])
     .index("by_created_at", ["createdAt"])
     .index("by_status_deleted_automation_updated", [
