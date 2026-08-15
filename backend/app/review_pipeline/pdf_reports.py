@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Sequence
+from urllib.parse import urlsplit
 
 import httpx
 from PIL import Image
@@ -278,6 +279,50 @@ def _plain(value: Any) -> str:
 
 def _paragraph(text: Any, style: ParagraphStyle) -> Paragraph:
     return Paragraph(html.escape(_plain(text)).replace('\n', '<br/>'), style)
+
+
+def _direct_pdf_text(value: Any, max_words: int = 28) -> str:
+    """Keep generated PDF notes to one short, complete-looking sentence."""
+    text = re.sub(r'\s+', ' ', _plain(value)).strip()
+    if not text:
+        return ''
+    first_sentence = re.split(r'(?<=[.!?])\s+', text, maxsplit=1)[0]
+    words = first_sentence.split()
+    if len(words) <= max_words:
+        return first_sentence
+    return ' '.join(words[:max_words]).rstrip(' ,;:-') + '...'
+
+
+def _google_drive_url(record: JobRecord) -> str | None:
+    if record.source_kind != 'google_drive_file' or not record.source_url:
+        return None
+    url = record.source_url.strip()
+    parsed = urlsplit(url)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        return None
+    return url
+
+
+def _draw_google_drive_link(pdf: canvas.Canvas, record: JobRecord) -> None:
+    url = _google_drive_url(record)
+    if not url:
+        return
+    label = 'Google Drive:'
+    link_text = 'Open exact creative'
+    x = 44
+    y = PAGE_HEIGHT - 117
+    pdf.setFont(FONT_BOLD, 9)
+    pdf.setFillColor(colors.HexColor('#3d72b4'))
+    pdf.drawString(x, y, label)
+    link_x = x + pdfmetrics.stringWidth(label, FONT_BOLD, 9) + 6
+    pdf.setFont(FONT_REGULAR, 9)
+    pdf.setFillColor(colors.HexColor('#175cd3'))
+    pdf.drawString(link_x, y, link_text)
+    link_width = pdfmetrics.stringWidth(link_text, FONT_REGULAR, 9)
+    pdf.setStrokeColor(colors.HexColor('#175cd3'))
+    pdf.setLineWidth(0.5)
+    pdf.line(link_x, y - 1, link_x + link_width, y - 1)
+    pdf.linkURL(url, (link_x, y - 3, link_x + link_width, y + 10), relative=0, thickness=0)
 
 
 def _styles() -> dict[str, ParagraphStyle]:
@@ -551,6 +596,7 @@ def _summary_page(
     pdf.setFont(FONT_REGULAR, 10)
     pdf.drawString(84, PAGE_HEIGHT - 77, _format_date(record.created_at))
     pdf.drawString(102, PAGE_HEIGHT - 97, _plain(record.file_name or record.job_id)[:84])
+    _draw_google_drive_link(pdf, record)
 
     flow_y = PAGE_HEIGHT - 139
     pdf.setFillColor(colors.HexColor('#f2f4f7'))
@@ -603,7 +649,10 @@ def _summary_page(
         y -= 24
     primary = offers[0] if offers else report
     styles = _styles()
-    summary = _paragraph(primary.get('summary') or 'No review summary was returned.', styles['body'])
+    summary = _paragraph(
+        _direct_pdf_text(primary.get('summary') or 'No review summary was returned.'),
+        styles['body'],
+    )
     summary_height = max(52, y - 104)
     _draw_flowables(pdf, [summary], 412, y, 326, summary_height)
     finding_count = len(_all_findings(report))
@@ -618,9 +667,9 @@ def _finding_flowables(
 ) -> list[Any]:
     styles = _styles()
     fields: list[tuple[str, str]] = [
-        ('Observed evidence', _plain(finding.get('evidence'))),
-        ('Why it matters', _plain(finding.get('policy_reason'))),
-        ('Suggested fix', _plain(finding.get('suggested_fix'))),
+        ('Evidence', _direct_pdf_text(finding.get('evidence'))),
+        ('Why it matters', _direct_pdf_text(finding.get('policy_reason'))),
+        ('Fix', _direct_pdf_text(finding.get('suggested_fix'))),
     ]
     if finding.get('source') == 'audio':
         excerpt = transcript_excerpt(transcript, finding.get('timestamp_start'))

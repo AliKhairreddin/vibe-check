@@ -8,7 +8,8 @@ Policy precedence and internal overrides:
 - Do not list an override merely because it exists or restates a restriction. Record it only when it materially permits observed evidence that official policy would otherwise block.
 - Never invent an override, broaden it beyond its text, or use one offer's rules for another offer.
 - overall_status, source_results, severity, policy_reason, findings, and rewrites must describe the final effective run decision after precedence is applied.
-- Return at most 25 distinct, highest-priority findings. Keep summaries and finding text concise; no single prose field should exceed 1,500 characters.
+- Return at most 25 distinct, highest-priority findings.
+- Write each summary, evidence, policy_reason, and suggested_fix as one direct sentence, normally 20 words or fewer. State the issue, rule, or fix plainly without background explanation, repeated context, or filler.
 
 Verdict scale:
 - "green": no policy issue identified; the ad appears ready to run.

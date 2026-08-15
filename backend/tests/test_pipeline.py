@@ -101,20 +101,22 @@ def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
     record = JobRecord(
         job_id='a' * 32,
         file_name='Example creative.mp4',
+        source_kind='google_drive_file',
+        source_url='https://drive.google.com/file/d/exact-creative-id/view?resourcekey=exact-key',
         created_at=1_786_579_200_000,
     )
     report = {
         'offer_id': 'acp',
         'offer_name': 'ACP',
         'overall_status': 'red',
-        'summary': 'The spoken claim needs a material revision before publication.',
+        'summary': 'The spoken claim needs a material revision before publication. This extra summary explanation should not appear.',
         'findings': [{
             'severity': 'high',
             'source': 'audio',
             'timestamp_start': '5',
             'timestamp_end': '10',
             'evidence': 'You will always save fifty percent.',
-            'policy_reason': 'The absolute savings claim is not substantiated.',
+            'policy_reason': 'The absolute savings claim is not substantiated. This additional explanation should not appear in the concise PDF note.',
             'suggested_fix': 'Use qualified, supportable savings language.',
             'confidence': 'high',
         }],
@@ -142,6 +144,16 @@ def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
     assert 'Transcript excerpt' in text
     assert 'Call now because you will always save fifty percent.' in text
     assert 'The absolute savings claim is not substantiated.' in text
+    assert 'This extra summary explanation should not appear' not in text
+    assert 'This additional explanation should not appear' not in text
+    assert 'Open exact creative' in text
+    annotations = reader.pages[0].get('/Annots') or []
+    urls = [
+        annotation.get_object()['/A']['/URI']
+        for annotation in annotations
+        if annotation.get_object().get('/A')
+    ]
+    assert urls == ['https://drive.google.com/file/d/exact-creative-id/view?resourcekey=exact-key']
 
 
 def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, monkeypatch):
