@@ -948,14 +948,18 @@ def test_strict_openrouter_report_requires_complete_schema():
         ('red','high'),
     ],
 )
-def test_strict_openrouter_report_requires_findings_for_non_green_verdicts(
+def test_strict_openrouter_report_derives_verdict_from_findings(
     overall_status,
     severity,
 ):
-    with pytest.raises(ComplianceResponseError, match='overall_status must be'):
-        parse_strict_report_json(json.dumps(strict_report_payload(
-            overall_status=overall_status,
-        )))
+    normalized=parse_strict_report_json(json.dumps(strict_report_payload(
+        overall_status=overall_status,
+    )))
+    assert normalized.overall_status == 'green'
+    assert any(
+        'normalized deterministically' in limitation
+        for limitation in normalized.limitations
+    )
 
     report=parse_strict_report_json(json.dumps(strict_report_payload(
         overall_status=overall_status,
@@ -981,13 +985,41 @@ def test_strict_openrouter_report_requires_findings_for_non_green_verdicts(
     assert len(report.findings) == 1
 
 
+def test_strict_openrouter_report_promotes_complete_severe_consequence_to_red():
+    payload=strict_report_payload(
+        overall_status='amber',
+        findings=[{
+            'severity':'medium',
+            'source':'policy',
+            'timestamp_start':None,
+            'timestamp_end':None,
+            'evidence':'A prohibited government angle appears in the creative.',
+            'policy_reason':'The controlling rule treats this category as severe.',
+            'suggested_fix':'Remove the government angle.',
+            'confidence':'high',
+            'enforcement_consequence':'payment_withheld_or_forfeited',
+            'consequence_policy_basis':'funds-withheld/account-paused risk',
+            'controlling_internal_rule_id':'refund-rebate-and-enforcement',
+        }],
+    )
+
+    report=parse_strict_report_json(json.dumps(payload))
+
+    assert report.overall_status == 'red'
+    assert report.findings[0].severity == 'high'
+    assert any(
+        'normalized deterministically' in limitation
+        for limitation in report.limitations
+    )
+
+
 def test_strict_openrouter_report_accepts_green_with_no_findings():
     report=parse_strict_report_json(json.dumps(strict_report_payload()))
     assert report.overall_status == 'green'
     assert report.findings == []
 
 
-def test_strict_openrouter_report_rejects_high_finding_without_severe_consequence():
+def test_strict_openrouter_report_downgrades_high_finding_without_severe_consequence():
     payload=strict_report_payload(
         overall_status='red',
         findings=[{
@@ -1005,8 +1037,15 @@ def test_strict_openrouter_report_rejects_high_finding_without_severe_consequenc
         }],
     )
 
-    with pytest.raises(ComplianceResponseError, match='approved enforcement consequence'):
-        parse_strict_report_json(json.dumps(payload))
+    report=parse_strict_report_json(json.dumps(payload))
+
+    assert report.overall_status == 'amber'
+    assert report.findings[0].severity == 'medium'
+    assert report.findings[0].enforcement_consequence == 'none'
+    assert any(
+        'normalized deterministically' in limitation
+        for limitation in report.limitations
+    )
 
 
 def test_strict_openrouter_report_accepts_green_with_applied_override():
@@ -1024,28 +1063,12 @@ def test_strict_openrouter_report_accepts_green_with_applied_override():
 
 
 @pytest.mark.anyio
-async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semantic_mismatch(
+async def test_openrouter_uses_strict_schema_and_normalizes_semantic_mismatch_without_retry(
     monkeypatch,
 ):
     calls=[]
     responses=[
         strict_report_payload(overall_status='amber'),
-        strict_report_payload(
-            overall_status='amber',
-            findings=[{
-                'severity':'low',
-                'source':'ad_copy',
-                'timestamp_start':None,
-                'timestamp_end':None,
-                'evidence':'A minor wording concern.',
-                'policy_reason':'The wording could be clearer.',
-                'suggested_fix':'Use more precise wording.',
-                'confidence':'medium',
-                'enforcement_consequence':'none',
-                'consequence_policy_basis':'',
-                'controlling_internal_rule_id':None,
-            }],
-        ),
     ]
 
     class FakeResponse:
@@ -1087,8 +1110,12 @@ async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semant
 
     report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
 
-    assert report.overall_status == 'amber'
-    assert len(calls) == 2
+    assert report.overall_status == 'green'
+    assert len(calls) == 1
+    assert any(
+        'normalized deterministically' in limitation
+        for limitation in report.limitations
+    )
     initial=calls[0]['json']
     assert initial['response_format']['type'] == 'json_schema'
     assert initial['response_format']['json_schema']['strict'] is True
@@ -1096,12 +1123,10 @@ async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semant
     assert initial['provider'] == {'require_parameters':True}
     assert initial['plugins'] == [{'id':'response-healing'}]
     assert len(initial['messages']) == 2
-    assert len(calls[1]['json']['messages']) == 4
-    assert 'Green must have zero findings' in calls[1]['json']['messages'][-1]['content']
 
 
 @pytest.mark.anyio
-async def test_openrouter_raises_after_invalid_structured_results(monkeypatch):
+async def test_openrouter_repairs_repeated_non_schema_json_after_strict_attempts(monkeypatch):
     calls=[]
 
     class FakeResponse:
@@ -1112,8 +1137,61 @@ async def test_openrouter_raises_after_invalid_structured_results(monkeypatch):
             return {
                 'choices':[{
                     'message':{
-                        'content':json.dumps(strict_report_payload(overall_status='amber')),
+                        'content':json.dumps({
+                            'overall_status':'needs_review',
+                            'summary':'A wording concern needs review.',
+                            'issues':[{
+                                'severity':'medium',
+                                'source':'onscreen text',
+                                'evidence':'A broad savings claim appears in the image.',
+                                'policy_reason':'Savings claims require support.',
+                                'suggested_fix':'Use a qualified claim.',
+                            }],
+                        }),
                     },
+                }],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append(json)
+            return FakeResponse()
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
+
+    report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+
+    assert report.overall_status == 'amber'
+    assert len(report.findings) == 1
+    assert len(calls) == 2
+    assert any(
+        'schema repair' in limitation
+        for limitation in report.limitations
+    )
+
+
+@pytest.mark.anyio
+async def test_openrouter_raises_after_unparseable_results(monkeypatch):
+    calls=[]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices':[{
+                    'message':{'content':'This response contains no JSON object.'},
                 }],
             }
 
@@ -2022,7 +2100,8 @@ def test_openrouter_report_preserves_internal_override_annotation():
         }],
     }))
 
-    assert report.overall_status == 'red'
+    assert report.overall_status == 'amber'
+    assert report.findings[0].severity == 'medium'
     assert report.findings[0].policy_reason.startswith('Official guidance')
     assert report.findings[0].internal_override is not None
     assert report.findings[0].internal_override.override_id == 'cash-imagery'

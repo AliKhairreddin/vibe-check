@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, re
+import asyncio, json, logging, os, re
 from typing import Any
 
 import httpx
@@ -127,6 +127,16 @@ REVIEW_RESPONSE_SCHEMA = {
 }
 MAX_REVIEW_ATTEMPTS = 2
 DEFAULT_REQUEST_DEADLINE_SECONDS = 180
+SEMANTIC_NORMALIZATION_LIMITATION = (
+    'The provider verdict was normalized deterministically from its returned '
+    'findings and enforcement-consequence fields.'
+)
+STRUCTURE_REPAIR_LIMITATION = (
+    'The provider response required deterministic schema repair after strict '
+    'structured-output validation failed.'
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ComplianceResponseError(ValueError):
@@ -529,7 +539,120 @@ def _normalize_report(data: Any) -> dict[str, Any]:
 
 
 def parse_report_json(text:str)->ComplianceReport:
-    return ComplianceReport.model_validate(_normalize_report(_load_json(text)))
+    report=ComplianceReport.model_validate(_normalize_report(_load_json(text)))
+    return normalize_report_semantics(
+        report,
+        preserve_unsubstantiated_review=True,
+    )
+
+
+def _status_for_findings(findings:list[Any])->str:
+    if any(finding.severity == 'high' for finding in findings):
+        return 'red'
+    if findings:
+        return 'amber'
+    return 'green'
+
+
+def normalize_report_semantics(
+    report:ComplianceReport,
+    *,
+    preserve_unsubstantiated_review:bool=False,
+)->ComplianceReport:
+    """Derive verdict relationships in code instead of trusting the model.
+
+    JSON Schema enforces the response shape, but it cannot reliably enforce our
+    cross-field policy rules across every provider. The model supplies evidence
+    and consequence claims; this function makes severity, overall color, and
+    source colors internally consistent before the offer-specific backend guard
+    verifies whether any claimed severe consequence is actually supported.
+    """
+    changed=False
+    for finding in report.findings:
+        has_complete_consequence=(
+            finding.enforcement_consequence != 'none'
+            and bool(finding.consequence_policy_basis.strip())
+        )
+        if has_complete_consequence:
+            if finding.severity != 'high':
+                finding.severity='high'
+                changed=True
+            continue
+        if finding.severity == 'high':
+            finding.severity='medium'
+            changed=True
+        if (
+            finding.enforcement_consequence != 'none'
+            or finding.consequence_policy_basis
+            or finding.controlling_internal_rule_id is not None
+        ):
+            finding.enforcement_consequence='none'
+            finding.consequence_policy_basis=''
+            finding.controlling_internal_rule_id=None
+            changed=True
+
+    source_results=(
+        report.source_results.creative,
+        report.source_results.ad_copy,
+    )
+    source_requires_review=any(
+        result is not None and result.status != 'green'
+        for result in source_results
+    )
+    expected_status=_status_for_findings(report.findings)
+    if (
+        not report.findings
+        and (
+            MISSING_VERDICT_LIMITATION in report.limitations
+            or (
+                preserve_unsubstantiated_review
+                and (
+                    report.overall_status != 'green'
+                    or source_requires_review
+                )
+            )
+        )
+    ):
+        expected_status='amber'
+    if report.overall_status != expected_status:
+        report.overall_status=expected_status
+        report.summary={
+            'green':'No effective-policy issue was supported by the returned findings.',
+            'amber':'This review needs an edit or human review under the effective policy.',
+            'red':'This review identifies a severe-consequence issue under the effective policy.',
+        }[expected_status]
+        changed=True
+
+    source_findings={
+        'ad_copy':[finding for finding in report.findings if finding.source == 'ad_copy'],
+        'creative':[finding for finding in report.findings if finding.source != 'ad_copy'],
+    }
+    for source_name,source_result in (
+        ('creative',report.source_results.creative),
+        ('ad_copy',report.source_results.ad_copy),
+    ):
+        if source_result is None:
+            continue
+        expected_source_status=_status_for_findings(source_findings[source_name])
+        if (
+            preserve_unsubstantiated_review
+            and not report.findings
+            and source_result.status != 'green'
+        ):
+            expected_source_status='amber'
+        if source_result.status == expected_source_status:
+            continue
+        source_result.status=expected_source_status
+        source_result.summary={
+            'green':'No effective-policy issue was supported for this source.',
+            'amber':'This source needs an edit or human review.',
+            'red':'This source includes a severe-consequence issue.',
+        }[expected_source_status]
+        changed=True
+
+    if changed and SEMANTIC_NORMALIZATION_LIMITATION not in report.limitations:
+        report.limitations.append(SEMANTIC_NORMALIZATION_LIMITATION)
+    return report
 
 
 def parse_strict_report_json(text:str)->ComplianceReport:
@@ -540,7 +663,8 @@ def parse_strict_report_json(text:str)->ComplianceReport:
         raise ComplianceResponseError(
             f'The policy reviewer returned an invalid structured result: {exc}'
         ) from exc
-    return ComplianceReport.model_validate(result.model_dump())
+    report=ComplianceReport.model_validate(result.model_dump())
+    return normalize_report_semantics(report)
 
 
 async def review_with_openrouter(evidence:dict, model:str|None=None)->ComplianceReport:
@@ -554,6 +678,7 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
         {'role':'user','content':build_user_prompt(evidence)},
     ]
     last_error:ComplianceResponseError|None=None
+    last_content:str|None=None
     async with httpx.AsyncClient(timeout=120) as client:
         for attempt in range(1, MAX_REVIEW_ATTEMPTS + 1):
             payload={
@@ -580,10 +705,17 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                     'The policy reviewer returned a non-text structured result.'
                 )
             else:
+                last_content=content
                 try:
                     return parse_strict_report_json(content)
                 except ComplianceResponseError as exc:
                     last_error=exc
+                    logger.warning(
+                        'Strict policy result validation failed. attempt=%s model=%s cause=%s',
+                        attempt,
+                        selected_model,
+                        type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
+                    )
 
             if attempt < MAX_REVIEW_ATTEMPTS:
                 messages=[
@@ -605,6 +737,20 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                         ),
                     },
                 ]
+
+    if last_content is not None:
+        try:
+            repaired=parse_report_json(last_content)
+        except (json.JSONDecodeError, TypeError, ValidationError, ValueError):
+            pass
+        else:
+            if STRUCTURE_REPAIR_LIMITATION not in repaired.limitations:
+                repaired.limitations.append(STRUCTURE_REPAIR_LIMITATION)
+            logger.warning(
+                'Used deterministic policy result schema repair. model=%s',
+                selected_model,
+            )
+            return repaired
 
     raise ComplianceResponseError(
         'The policy reviewer did not return a valid structured verdict with '

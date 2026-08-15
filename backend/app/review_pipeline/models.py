@@ -139,23 +139,6 @@ class LLMFinding(StrictLLMModel):
     consequence_policy_basis: str = Field(max_length=1_500)
     controlling_internal_rule_id: str | None
 
-    @model_validator(mode='after')
-    def validate_consequence_matches_severity(self):
-        if self.severity == 'high':
-            if self.enforcement_consequence == 'none':
-                raise ValueError('high severity requires an approved enforcement consequence')
-            if not self.consequence_policy_basis.strip():
-                raise ValueError('high severity requires exact consequence policy text')
-        elif (
-            self.enforcement_consequence != 'none'
-            or self.consequence_policy_basis.strip()
-            or self.controlling_internal_rule_id is not None
-        ):
-            raise ValueError(
-                'low and medium findings must not claim a critical enforcement consequence'
-            )
-        return self
-
 
 class LLMSafeRewrite(StrictLLMModel):
     ad_copy: str = Field(max_length=5_000)
@@ -188,37 +171,6 @@ class LLMComplianceResult(StrictLLMModel):
     applied_overrides: list[LLMAppliedPolicyOverride] = Field(max_length=25)
     safe_rewrite: LLMSafeRewrite
     limitations: list[str] = Field(max_length=25)
-
-    @model_validator(mode='after')
-    def validate_verdict_matches_findings(self):
-        expected_status: ResultStatus
-        severities={finding.severity for finding in self.findings}
-        if 'high' in severities:
-            expected_status='red'
-        elif severities:
-            expected_status='amber'
-        else:
-            expected_status='green'
-
-        if self.overall_status != expected_status:
-            raise ValueError(
-                f'overall_status must be {expected_status!r} for the returned findings; '
-                f'received {self.overall_status!r}'
-            )
-        if expected_status == 'green':
-            source_statuses=[
-                result.status
-                for result in (
-                    self.source_results.creative,
-                    self.source_results.ad_copy,
-                )
-                if result is not None
-            ]
-            if any(status != 'green' for status in source_statuses):
-                raise ValueError(
-                    'source_results must be green when no policy findings are returned'
-                )
-        return self
 
 
 class OfferComplianceResult(BaseModel):

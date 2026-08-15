@@ -2605,13 +2605,18 @@ function BatchPage() {
                   }}
                 >
                   <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
-                  <TableCell className="min-w-64 max-w-md">
+                  <TableCell className="w-80 min-w-64 max-w-80 whitespace-normal align-top">
                     <span className="block truncate font-medium">{item.file_name}</span>
                     {isFailedBatchStatus(item.status) && item.message ? (
-                      <span className="block text-xs text-destructive">{item.message}</span>
+                      <span
+                        className="mt-1 block line-clamp-2 break-words text-xs leading-4 text-destructive"
+                        title={item.message}
+                      >
+                        {item.message}
+                      </span>
                     ) : null}
                   </TableCell>
-                  <TableCell><StatusBadge status={item.status} /></TableCell>
+                  <TableCell className="align-top"><StatusBadge status={item.status} /></TableCell>
                   {offerColumns.map((offer) => (
                     <TableCell key={offer.offer_id}>
                       <OfferOutcomeCell outcome={batchOutcomeForOffer(item, offer)} />
