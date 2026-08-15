@@ -72,7 +72,11 @@ def build_review_evidence(
 
 def _internal_disposition(report:ComplianceReport)->str:
     if report.findings:
-        return 'human_review' if report.overall_status == 'orange' else 'action_required'
+        return (
+            'human_review'
+            if any(finding.confidence != 'high' for finding in report.findings)
+            else 'action_required'
+        )
     if report.applied_overrides:
         return 'accepted_with_override'
     return 'clear' if report.overall_status == 'green' else 'human_review'
@@ -105,7 +109,7 @@ def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->
         )
         if report.overall_status == 'green':
             first_invalid=invalid_applications[0]
-            report.overall_status='orange'
+            report.overall_status='amber'
             report.summary=(
                 'The effective result needs human review because the model relied on an '
                 'internal override that is not saved for this offer.'
@@ -116,7 +120,7 @@ def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->
                 evidence=first_invalid.evidence or 'An unknown internal override was applied.',
                 policy_reason='Only enabled overrides saved for this offer may change the run decision.',
                 suggested_fix='Review the evidence manually or save an explicit approved rule before publishing.',
-                confidence='high',
+                confidence='medium',
             ))
             affected=(
                 report.source_results.ad_copy
@@ -124,7 +128,7 @@ def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->
                 else report.source_results.creative
             )
             if affected is not None:
-                affected.status='orange'
+                affected.status='amber'
                 affected.summary='An unknown internal override requires human review.'
     if duplicate_ids:
         report.limitations.append(

@@ -12,13 +12,14 @@ Policy precedence and internal overrides:
 - Write each summary, evidence, policy_reason, and suggested_fix as one direct sentence, normally 20 words or fewer. State the issue, rule, or fix plainly without background explanation, repeated context, or filler.
 
 Verdict scale:
-- "green": no policy issue identified; the ad appears ready to run.
-- "yellow": only minor, low-risk issues or small recommended edits; no material likely violation identified.
-- "orange": a meaningful possible issue, ambiguity, missing substantiation, or uncertainty that requires human review before publishing.
-- "red": a clear or high-confidence likely violation; do not publish without material changes.
-- Every yellow, orange, or red verdict must include at least one concrete finding with observed evidence, a policy reason, and a suggested fix.
-- A green verdict must return an empty findings array, but may include applied_overrides. Never use an empty findings array with yellow, orange, or red.
-- Derive overall_status from the most severe returned finding: no findings = green, low = yellow, medium = orange, high = red.
+- "green": no effective-policy issue identified; the ad appears ready to run. This includes conduct clearly permitted by a saved internal rule.
+- "amber": at least one routine issue needs an edit or human review before publishing, but the supplied policy does not explicitly attach critical enforcement consequences.
+- "red": the observed issue is explicitly tied by the supplied policy to critical enforcement risk, such as withheld funds, an account pause, or a similarly severe stated consequence.
+- Every amber or red verdict must include at least one concrete finding with observed evidence, a policy reason, and a suggested fix.
+- A green verdict must return an empty findings array, but may include applied_overrides. Never use an empty findings array with amber or red.
+- Use low severity for minor recommended edits and medium severity for routine prohibitions, clear fix-required issues, ambiguity, or missing substantiation. Both produce amber.
+- Use high severity only when the supplied policy explicitly attaches critical enforcement consequences to the observed issue. High confidence alone does not make a finding high severity.
+- Derive overall_status from the most severe returned finding: no findings = green, low or medium = amber, high = red.
 - Do not invent a finding merely to justify a color. If no supplied evidence violates or creates risk under the supplied policy, return green.
 - Use the most severe applicable color for overall_status. Never use pass, needs_review, likely_violation, unknown, or null in any returned status field.
 - Return every property in the schema. Use null only for an unavailable creative or ad_copy source result and for timestamps without timing metadata.
@@ -45,15 +46,15 @@ Timestamp rules:
 
 Return exactly one JSON object with this shape and no wrapper keys:
 {
-  "overall_status": "green" | "yellow" | "orange" | "red",
+  "overall_status": "green" | "amber" | "red",
   "summary": "plain English summary",
   "source_results": {
     "creative": null | {
-      "status": "green" | "yellow" | "orange" | "red",
+      "status": "green" | "amber" | "red",
       "summary": "plain English creative-only result; exclude submitted ad copy"
     },
     "ad_copy": null | {
-      "status": "green" | "yellow" | "orange" | "red",
+      "status": "green" | "amber" | "red",
       "summary": "plain English ad-copy-only result based only on submitted_ad_copy.text"
     }
   },

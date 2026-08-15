@@ -164,8 +164,7 @@ const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | '
   complete: 'Complete',
   failed: 'Failed',
   green: 'Green',
-  yellow: 'Yellow',
-  orange: 'Orange',
+  amber: 'Amber',
   red: 'Red',
 };
 const RESULT_META: Record<OverallStatus, {
@@ -178,18 +177,13 @@ const RESULT_META: Record<OverallStatus, {
     badgeClass: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
     dotClass: 'bg-emerald-500',
   },
-  yellow: {
-    description: 'Minor fixes — low-risk edits are recommended.',
-    badgeClass: 'border-yellow-600/30 bg-yellow-400/20 text-yellow-800 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-200',
-    dotClass: 'bg-yellow-400',
-  },
-  orange: {
-    description: 'Review required — resolve meaningful risk or uncertainty before publishing.',
+  amber: {
+    description: 'Needs attention — fix or review the routine issue before publishing.',
     badgeClass: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
     dotClass: 'bg-orange-500',
   },
   red: {
-    description: 'Do not publish — a likely violation needs material changes.',
+    description: 'Critical stop — the policy explicitly identifies serious enforcement risk.',
     badgeClass: 'border-red-600/30 bg-red-500/15 text-red-700 dark:border-red-400/30 dark:bg-red-400/15 dark:text-red-300',
     dotClass: 'bg-red-500',
   },
@@ -265,7 +259,7 @@ function AppShell() {
         </nav>
         <div className="mt-auto grid gap-3">
           <div className="rounded-lg border bg-card/60 p-3 text-xs leading-5 text-muted-foreground">
-            Results reflect effective policy, with saved internal overrides identified separately.
+            Results reflect effective policy, with approved internal exceptions identified separately.
           </div>
           <Button
             type="button"
@@ -1296,8 +1290,7 @@ function HistoryCard({
                   >
                     <option value="all">All results</option>
                     <option value="red">Red</option>
-                    <option value="orange">Orange</option>
-                    <option value="yellow">Yellow</option>
+                    <option value="amber">Amber</option>
                     <option value="green">Green</option>
                     <option value="na">N/A</option>
                   </select>
@@ -2183,7 +2176,7 @@ function ReportPage() {
                 <span className="text-xs text-muted-foreground">{override.rationale}</span>
               ) : null}
             </div>
-          ) : <span className="text-sm text-muted-foreground">No override</span>;
+          ) : <span className="text-sm text-muted-foreground">No internal exception</span>;
         },
       }),
       column.accessor('suggested_fix', { header: 'Suggested fix' }),
@@ -2324,7 +2317,7 @@ function ReportPage() {
           {activeOffer.internal_disposition === 'accepted_with_override' ? (
             <Alert>
               <CheckCircle2 />
-              <AlertTitle>Green with internal override for {activeOffer.offer_name}</AlertTitle>
+              <AlertTitle>Green with internal exception for {activeOffer.offer_name}</AlertTitle>
               <AlertDescription>
                 The creative is ready to run under the current saved internal rules. The policy differences that changed the decision are recorded below.
               </AlertDescription>
@@ -2333,7 +2326,7 @@ function ReportPage() {
           {activeOffer.applied_overrides?.length ? (
             <div className="grid gap-3">
               <div>
-                <h3 className="text-sm font-medium">Applied internal overrides</h3>
+                <h3 className="text-sm font-medium">Applied internal exceptions</h3>
                 <p className="text-xs text-muted-foreground">
                   These saved rules materially changed the effective result from the official source policy.
                 </p>
@@ -2673,7 +2666,7 @@ function SettingsPage() {
       <section className="grid gap-1">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Manage offer-specific official guidelines, internal overrides, and review runtime defaults.
+          Manage offer-specific official guidelines, current internal rules, and review runtime defaults.
         </p>
       </section>
       <AdminAccessGate>
@@ -2768,14 +2761,21 @@ function InternalDispositionBadge({
   if (!disposition || disposition === 'clear') return null;
   if (disposition === 'accepted_with_override') {
     return (
-      <Badge variant="secondary" title="Official findings are accepted under saved internal guidance.">
+      <Badge variant="secondary" title="The official-policy issue is permitted by a saved internal rule.">
         <CheckCircle2 />
         Accepted internally
       </Badge>
     );
   }
   if (disposition === 'human_review') return <Badge variant="outline">Internal review needed</Badge>;
-  return <Badge variant="destructive">Action required</Badge>;
+  return (
+    <Badge
+      variant="outline"
+      className="border-orange-600/30 bg-orange-500/15 text-orange-700 dark:text-orange-300"
+    >
+      Action required
+    </Badge>
+  );
 }
 
 function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
@@ -2940,11 +2940,12 @@ function formatStatus(status: string) {
 function normalizeResultStatus(status?: string | null): OverallStatus | null {
   const normalized: Record<ResultStatus, OverallStatus> = {
     green: 'green',
-    yellow: 'yellow',
-    orange: 'orange',
+    amber: 'amber',
+    yellow: 'amber',
+    orange: 'amber',
     red: 'red',
     pass: 'green',
-    needs_review: 'orange',
+    needs_review: 'amber',
     likely_violation: 'red',
   };
   return normalized[status as ResultStatus] ?? null;

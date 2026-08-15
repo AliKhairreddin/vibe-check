@@ -280,12 +280,12 @@ export function OfferSettingsPanel() {
     for (const [index, override] of current.internal_overrides.entries()) {
       const overrideId = override.override_id.trim().toLocaleLowerCase();
       if (!OFFER_ID_PATTERN.test(overrideId)) {
-        return `Override ${index + 1} needs a lowercase slug ID.`;
+        return `Internal rule ${index + 1} needs a lowercase slug ID.`;
       }
-      if (overrideIds.has(overrideId)) return `Override ID “${overrideId}” is duplicated.`;
+      if (overrideIds.has(overrideId)) return `Internal rule ID “${overrideId}” is duplicated.`;
       overrideIds.add(overrideId);
-      if (!override.title.trim()) return `Override ${index + 1} needs a title.`;
-      if (!override.guidance.trim()) return `Override ${index + 1} needs guidance.`;
+      if (!override.title.trim()) return `Internal rule ${index + 1} needs a title.`;
+      if (!override.guidance.trim()) return `Internal rule ${index + 1} needs guidance.`;
     }
     return '';
   }
@@ -351,11 +351,10 @@ export function OfferSettingsPanel() {
       <CardContent className="grid gap-4">
         <Alert>
           <ShieldCheck />
-          <AlertTitle>Official findings always remain visible</AlertTitle>
+          <AlertTitle>Current internal rules control the effective result</AlertTitle>
           <AlertDescription>
-            Internal overrides annotate how your team treats a finding; they never edit the
-            official guidelines or remove the violation. Every override applies only to the
-            offer where it is saved.
+            Rules may clarify, tighten, or permit exceptions to official guidelines. A clearly
+            permitted exception is green, and every rule applies only to the offer where it is saved.
           </AlertDescription>
         </Alert>
 
@@ -611,16 +610,16 @@ export function OfferSettingsPanel() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="grid max-w-2xl gap-1">
                       <h4 id={`${fieldPrefix}-overrides-heading`} className="font-heading font-medium">
-                        Internal overrides
+                        Current internal rules
                       </h4>
                       <p className="text-sm text-muted-foreground">
                         Document current internal rules for {draft.display_name || 'this offer'}. They may clarify, tighten, or permit exceptions to source guidelines.
-                        The AI still reports the official violation and links the matching exception beside it.
+                        Permitted exceptions are recorded separately when they change a result to green.
                       </p>
                     </div>
                     <Button type="button" variant="outline" size="sm" onClick={addOverride}>
                       <Plus />
-                      Add override
+                      Add internal rule
                     </Button>
                   </div>
 
@@ -631,9 +630,9 @@ export function OfferSettingsPanel() {
                         return (
                           <Card key={override.client_key} size="sm" className={cn(!override.enabled && 'opacity-70')}>
                             <CardHeader>
-                              <CardTitle as="h3">Override {index + 1}</CardTitle>
+                              <CardTitle as="h3">Internal rule {index + 1}</CardTitle>
                               <CardDescription>
-                                {override.title || 'Untitled internal exception'}
+                                {override.title || 'Untitled internal rule'}
                               </CardDescription>
                               <CardAction className="flex items-center gap-3">
                                 <div className="flex items-center gap-2">
@@ -651,7 +650,7 @@ export function OfferSettingsPanel() {
                                   type="button"
                                   variant="destructive"
                                   size="icon-xs"
-                                  aria-label={`Remove override ${index + 1}`}
+                                  aria-label={`Remove internal rule ${index + 1}`}
                                   onClick={() => removeOverride(override.client_key)}
                                 >
                                   <Trash2 />
@@ -661,11 +660,11 @@ export function OfferSettingsPanel() {
                             <CardContent className="grid gap-4">
                               <div className="grid gap-4 sm:grid-cols-2">
                                 <div className="grid gap-2">
-                                  <Label htmlFor={`${overridePrefix}-id`}>Override ID</Label>
+                                  <Label htmlFor={`${overridePrefix}-id`}>Internal rule ID</Label>
                                   <Input
                                     id={`${overridePrefix}-id`}
                                     value={override.override_id}
-                                    placeholder="cash-imagery-exception"
+                                    placeholder="cash-imagery-rule"
                                     maxLength={80}
                                     required
                                     onChange={(event) => updateOverride(override.client_key, {
@@ -678,7 +677,7 @@ export function OfferSettingsPanel() {
                                   <Input
                                     id={`${overridePrefix}-title`}
                                     value={override.title}
-                                    placeholder="Approved cash imagery"
+                                    placeholder="Cash imagery treatment"
                                     maxLength={160}
                                     required
                                     onChange={(event) => updateOverride(override.client_key, {
@@ -695,7 +694,7 @@ export function OfferSettingsPanel() {
                                   className="min-h-24"
                                   maxLength={10_000}
                                   required
-                                  placeholder="Explain exactly when this exception may be accepted."
+                                  placeholder="Explain exactly what this rule permits or prohibits."
                                   onChange={(event) => updateOverride(override.client_key, {
                                     guidance: event.currentTarget.value,
                                   })}
@@ -708,7 +707,7 @@ export function OfferSettingsPanel() {
                                   value={override.rationale}
                                   className="min-h-20"
                                   maxLength={5_000}
-                                  placeholder="Record why the team accepts this exception for this offer."
+                                  placeholder="Record why this rule applies to this offer."
                                   onChange={(event) => updateOverride(override.client_key, {
                                     rationale: event.currentTarget.value,
                                   })}
@@ -722,7 +721,7 @@ export function OfferSettingsPanel() {
                   ) : (
                     <div className="grid min-h-28 place-items-center rounded-lg border border-dashed bg-muted/20 p-5 text-center">
                       <div className="grid max-w-md gap-1">
-                        <p className="text-sm font-medium">No internal overrides</p>
+                        <p className="text-sm font-medium">No current internal rules</p>
                         <p className="text-sm text-muted-foreground">
                           This offer currently follows its source guidelines without saved current internal rules.
                         </p>
@@ -762,7 +761,7 @@ export function OfferSettingsPanel() {
                 <div className="grid max-w-sm gap-2">
                   <p className="font-medium">Select or create an offer</p>
                   <p className="text-sm text-muted-foreground">
-                    Offer-specific official guidelines and internal overrides are managed here.
+                    Offer-specific official guidelines and current internal rules are managed here.
                   </p>
                   <Button type="button" variant="outline" className="mx-auto" onClick={startNewOffer}>
                     <Plus />

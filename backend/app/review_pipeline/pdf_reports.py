@@ -37,15 +37,20 @@ PAGE_WIDTH, PAGE_HEIGHT = PAGE_SIZE
 TERMINAL_BATCH_STATUSES = {'complete', 'failed', 'upload_failed'}
 STATUS_COLORS = {
     'green': colors.HexColor('#16803a'),
-    'yellow': colors.HexColor('#b77900'),
-    'orange': colors.HexColor('#c45a08'),
+    'amber': colors.HexColor('#b65f00'),
     'red': colors.HexColor('#c62828'),
 }
 STATUS_LABELS = {
     'green': 'Green - Ready to run',
-    'yellow': 'Yellow - Minor fixes',
-    'orange': 'Orange - Review required',
-    'red': 'Red - Do not publish',
+    'amber': 'Amber - Fix or review',
+    'red': 'Red - Critical stop',
+}
+LEGACY_RESULT_STATUSES = {
+    'pass': 'green',
+    'yellow': 'amber',
+    'orange': 'amber',
+    'needs_review': 'amber',
+    'likely_violation': 'red',
 }
 SOURCE_LABELS = {
     'ad_copy': 'Ad copy',
@@ -505,11 +510,11 @@ def _header(pdf: canvas.Canvas, title: str, subtitle: str = '') -> None:
 
 
 def _status_color(status: Any) -> colors.Color:
-    return STATUS_COLORS.get(str(status), colors.HexColor('#64748b'))
+    return STATUS_COLORS.get(_normalize_result_status(status), colors.HexColor('#64748b'))
 
 
 def _draw_status_pill(pdf: canvas.Canvas, x: float, y: float, status: Any, label: str | None = None) -> None:
-    status_text = str(status or 'not available')
+    status_text = _normalize_result_status(status)
     text = label or STATUS_LABELS.get(status_text, status_text.replace('_', ' ').title())
     color = _status_color(status)
     pdf.setFillColor(colors.Color(color.red, color.green, color.blue, alpha=0.10))
@@ -518,6 +523,22 @@ def _draw_status_pill(pdf: canvas.Canvas, x: float, y: float, status: Any, label
     pdf.setFillColor(color)
     pdf.setFont(FONT_BOLD, 8)
     pdf.drawCentredString(x + 75, y + 8, _plain(text)[:34])
+
+
+def _normalize_result_status(status: Any) -> str:
+    value = str(status or 'not available').strip().lower()
+    if value in STATUS_LABELS:
+        return value
+    return LEGACY_RESULT_STATUSES.get(value, value)
+
+
+def _offer_status_label(offer: dict[str, Any]) -> str | None:
+    if (
+        _normalize_result_status(offer.get('overall_status')) == 'green'
+        and offer.get('internal_disposition') == 'accepted_with_override'
+    ):
+        return 'Green - Internal exception'
+    return None
 
 
 def _frame_path(frames_dir: Path | None, frame: dict[str, Any] | None) -> Path | None:
@@ -640,7 +661,13 @@ def _summary_page(
         pdf.setFillColor(colors.HexColor('#111827'))
         pdf.setFont(FONT_BOLD, 9)
         pdf.drawString(412, y + 8, name[:42])
-        _draw_status_pill(pdf, 582, y, offer.get('overall_status'))
+        _draw_status_pill(
+            pdf,
+            582,
+            y,
+            offer.get('overall_status'),
+            _offer_status_label(offer),
+        )
         y -= 38
     if len(offers) > 6:
         pdf.setFillColor(colors.HexColor('#667085'))
@@ -709,6 +736,7 @@ def _finding_page(
         PAGE_WIDTH - 188,
         PAGE_HEIGHT - 88,
         offer.get('overall_status'),
+        _offer_status_label(offer),
     )
     pdf.setFillColor(colors.HexColor('#3d72b4'))
     pdf.setFont(FONT_BOLD, 10)

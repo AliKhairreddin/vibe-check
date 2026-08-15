@@ -16,36 +16,42 @@ STATUS_ALIASES = {
     'pass': 'green',
     'passed': 'green',
     'safe': 'green',
-    'yellow': 'yellow',
-    'caution': 'yellow',
-    'low risk': 'yellow',
-    'low_risk': 'yellow',
-    'minor issue': 'yellow',
-    'minor_issue': 'yellow',
-    'orange': 'orange',
-    'uncertain': 'orange',
-    'manual_review': 'orange',
-    'needs human review': 'orange',
-    'needs_human_review': 'orange',
-    'needs review': 'orange',
-    'needs_review': 'orange',
-    'possible_issue': 'orange',
-    'possible issue': 'orange',
-    'review': 'orange',
+    'amber': 'amber',
+    'yellow': 'amber',
+    'caution': 'amber',
+    'low risk': 'amber',
+    'low_risk': 'amber',
+    'minor issue': 'amber',
+    'minor_issue': 'amber',
+    'orange': 'amber',
+    'uncertain': 'amber',
+    'manual_review': 'amber',
+    'needs human review': 'amber',
+    'needs_human_review': 'amber',
+    'needs review': 'amber',
+    'needs_review': 'amber',
+    'possible_issue': 'amber',
+    'possible issue': 'amber',
+    'review': 'amber',
+    'fail': 'amber',
+    'failed': 'amber',
+    'non compliant': 'amber',
+    'non-compliant': 'amber',
+    'non_compliant': 'amber',
+    'not compliant': 'amber',
+    'rejected': 'amber',
+    'violation': 'amber',
+    'violates': 'amber',
+    'high_risk': 'amber',
+    'high risk': 'amber',
     'red': 'red',
-    'fail': 'red',
-    'failed': 'red',
-    'high_risk': 'red',
-    'high risk': 'red',
+    'critical': 'red',
+    'critical risk': 'red',
+    'critical_risk': 'red',
+    'funds withheld': 'red',
+    'account paused': 'red',
     'likely violation': 'red',
     'likely_violation': 'red',
-    'non compliant': 'red',
-    'non-compliant': 'red',
-    'non_compliant': 'red',
-    'not compliant': 'red',
-    'rejected': 'red',
-    'violation': 'red',
-    'violates': 'red',
 }
 
 SOURCE_ALIASES = {
@@ -109,7 +115,7 @@ STATUS_KEYS = (
 
 MISSING_VERDICT_LIMITATION = (
     'The model response did not include a recognized explicit compliance verdict '
-    'or any findings; the result was set to orange for human review.'
+    'or any findings; the result was set to amber for human review.'
 )
 REVIEW_RESPONSE_SCHEMA = {
     'type': 'json_schema',
@@ -154,7 +160,7 @@ def _clean_token(value: Any) -> str:
 
 def _status_from_value(value: Any) -> str | None:
     if isinstance(value, bool):
-        return 'green' if value else 'red'
+        return 'green' if value else 'amber'
     if value is None:
         return None
 
@@ -164,12 +170,26 @@ def _status_from_value(value: Any) -> str | None:
     underscored = cleaned.replace(' ', '_')
     if underscored in STATUS_ALIASES:
         return STATUS_ALIASES[underscored]
-    if 'non compliant' in cleaned or 'not compliant' in cleaned or 'violation' in cleaned:
+    if (
+        'critical' in cleaned
+        or 'funds withheld' in cleaned
+        or 'withheld funds' in cleaned
+        or 'account pause' in cleaned
+    ):
         return 'red'
     if 'review' in cleaned or 'uncertain' in cleaned or 'possible' in cleaned:
-        return 'orange'
-    if 'minor' in cleaned or 'low risk' in cleaned or 'caution' in cleaned:
-        return 'yellow'
+        return 'amber'
+    if (
+        'minor' in cleaned
+        or 'low risk' in cleaned
+        or 'caution' in cleaned
+        or 'non compliant' in cleaned
+        or 'not compliant' in cleaned
+        or 'violation' in cleaned
+        or 'fail' in cleaned
+        or 'reject' in cleaned
+    ):
+        return 'amber'
     if 'compliant' in cleaned or 'pass' in cleaned or 'approved' in cleaned:
         return 'green'
     return None
@@ -230,9 +250,9 @@ def _severity(value: Any, status: str | None = None) -> str:
     cleaned = _clean_token(value) if value is not None else ''
     if cleaned in {'low', 'minor'}:
         return 'low'
-    if cleaned in {'high', 'critical', 'severe'}:
+    if cleaned in {'critical', 'severe'}:
         return 'high'
-    if cleaned in {'medium', 'moderate'}:
+    if cleaned in {'medium', 'moderate', 'high'}:
         return 'medium'
     if status == 'red':
         return 'high'
@@ -454,11 +474,9 @@ def _explicit_status(data: dict[str, Any]) -> str | None:
 def _infer_status(findings: list[dict[str, Any]]) -> str:
     if any(finding.get('severity') == 'high' for finding in findings):
         return 'red'
-    if any(finding.get('severity') == 'medium' for finding in findings):
-        return 'orange'
     if findings:
-        return 'yellow'
-    return 'orange'
+        return 'amber'
+    return 'amber'
 
 
 def _normalize_report(data: Any) -> dict[str, Any]:
@@ -573,9 +591,9 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                         'content':(
                             'Your previous response did not satisfy the required schema and '
                             f'verdict rules: {last_error}. Return the complete corrected JSON '
-                            'object only. Green must have zero findings. Yellow, orange, and red '
-                            'must include findings whose highest severity is low, medium, and '
-                            'high respectively.'
+                            'object only. Green must have zero findings. Amber must include low '
+                            'or medium findings. Red must include a high finding tied to an '
+                            'explicitly critical enforcement consequence in the supplied policy.'
                         ),
                     },
                 ]

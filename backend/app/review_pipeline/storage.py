@@ -36,10 +36,12 @@ MAX_OFFER_PROFILE_BYTES = 850_000
 MAX_REPORT_RESULT_BYTES = 800_000
 MAX_OFFER_OVERRIDES = 100
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
-RESULT_STATUSES = {'green','yellow','orange','red'}
+RESULT_STATUSES = {'green','amber','red'}
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'needs_review': 'orange',
+    'yellow': 'amber',
+    'orange': 'amber',
+    'needs_review': 'amber',
     'likely_violation': 'red',
 }
 
@@ -372,6 +374,7 @@ def _update_local_batch_item(
     claim_notification:bool=False,
 )->tuple[ReviewBatch,bool]:
     batch=get_batch(batch_id)
+    normalized_result=_normalize_result_status(result)
     found=False
     for item in batch.items:
         if item.item_id != item_id:
@@ -380,11 +383,11 @@ def _update_local_batch_item(
         item.status=status
         if job_id:
             item.job_id=job_id
-        if result in RESULT_STATUSES:
-            item.result=result
+        if normalized_result:
+            item.result=normalized_result
         if offer_outcomes is not None:
             item.offer_outcomes=[outcome.model_copy(deep=True) for outcome in offer_outcomes]
-        elif result in RESULT_STATUSES:
+        elif normalized_result:
             unrated_evaluated=[
                 outcome
                 for outcome in item.offer_outcomes
@@ -394,7 +397,7 @@ def _update_local_batch_item(
             # eligibility snapshot has exactly one possible target; otherwise
             # leave the per-offer cells unrated instead of guessing.
             if len(unrated_evaluated) == 1:
-                unrated_evaluated[0].overall_status=result
+                unrated_evaluated[0].overall_status=normalized_result
         item.message=message
         break
     if not found:
@@ -425,12 +428,13 @@ def update_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
     return ReviewBatch.model_validate(remote) if remote is not None else local
 
 def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=None, result:str|None=None, offer_outcomes:list[OfferOutcome]|None=None, message:str='')->tuple[ReviewBatch,bool]:
+    normalized_result=_normalize_result_status(result)
     local,local_should_notify=_update_local_batch_item(
         batch_id,
         item_id,
         status=status,
         job_id=job_id,
-        result=result,
+        result=normalized_result,
         offer_outcomes=offer_outcomes,
         message=message,
         claim_notification=True,
@@ -438,13 +442,13 @@ def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
     args={'batchId':batch_id,'itemId':item_id,'status':status,'message':message}
     if job_id:
         args['jobId']=job_id
-    if result in RESULT_STATUSES:
-        args['result']=result
+    if normalized_result:
+        args['result']=normalized_result
     local_item=next(item for item in local.items if item.item_id == item_id)
     resolved_outcomes=(
         offer_outcomes
         if offer_outcomes is not None
-        else local_item.offer_outcomes if result in RESULT_STATUSES else None
+        else local_item.offer_outcomes if normalized_result else None
     )
     if resolved_outcomes is not None:
         args['offerOutcomes']=[
@@ -517,9 +521,7 @@ def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
         return 'green' if status in RESULT_STATUSES else None
     if any(isinstance(finding, dict) and finding.get('severity') == 'high' for finding in relevant):
         return 'red'
-    if any(isinstance(finding, dict) and finding.get('severity') == 'medium' for finding in relevant):
-        return 'orange'
-    return 'yellow'
+    return 'amber'
 
 def _creative_result(report:dict[str, Any]|None, has_creative:bool=True)->str|None:
     if not has_creative:

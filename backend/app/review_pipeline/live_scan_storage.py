@@ -7,7 +7,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Literal
 
-from .models import LiveScanDay, ResultStatus
+from .models import LiveScanDay, ResultStatus, normalize_result_status
 from .storage import (
     JOB_DATA_DIR,
     _convex_call,
@@ -423,7 +423,7 @@ def get_live_scan_day(observation_date:str)->LiveScanDay:
                 'accounts_observed':0,
                 'copy_variants':0,
                 'live_ads':0,
-                'outcomes':{'green':0,'yellow':0,'orange':0,'red':0},
+                'outcomes':{'green':0,'amber':0,'red':0},
                 'pending':0,
                 'unique_creatives':0,
             },
@@ -499,10 +499,10 @@ def get_live_scan_day(observation_date:str)->LiveScanDay:
             'scan_count':account['scan_count'],
             'source_url':account.get('source_url'),
         })
-    outcomes={'green':0,'yellow':0,'orange':0,'red':0}
+    outcomes={'green':0,'amber':0,'red':0}
     pending=0
     for state in states.values():
-        result=state.get('result')
+        result=normalize_result_status(state.get('result'))
         if result in outcomes:
             outcomes[result] += 1
         elif state.get('status') != 'failed':

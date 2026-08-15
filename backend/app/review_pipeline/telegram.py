@@ -19,14 +19,15 @@ STATUS_LABELS = {
     'complete': 'Complete',
     'failed': 'Failed',
     'green': '🟢 Green — Ready to run',
-    'yellow': '🟡 Yellow — Minor fixes',
-    'orange': '🟠 Orange — Review required',
-    'red': '🔴 Red — Do not publish',
+    'amber': '🟠 Amber — Fix or review before publishing',
+    'red': '🔴 Red — Critical stop',
 }
-RESULT_STATUSES = {'green', 'yellow', 'orange', 'red'}
+RESULT_STATUSES = {'green', 'amber', 'red'}
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'needs_review': 'orange',
+    'yellow': 'amber',
+    'orange': 'amber',
+    'needs_review': 'amber',
     'likely_violation': 'red',
 }
 WRAP_WIDTH = 34
@@ -229,6 +230,7 @@ def build_batch_message(
                         offer_name,
                         _overall_status(offer_report) if offer_report else None,
                         _evaluation_state(offer_report),
+                        _uses_internal_exception(offer_report),
                     )
                 )
         else:
@@ -585,6 +587,7 @@ def _add_offer_result(
             offer_name,
             status,
             evaluation_state,
+            _uses_internal_exception(report),
         )
     )
     if (
@@ -697,6 +700,11 @@ def _report_from_offer_outcome(value: Any) -> dict[str, Any] | None:
         'offer_id': value.get('offer_id'),
         'offer_name': value.get('offer_name'),
         'evaluation_state': evaluation_state,
+        'internal_disposition': (
+            'accepted_with_override'
+            if value.get('with_override') is True
+            else None
+        ),
         'overall_status': value.get('overall_status') if evaluated else None,
         'source_results': source_results,
     }
@@ -720,10 +728,21 @@ def _offer_status_line(
     offer_name: str,
     status: Any,
     evaluation_state: str = '',
+    with_internal_exception: bool = False,
 ) -> str:
+    formatted_status = _format_offer_status(status, evaluation_state)
+    if _normalize_result_status(status) == 'green' and with_internal_exception:
+        formatted_status += ' · Approved internal exception'
     return (
         f'<b>{html.escape(offer_name)}:</b> '
-        f'{html.escape(_format_offer_status(status, evaluation_state))}'
+        f'{html.escape(formatted_status)}'
+    )
+
+
+def _uses_internal_exception(report: dict[str, Any] | None) -> bool:
+    return bool(
+        isinstance(report, dict)
+        and report.get('internal_disposition') == 'accepted_with_override'
     )
 
 
@@ -796,9 +815,7 @@ def _split_result(report: dict[str, Any], source_matches) -> str | None:
         return 'green' if status in RESULT_STATUSES else None
     if any(finding.get('severity') == 'high' for finding in relevant):
         return 'red'
-    if any(finding.get('severity') == 'medium' for finding in relevant):
-        return 'orange'
-    return 'yellow'
+    return 'amber'
 
 
 def _overall_status(report: dict[str, Any]) -> str | None:

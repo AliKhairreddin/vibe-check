@@ -4,12 +4,14 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ResultStatus = Literal['green','yellow','orange','red']
+ResultStatus = Literal['green','amber','red']
 ReviewSourceKind = Literal['google_drive_file','google_sheet','meta_ads']
 ReviewSourceStatus = Literal['linked','not_found','ambiguous','unavailable']
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'needs_review': 'orange',
+    'yellow': 'amber',
+    'orange': 'amber',
+    'needs_review': 'amber',
     'likely_violation': 'red',
 }
 
@@ -163,10 +165,8 @@ class LLMComplianceResult(StrictLLMModel):
         severities={finding.severity for finding in self.findings}
         if 'high' in severities:
             expected_status='red'
-        elif 'medium' in severities:
-            expected_status='orange'
         elif severities:
-            expected_status='yellow'
+            expected_status='amber'
         else:
             expected_status='green'
 
@@ -278,6 +278,11 @@ class ReviewHistoryItem(JobRecord):
     ad_copy_result: ResultStatus | None = None
     offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
 
+    @field_validator('overall_status', 'creative_result', 'ad_copy_result', mode='before')
+    @classmethod
+    def normalize_legacy_status(cls, value):
+        return normalize_result_status(value) if value is not None else None
+
 class ReviewHistoryPage(BaseModel):
     reviews: list[ReviewHistoryItem] = Field(default_factory=list)
     next_cursor: str | None = None
@@ -384,6 +389,11 @@ class LiveReviewState(BaseModel):
     result: ResultStatus | None = None
     status: str
 
+    @field_validator('result', mode='before')
+    @classmethod
+    def normalize_legacy_status(cls, value):
+        return normalize_result_status(value) if value is not None else None
+
 
 class LiveScanCopyFinding(BaseModel):
     ad_count: int
@@ -483,8 +493,7 @@ class CreateDriveReview(BaseModel):
 
 class ReviewOutcomeCounts(BaseModel):
     green: int = 0
-    yellow: int = 0
-    orange: int = 0
+    amber: int = 0
     red: int = 0
 
 class ReviewStats(BaseModel):
@@ -522,6 +531,11 @@ class ReviewBatchItem(CreateBatchItem):
     result: ResultStatus | None = None
     offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
     message: str = ''
+
+    @field_validator('result', mode='before')
+    @classmethod
+    def normalize_legacy_status(cls, value):
+        return normalize_result_status(value) if value is not None else None
 
 class ReviewBatch(BaseModel):
     batch_id: str

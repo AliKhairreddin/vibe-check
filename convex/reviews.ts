@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { type MutationCtx, mutation, query } from "./_generated/server";
 import { getConvexSize, v, type Value } from "convex/values";
 
-type ResultStatus = "green" | "yellow" | "orange" | "red";
+type ResultStatus = "green" | "amber" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
 const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 const INTERRUPTIBLE_STATUSES = [
@@ -73,11 +73,12 @@ function overallStatus(report: unknown): ResultStatus | null {
 }
 
 function normalizeResultStatus(status: unknown): ResultStatus | null {
-  if (status === "green" || status === "yellow" || status === "orange" || status === "red") {
+  if (status === "green" || status === "amber" || status === "red") {
     return status;
   }
+  if (status === "yellow" || status === "orange") return "amber";
   if (status === "pass") return "green";
-  if (status === "needs_review") return "orange";
+  if (status === "needs_review") return "amber";
   if (status === "likely_violation") return "red";
   return null;
 }
@@ -385,12 +386,7 @@ function splitResult(
       typeof finding === "object" &&
       (finding as { severity?: unknown }).severity === "high"
   )) return "red";
-  return relevant.some(
-    (finding) =>
-      finding &&
-      typeof finding === "object" &&
-      (finding as { severity?: unknown }).severity === "medium"
-  ) ? "orange" : "yellow";
+  return "amber";
 }
 
 function creativeResult(report: unknown, hasCreative: boolean) {
@@ -799,11 +795,14 @@ export const getBatchOfferSummaries = query({
         .query("reviewOfferStats")
         .withIndex("by_job_id", (query) => query.eq("jobId", jobId))
         .collect();
-      const offerResults = rows.flatMap((row) => row.resultStatus ? [{
-        evaluation_state: "evaluated",
-        offer_id: row.offerId,
-        overall_status: row.resultStatus,
-      }] : []);
+      const offerResults = rows.flatMap((row) => {
+        const status = normalizeResultStatus(row.resultStatus);
+        return status ? [{
+          evaluation_state: "evaluated",
+          offer_id: row.offerId,
+          overall_status: status,
+        }] : [];
+      });
       if (offerResults.length) {
         summaries.push({ job_id: jobId, offer_results: offerResults });
       }
@@ -1070,14 +1069,14 @@ export const getStats = query({
 
     const outcomes: Record<ResultStatus, number> = {
       green: 0,
-      yellow: 0,
-      orange: 0,
+      amber: 0,
       red: 0,
     };
     let acceptedOverrides = 0;
     for (const review of reviews) {
       if (review.status !== "complete") continue;
-      if (review.resultStatus) outcomes[review.resultStatus] += 1;
+      const resultStatus = normalizeResultStatus(review.resultStatus);
+      if (resultStatus) outcomes[resultStatus] += 1;
       if (review.internalDisposition === "accepted_with_override") {
         acceptedOverrides += 1;
       }

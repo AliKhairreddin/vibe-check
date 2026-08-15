@@ -53,10 +53,21 @@ from pypdf import PdfReader
 def anyio_backend():
     return 'asyncio'
 
-@pytest.mark.parametrize('result', ['green', 'yellow', 'orange', 'red'])
+@pytest.mark.parametrize('result', ['green', 'amber', 'red'])
 def test_report_schema_validation(result):
     r=ComplianceReport.model_validate({'overall_status':result,'summary':'ok','findings':[],'safe_rewrite':{'ad_copy':'','onscreen_text':[]},'limitations':[]})
     assert r.overall_status==result
+
+@pytest.mark.parametrize('legacy_result', ['yellow', 'orange'])
+def test_report_schema_normalizes_legacy_color_results(legacy_result):
+    report=ComplianceReport.model_validate({
+        'overall_status':legacy_result,
+        'summary':'legacy report',
+        'findings':[],
+        'safe_rewrite':{'ad_copy':'','onscreen_text':[]},
+        'limitations':[],
+    })
+    assert report.overall_status == 'amber'
 
 def test_report_schema_normalizes_legacy_stored_results():
     report=ComplianceReport.model_validate({
@@ -72,7 +83,7 @@ def test_report_schema_normalizes_legacy_stored_results():
     })
     assert report.overall_status == 'red'
     assert report.source_results.creative is not None
-    assert report.source_results.creative.status == 'orange'
+    assert report.source_results.creative.status == 'amber'
     assert report.source_results.ad_copy is not None
     assert report.source_results.ad_copy.status == 'green'
 
@@ -146,6 +157,7 @@ def test_review_pdf_includes_frame_audio_excerpt_and_finding_details(tmp_path):
     assert 'The absolute savings claim is not substantiated.' in text
     assert 'This extra summary explanation should not appear' not in text
     assert 'This additional explanation should not appear' not in text
+    assert 'Red - Critical stop' in text
     assert 'Open exact creative' in text
     annotations = reader.pages[0].get('/Annots') or []
     urls = [
@@ -169,8 +181,15 @@ def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, mon
         'schema_version': 2,
         'primary_offer_id': 'acp',
         'offer_results': [
-            {'offer_id': 'acp', 'offer_name': 'ACP', 'overall_status': 'green', 'summary': 'ACP summary.', 'findings': []},
-            {'offer_id': 'kissterra', 'offer_name': 'Kissterra', 'overall_status': 'orange', 'summary': 'Kissterra summary.', 'findings': []},
+            {
+                'offer_id': 'acp',
+                'offer_name': 'ACP',
+                'overall_status': 'green',
+                'summary': 'ACP summary.',
+                'findings': [],
+                'internal_disposition': 'accepted_with_override',
+            },
+            {'offer_id': 'kissterra', 'offer_name': 'Kissterra', 'overall_status': 'amber', 'summary': 'Kissterra summary.', 'findings': []},
             {'offer_id': 'lead-economy', 'offer_name': 'Lead Economy', 'overall_status': 'green', 'summary': 'Lead Economy summary.', 'findings': []},
             {'offer_id': 'smart-financial', 'offer_name': 'Smart Financial', 'overall_status': 'red', 'summary': 'Smart Financial summary.', 'findings': []},
         ],
@@ -185,6 +204,10 @@ def test_offer_specific_review_pdf_excludes_every_other_offer_name(tmp_path, mon
     assert 'ACP' not in text
     assert 'Kissterra' not in text
     assert 'Smart Financial' not in text
+    acp_artifact = next(artifact for artifact in artifacts if 'ACP' in artifact.filename)
+    assert acp_artifact.path is not None
+    acp_text = '\n'.join(page.extract_text() or '' for page in PdfReader(acp_artifact.path).pages)
+    assert 'Green - Internal exception' in acp_text
 
 
 def test_remote_offer_pdf_uses_current_offer_filename(tmp_path, monkeypatch):
@@ -232,7 +255,7 @@ def test_offer_specific_batch_pdf_excludes_every_other_offer_name(tmp_path, monk
             status='upload_failed',
             message='Upload failed',
             offer_outcomes=[
-                OfferOutcome(offer_id='acp', offer_name='ACP', evaluation_state='evaluated', overall_status='orange'),
+                OfferOutcome(offer_id='acp', offer_name='ACP', evaluation_state='evaluated', overall_status='amber'),
                 OfferOutcome(offer_id='lead-economy', offer_name='Lead Economy', evaluation_state='evaluated', overall_status='green'),
                 OfferOutcome(offer_id='smart-financial', offer_name='Smart Financial', evaluation_state='evaluated', overall_status='red'),
             ],
@@ -259,7 +282,7 @@ def test_batch_pdf_combines_summary_and_individual_reports(tmp_path, monkeypatch
     finding_report = {
         'offer_id': 'acp',
         'offer_name': 'ACP',
-        'overall_status': 'orange',
+        'overall_status': 'amber',
         'summary': 'One claim needs review.',
         'findings': [{
             'severity': 'medium',
@@ -306,7 +329,7 @@ def test_batch_pdf_combines_summary_and_individual_reports(tmp_path, monkeypatch
                 media_kind='image',
                 status='complete',
                 job_id=first_id,
-                result='orange',
+                result='amber',
                 message='Complete',
             ),
             ReviewBatchItem(
@@ -836,7 +859,7 @@ def strict_report_payload(
 
 def test_legacy_openrouter_json_repair_fallback():
     text='Here is JSON {"overall_status":"needs_review","summary":"x","findings":[],"safe_rewrite":{"ad_copy":"","onscreen_text":[]},"limitations":[]} done'
-    assert parse_report_json(text).overall_status=='orange'
+    assert parse_report_json(text).overall_status=='amber'
 
 
 def test_legacy_openrouter_report_without_verdict_or_findings_fails_closed():
@@ -845,7 +868,7 @@ def test_legacy_openrouter_report_without_verdict_or_findings_fails_closed():
         'findings':[],
         'limitations':{'unexpected':'shape'},
     }))
-    assert report.overall_status=='orange'
+    assert report.overall_status=='amber'
     assert any('did not include a recognized explicit compliance verdict' in item for item in report.limitations)
 
 
@@ -860,8 +883,8 @@ def test_strict_openrouter_report_requires_complete_schema():
 @pytest.mark.parametrize(
     ('overall_status','severity'),
     [
-        ('yellow','low'),
-        ('orange','medium'),
+        ('amber','low'),
+        ('amber','medium'),
         ('red','high'),
     ],
 )
@@ -917,9 +940,9 @@ async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semant
 ):
     calls=[]
     responses=[
-        strict_report_payload(overall_status='orange'),
+        strict_report_payload(overall_status='amber'),
         strict_report_payload(
-            overall_status='yellow',
+            overall_status='amber',
             findings=[{
                 'severity':'low',
                 'source':'ad_copy',
@@ -972,7 +995,7 @@ async def test_openrouter_uses_strict_schema_on_first_request_and_retries_semant
 
     report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
 
-    assert report.overall_status == 'yellow'
+    assert report.overall_status == 'amber'
     assert len(calls) == 2
     initial=calls[0]['json']
     assert initial['response_format']['type'] == 'json_schema'
@@ -997,7 +1020,7 @@ async def test_openrouter_raises_after_invalid_structured_results(monkeypatch):
             return {
                 'choices':[{
                     'message':{
-                        'content':json.dumps(strict_report_payload(overall_status='orange')),
+                        'content':json.dumps(strict_report_payload(overall_status='amber')),
                     },
                 }],
             }
@@ -1079,10 +1102,10 @@ def test_openrouter_report_normalizes_policy_compliance_wrapper():
         }
     })
     report=parse_report_json(text)
-    assert report.overall_status=='red'
+    assert report.overall_status=='amber'
     assert report.summary=='Mentions a savings claim without a required disclaimer.'
     assert report.findings[0].source=='ad_copy'
-    assert report.findings[0].severity=='high'
+    assert report.findings[0].severity=='medium'
 
 def test_openrouter_report_normalizes_source_results():
     text=json.dumps({
@@ -1099,7 +1122,7 @@ def test_openrouter_report_normalizes_source_results():
     assert report.source_results.creative is not None
     assert report.source_results.creative.status == 'green'
     assert report.source_results.ad_copy is not None
-    assert report.source_results.ad_copy.status == 'orange'
+    assert report.source_results.ad_copy.status == 'amber'
     assert report.source_results.ad_copy.summary == 'Caption claim needs substantiation.'
 
 def test_openrouter_report_normalizes_review_list_wrapper():
@@ -1112,7 +1135,7 @@ def test_openrouter_report_normalizes_review_list_wrapper():
         }]
     })
     report=parse_report_json(text)
-    assert report.overall_status=='red'
+    assert report.overall_status=='amber'
     assert report.summary=='The ad includes a call prompt without consent language.'
     assert report.findings[0].policy_reason=='TCPA'
 
@@ -2010,7 +2033,7 @@ async def test_effective_policy_review_removes_unknown_override_ids(monkeypatch)
         'Evidence note.',
     )
 
-    assert result.overall_status == 'orange'
+    assert result.overall_status == 'amber'
     assert result.applied_overrides == []
     assert result.internal_disposition == 'human_review'
     assert result.findings[0].policy_reason.startswith('Only enabled overrides')
@@ -2161,10 +2184,10 @@ async def test_review_stats_api_accepts_multiple_offer_filters(tmp_path, monkeyp
     set_report('multi-offer-api', {
         'schema_version':2,
         'primary_offer_id':'acp',
-        'overall_status':'orange',
+        'overall_status':'amber',
         'summary':'Review needed.',
         'offer_results':[
-            {'offer_id':'acp','overall_status':'orange','internal_disposition':'none'},
+            {'offer_id':'acp','overall_status':'amber','internal_disposition':'none'},
             {'offer_id':'kissterra','overall_status':'green','internal_disposition':'clear'},
         ],
     })
@@ -2177,7 +2200,7 @@ async def test_review_stats_api_accepts_multiple_offer_filters(tmp_path, monkeyp
     assert response.status_code == 200
     assert response.json()['offer_ids'] == ['acp','kissterra']
     assert response.json()['total_reviews'] == 1
-    assert response.json()['outcomes'] == {'green':1,'yellow':0,'orange':1,'red':0}
+    assert response.json()['outcomes'] == {'green':1,'amber':1,'red':0}
 
 def test_delete_review_tombstones_history_report_and_stats(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -2320,7 +2343,7 @@ def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatc
     history=list_reviews()
     assert history[0].has_ad_copy
     assert history[0].creative_result=='red'
-    assert history[0].ad_copy_result=='orange'
+    assert history[0].ad_copy_result=='amber'
 
 def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -2342,16 +2365,16 @@ def test_review_history_marks_missing_ad_copy_result_empty(tmp_path, monkeypatch
     set_status('j1', JobStatus.complete, 100, 'Complete')
     history=list_reviews()
     assert not history[0].has_ad_copy
-    assert history[0].creative_result=='orange'
+    assert history[0].creative_result=='amber'
     assert history[0].ad_copy_result is None
 
-def test_review_history_maps_low_severity_findings_to_yellow(tmp_path, monkeypatch):
+def test_review_history_maps_low_severity_findings_to_amber(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
     set_status('j1', JobStatus.queued, 0, 'Queued', 'creative.png', has_ad_copy=False)
     set_report('j1', {
-        'overall_status':'yellow',
+        'overall_status':'amber',
         'summary':'minor edit recommended',
         'findings':[{
             'severity':'low',
@@ -2364,7 +2387,7 @@ def test_review_history_maps_low_severity_findings_to_yellow(tmp_path, monkeypat
     })
     set_status('j1', JobStatus.complete, 100, 'Complete')
     history=list_reviews()
-    assert history[0].creative_result=='yellow'
+    assert history[0].creative_result=='amber'
 
 def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -3023,14 +3046,14 @@ def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
         'summary':'overall mixed result',
         'source_results':{
             'creative':{'status':'green','summary':'Creative is clear.'},
-            'ad_copy':{'status':'orange','summary':'Caption needs substantiation.'},
+            'ad_copy':{'status':'amber','summary':'Caption needs substantiation.'},
         },
         'findings':[],
     })
     set_status('j1', JobStatus.complete, 100, 'Complete')
     history=list_reviews()
     assert history[0].creative_result=='green'
-    assert history[0].ad_copy_result=='orange'
+    assert history[0].ad_copy_result=='amber'
 
 def test_telegram_message_includes_minimal_split_results_and_report_links(monkeypatch):
     monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
@@ -3072,7 +3095,7 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
     assert '<b>Name:</b>' in message
     assert '<b>Result:</b>' in message
     assert '🟢 Green — Ready to run' in message
-    assert '🔴 Red — Do not publish' in message
+    assert '🔴 Red — Critical stop' in message
     assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
     assert '<b>Findings</b>' not in message
@@ -3129,15 +3152,35 @@ def test_telegram_message_labels_image_creatives(monkeypatch):
         has_creative=True,
     )
     message=build_review_message(record, {
-        'overall_status':'orange',
+        'overall_status':'amber',
         'source_results':{
-            'creative':{'status':'orange','summary':'Image needs review.'},
+            'creative':{'status':'amber','summary':'Image needs review.'},
         },
         'findings':[],
     }, media_kind='image')
     assert '<b>Type:</b> Creative Image' in message
     assert 'static-ad.png' in message
-    assert '🟠 Orange — Review required' in message
+    assert '🟠 Amber — Fix or review before publishing' in message
+
+def test_telegram_message_identifies_green_internal_exception(monkeypatch):
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    record=JobRecord(
+        job_id='exception123',
+        file_name='approved.png',
+        status=JobStatus.complete,
+        report_ready=True,
+        has_ad_copy=False,
+        has_creative=True,
+    )
+    message=build_review_message(record, {
+        'overall_status':'green',
+        'internal_disposition':'accepted_with_override',
+        'source_results':{
+            'creative':{'status':'green','summary':'Allowed by the current internal rule.'},
+        },
+        'findings':[],
+    }, media_kind='image')
+    assert '🟢 Green — Ready to run · Approved internal exception' in message
 
 def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -3174,7 +3217,7 @@ def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeyp
     assert '<b>Type:</b> Creative Image' in message
     assert '<b>Type:</b> Ad copy' in message
     assert 'creative-one.mp4' in message
-    assert '🔴 Red — Do not publish' in message
+    assert '🔴 Red — Critical stop' in message
     assert '⚫ Failed — Review did not complete' in message
     assert 'Network upload failed' in message
     assert '🟢 Green — Ready to run' in message
@@ -3197,6 +3240,7 @@ def test_batch_persists_and_formats_per_offer_outcomes(tmp_path, monkeypatch):
             offer_name='ACP',
             evaluation_state='evaluated',
             overall_status='green',
+            with_override=True,
         ),
         OfferOutcome(
             offer_id='kissterra',
@@ -3236,7 +3280,7 @@ def test_batch_persists_and_formats_per_offer_outcomes(tmp_path, monkeypatch):
         'smart-financial',
     ]
     message=build_batch_message(batch)
-    assert '🟢 Green — Ready to run' in message
+    assert '🟢 Green — Ready to run · Approved internal exception' in message
     assert 'N/A — Turned off' in message
     assert message.count('N/A — Guidelines not saved') == 2
     assert 'Import failed' in message
@@ -4002,7 +4046,7 @@ def test_live_scan_telegram_message_links_live_page(monkeypatch):
     message=build_live_scan_message(
         JobRecord(job_id='live-job',status=JobStatus.complete,has_creative=False),
         {
-            'overall_status':'orange',
+            'overall_status':'amber',
             'offer_id':'acp',
             'offer_name':'ACP',
             'findings':[],

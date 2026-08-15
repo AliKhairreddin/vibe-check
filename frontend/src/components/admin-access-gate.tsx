@@ -89,7 +89,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
             Admin access
           </CardTitle>
           <CardDescription>
-            Required to manage official guidelines, review automations, overrides, and review history.
+            Required to manage official guidelines, review automations, internal rules, and review history.
           </CardDescription>
           {isUnlocked ? (
             <CardAction className="flex items-center gap-2">

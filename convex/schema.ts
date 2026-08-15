@@ -133,6 +133,7 @@ export default defineSchema({
     offerId: v.string(),
     resultStatus: v.optional(v.union(
       v.literal("green"),
+      v.literal("amber"),
       v.literal("yellow"),
       v.literal("orange"),
       v.literal("red")
@@ -242,6 +243,7 @@ export default defineSchema({
     leaseExpiresAt: v.optional(v.number()),
     result: v.optional(v.union(
       v.literal("green"),
+      v.literal("amber"),
       v.literal("yellow"),
       v.literal("orange"),
       v.literal("red")

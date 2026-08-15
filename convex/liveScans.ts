@@ -1,7 +1,7 @@
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
-type ResultStatus = "green" | "yellow" | "orange" | "red";
+type ResultStatus = "green" | "amber" | "red";
 type ReviewKind = "creative" | "copy";
 
 const CLAIM_LEASE_MS = 15 * 60 * 1000;
@@ -14,11 +14,12 @@ function requireSecret(secret: string) {
 }
 
 function normalizeResultStatus(status: unknown): ResultStatus | null {
-  if (status === "green" || status === "yellow" || status === "orange" || status === "red") {
+  if (status === "green" || status === "amber" || status === "red") {
     return status;
   }
+  if (status === "yellow" || status === "orange") return "amber";
   if (status === "pass") return "green";
-  if (status === "needs_review") return "orange";
+  if (status === "needs_review") return "amber";
   if (status === "likely_violation") return "red";
   return null;
 }
@@ -199,8 +200,7 @@ export const finishReview = mutation({
     kind: v.union(v.literal("creative"), v.literal("copy")),
     result: v.optional(v.union(
       v.literal("green"),
-      v.literal("yellow"),
-      v.literal("orange"),
+      v.literal("amber"),
       v.literal("red")
     )),
     secret: v.string(),
@@ -455,7 +455,7 @@ async function reviewState(ctx: QueryCtx, kind: ReviewKind, key: string) {
     job_id: claim.jobId,
     message: review?.message ?? "",
     progress: review?.progress ?? (claim.status === "complete" ? 100 : 0),
-    result: overallStatus(review?.report) ?? claim.result ?? null,
+    result: overallStatus(review?.report) ?? normalizeResultStatus(claim.result) ?? null,
     status: review?.status ?? claim.status,
   };
 }
@@ -551,10 +551,11 @@ export const getDay = query({
       ...[...uniqueCreativeKeys].map((key) => creativeStates.get(key)),
       ...[...uniqueCopyKeys].map((key) => copyStates.get(key)),
     ].filter((state): state is NonNullable<typeof state> => Boolean(state));
-    const outcomes = { green: 0, yellow: 0, orange: 0, red: 0 };
+    const outcomes = { green: 0, amber: 0, red: 0 };
     let pending = 0;
     for (const state of uniqueStates) {
-      if (state.result) outcomes[state.result] += 1;
+      const result = normalizeResultStatus(state.result);
+      if (result) outcomes[result] += 1;
       else if (state.status !== "failed") pending += 1;
     }
 

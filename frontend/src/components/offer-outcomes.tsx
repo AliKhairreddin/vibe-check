@@ -29,13 +29,8 @@ const STATUS_META: Record<
     className: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
     railClassName: 'bg-emerald-500 dark:bg-emerald-400',
   },
-  yellow: {
-    label: 'Yellow',
-    className: 'border-yellow-600/30 bg-yellow-400/20 text-yellow-800 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-200',
-    railClassName: 'bg-yellow-400 dark:bg-yellow-300',
-  },
-  orange: {
-    label: 'Orange',
+  amber: {
+    label: 'Amber',
     className: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
     railClassName: 'bg-orange-500 dark:bg-orange-400',
   },
@@ -155,7 +150,7 @@ export function OfferResultBadge({
   const meta = STATUS_META[status];
   return (
     <Badge variant="outline" className={cn(meta.className, className)}>
-      {status === 'green' && withOverride ? 'Green · Override' : meta.label}
+      {status === 'green' && withOverride ? 'Green · Exception' : meta.label}
     </Badge>
   );
 }
@@ -304,7 +299,7 @@ function eligibilityMessage(offer: OfferCatalogItem | undefined) {
   if (!offer) return 'Offer profile has not been created.';
   if (!offer.enabled) return 'Turned off in Settings.';
   if (!offer.configured) return 'Add official guidelines to enable reviews.';
-  return `Guidelines v${offer.version} · ${offer.override_count} overrides`;
+  return `Guidelines v${offer.version} · ${offer.override_count} internal rules`;
 }
 
 function unavailableMessage(state: OfferOutcome['evaluation_state'] | undefined) {
@@ -329,7 +324,7 @@ function railOutcomeMeta(outcome: OfferOutcome | null) {
   return {
     className: STATUS_META[outcome.overall_status].railClassName,
     label: outcome.overall_status === 'green' && outcome.with_override
-      ? 'Green (internal override)'
+      ? 'Green (internal exception)'
       : STATUS_META[outcome.overall_status].label,
   };
 }
@@ -345,7 +340,7 @@ function outcomeDetails(outcome: OfferOutcome) {
     details.push(`Copy: ${STATUS_META[outcome.ad_copy_result].label}`);
   }
   if (outcome.with_override) {
-    details.push('Saved internal override applied');
+    details.push('Approved internal exception applied');
   }
   if (
     outcome.overall_status &&
@@ -358,11 +353,12 @@ function outcomeDetails(outcome: OfferOutcome) {
 }
 
 function normalizeStatus(status: unknown): OverallStatus | null {
-  if (status === 'green' || status === 'yellow' || status === 'orange' || status === 'red') {
+  if (status === 'green' || status === 'amber' || status === 'red') {
     return status;
   }
+  if (status === 'yellow' || status === 'orange') return 'amber';
   if (status === 'pass') return 'green';
-  if (status === 'needs_review') return 'orange';
+  if (status === 'needs_review') return 'amber';
   if (status === 'likely_violation') return 'red';
   return null;
 }
