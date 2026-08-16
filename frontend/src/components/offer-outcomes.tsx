@@ -1,3 +1,5 @@
+import { ShieldCheck } from 'lucide-react';
+
 import { Badge } from '@/components/ui/badge';
 import type {
   OfferCatalogItem,
@@ -237,29 +239,127 @@ export function ReviewOfferResultsRail({
     const meta = railOutcomeMeta(outcome);
     return { ...meta, offer };
   });
+
+  return <OfferResultsRail segments={segments} />;
+}
+
+export function BatchOfferResultsRail({
+  item,
+  offers,
+}: {
+  item: ReviewBatchItem;
+  offers: OfferColumn[];
+}) {
+  const segments = offers.map((offer) => {
+    const outcome = batchOutcomeForOffer(item, offer);
+    const meta = railOutcomeMeta(outcome);
+    return { ...meta, offer };
+  });
+
+  return <OfferResultsRail prominent segments={segments} />;
+}
+
+export function BatchHistoryOfferResultsRail({
+  items,
+  offers,
+}: {
+  items: ReviewBatchItem[];
+  offers: OfferColumn[];
+}) {
+  const groups = offers.map((offer) => ({
+    offer,
+    results: items.map((item, index) => {
+      const outcome = batchOutcomeForOffer(item, offer);
+      return {
+        ...railOutcomeMeta(outcome),
+        fileName: item.file_name,
+        index,
+      };
+    }),
+  }));
+  const accessibleLabel = groups
+    .map(({ offer, results }) => `${offer.offer_name}: ${historyResultSummary(results)}`)
+    .join('; ');
+
+  return (
+    <div
+      className="grid h-3 w-full min-w-0 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10"
+      style={{
+        gridTemplateColumns: `repeat(${Math.max(groups.length, 1)}, minmax(0, 1fr))`,
+      }}
+      role="img"
+      aria-label={`Batch results by offer. Within each offer, creatives are ordered left to right by upload. ${accessibleLabel}`}
+      title="Each offer block shows one segment per creative in upload order."
+    >
+      {groups.map(({ offer, results }, offerIndex) => (
+        <span
+          key={offer.offer_id}
+          className={cn('grid h-full', offerIndex > 0 && 'border-l-2 border-card')}
+          style={{
+            gridTemplateColumns: `repeat(${Math.max(results.length, 1)}, minmax(0, 1fr))`,
+          }}
+        >
+          {results.length ? results.map((result, itemIndex) => (
+            <span
+              key={`${offer.offer_id}:${result.index}`}
+              aria-hidden="true"
+              className={cn(
+                'grid h-full min-w-0 place-items-center',
+                itemIndex > 0 && results.length <= 12 && 'border-l border-card/60',
+                result.className
+              )}
+              title={`${offer.offer_name} · ${result.fileName}: ${result.label}`}
+            >
+              {result.withOverride && results.length <= 12 ? (
+                <span className="size-1 rounded-full bg-white shadow-sm" />
+              ) : null}
+            </span>
+          )) : <span className="h-full bg-muted-foreground/15" />}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+type OfferRailSegment = ReturnType<typeof railOutcomeMeta> & { offer: OfferColumn };
+
+function OfferResultsRail({
+  prominent = false,
+  segments,
+}: {
+  prominent?: boolean;
+  segments: OfferRailSegment[];
+}) {
   const accessibleLabel = segments
     .map(({ label, offer }) => `${offer.offer_name}: ${label}`)
     .join(', ');
 
   return (
     <div
-      className="grid h-2.5 min-w-64 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10"
+      className={cn(
+        'grid w-full min-w-0 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10',
+        prominent ? 'h-6' : 'h-2.5'
+      )}
       style={{
         gridTemplateColumns: `repeat(${Math.max(segments.length, 1)}, minmax(0, 1fr))`,
       }}
       role="img"
       aria-label={accessibleLabel || 'No offer results'}
     >
-      {segments.map(({ className, label, offer }, index) => (
+      {segments.map(({ className, label, offer, withOverride }, index) => (
         <span
           key={offer.offer_id}
           className={cn(
-            'h-full',
+            'grid h-full place-items-center',
             index > 0 && 'border-l border-card/90',
             className
           )}
           title={`${offer.offer_name}: ${label}`}
-        />
+        >
+          {prominent && withOverride ? (
+            <ShieldCheck aria-hidden="true" className="size-3.5 text-white drop-shadow-sm" />
+          ) : null}
+        </span>
       ))}
     </div>
   );
@@ -313,12 +413,14 @@ function railOutcomeMeta(outcome: OfferOutcome | null) {
     return {
       className: 'bg-muted-foreground/15',
       label: 'N/A',
+      withOverride: false,
     };
   }
   if (!outcome.overall_status) {
     return {
       className: 'bg-muted-foreground/30',
       label: 'Not ready',
+      withOverride: false,
     };
   }
   return {
@@ -326,7 +428,14 @@ function railOutcomeMeta(outcome: OfferOutcome | null) {
     label: outcome.overall_status === 'green' && outcome.with_override
       ? 'Green (internal exception)'
       : STATUS_META[outcome.overall_status].label,
+    withOverride: Boolean(outcome.with_override),
   };
+}
+
+function historyResultSummary(results: Array<ReturnType<typeof railOutcomeMeta>>) {
+  const counts = new Map<string, number>();
+  for (const result of results) counts.set(result.label, (counts.get(result.label) ?? 0) + 1);
+  return Array.from(counts, ([label, count]) => `${count} ${label}`).join(', ') || 'No creatives';
 }
 
 function outcomeDetails(outcome: OfferOutcome) {

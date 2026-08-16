@@ -108,6 +108,8 @@ import {
 } from '@/components/client-dashboard';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import {
+  BatchHistoryOfferResultsRail,
+  BatchOfferResultsRail,
   batchOutcomeForOffer,
   findOfferOutcome,
   getOfferColumns,
@@ -1482,10 +1484,19 @@ function HistoryCard({
             </div>
           ) : filteredEntries.length ? (
             <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
-              <Table className="min-w-[60rem] table-fixed">
+              <Table className="min-w-[48rem] table-fixed">
+                <colgroup>
+                  <col className="w-8" />
+                  <col className="w-14" />
+                  <col />
+                  <col className="w-28" />
+                  <col className="w-24" />
+                  <col className="w-80" />
+                  <col className="w-28" />
+                </colgroup>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
-                    <TableHead className="h-11 w-8 px-2">
+                    <TableHead className="h-11 px-2">
                       <HistoryCheckbox
                         checked={allVisibleSelected}
                         indeterminate={someVisibleSelected}
@@ -1494,14 +1505,14 @@ function HistoryCard({
                         onChange={toggleVisibleSelection}
                       />
                     </TableHead>
-                    <TableHead className="h-11 w-16 px-2 text-xs text-muted-foreground">Creative</TableHead>
-                    <TableHead className="h-11 w-72 text-xs text-muted-foreground">Upload</TableHead>
-                    <TableHead className="h-11 w-32 text-xs text-muted-foreground">Uploaded</TableHead>
-                    <TableHead className="h-11 w-20 text-xs text-muted-foreground">Status</TableHead>
-                    <TableHead className="h-11 w-80 text-xs text-muted-foreground">
+                    <TableHead className="h-11 px-2 text-xs text-muted-foreground">Creative</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Upload</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Uploaded</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Status</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">
                       <OfferResultsHeader offers={offerColumns} />
                     </TableHead>
-                    <TableHead className="h-11 w-28 text-right text-xs text-muted-foreground">Action</TableHead>
+                    <TableHead className="h-11 text-right text-xs text-muted-foreground">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1575,12 +1586,10 @@ function HistoryCard({
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
                           {entry.kind === 'batch' ? (
-                            <div className="flex min-w-64 items-center justify-between gap-3 rounded-md border border-dashed bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
-                              <span>
-                                View {historyEntryItemCount(entry)} individual result{historyEntryItemCount(entry) === 1 ? '' : 's'}
-                              </span>
-                              <span className="font-medium text-foreground">Open batch →</span>
-                            </div>
+                            <BatchHistoryOfferResultsRail
+                              items={historyEntryBatchItems(entry)}
+                              offers={offerColumns}
+                            />
                           ) : (
                             <ReviewOfferResultsRail offers={offerColumns} review={entry.review} />
                           )}
@@ -1595,7 +1604,7 @@ function HistoryCard({
                                 className={cn(buttonVariants({ variant: 'outline', size: 'xs' }))}
                               >
                                 <Layers3 data-icon="inline-start" />
-                                Open batch
+                                Open
                               </Link>
                             ) : entry.review.report_ready ? (
                               <Link
@@ -1850,11 +1859,12 @@ function historyEntryLabel(entry: HistoryEntry) {
 
 function historyEntrySubtitle(entry: HistoryEntry) {
   if (entry.kind === 'review') return '';
-  if (entry.batch?.source_label) return entry.batch.source_label;
   const names = historyEntryBatchItems(entry).map((item) => item.file_name).filter(Boolean);
-  if (!names.length) return `Batch ${entry.batchId.slice(0, 8)}`;
-  const preview = names.slice(0, 2).join(', ');
-  return names.length > 2 ? `${preview} +${names.length - 2} more` : preview;
+  if (names.length) return names.length > 1 ? `${names[0]} +${names.length - 1} more` : names[0];
+  if (entry.batch?.source_label && !/^\d+ selected files?$/i.test(entry.batch.source_label)) {
+    return entry.batch.source_label;
+  }
+  return `Batch ${entry.batchId.slice(0, 8)}`;
 }
 
 function historyEntryStatus(entry: HistoryEntry) {
@@ -2667,13 +2677,11 @@ function BatchPage() {
         </div>
         <Table className="table-fixed">
           <colgroup>
-            <col className="w-14" />
+            <col className="w-20" />
             <col className="w-28" />
             <col />
-            <col className="w-24" />
-            {offerColumns.map((offer) => (
-              <col key={offer.offer_id} className="w-28" />
-            ))}
+            <col className="w-36" />
+            <col className="w-80" />
             <col className="w-32" />
           </colgroup>
           <TableHeader>
@@ -2682,9 +2690,9 @@ function BatchPage() {
               <TableHead>Type</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Status</TableHead>
-              {offerColumns.map((offer) => (
-                <TableHead key={offer.offer_id} className="text-xs">{offer.offer_name}</TableHead>
-              ))}
+              <TableHead className="text-xs">
+                <OfferResultsHeader offers={offerColumns} />
+              </TableHead>
               <TableHead className="text-right">Report</TableHead>
             </TableRow>
           </TableHeader>
@@ -2725,11 +2733,9 @@ function BatchPage() {
                     ) : null}
                   </TableCell>
                   <TableCell className="align-top"><StatusBadge status={item.status} /></TableCell>
-                  {offerColumns.map((offer) => (
-                    <TableCell key={offer.offer_id}>
-                      <OfferOutcomeCell compact outcome={batchOutcomeForOffer(item, offer)} />
-                    </TableCell>
-                  ))}
+                  <TableCell>
+                    <BatchOfferResultsRail item={item} offers={offerColumns} />
+                  </TableCell>
                   <TableCell className="text-right">
                     {item.status === 'complete' && item.job_id ? (
                       <Link
