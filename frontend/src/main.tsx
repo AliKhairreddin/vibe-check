@@ -66,6 +66,22 @@ import {
   ProgressValue,
 } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -77,6 +93,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { DashboardPage } from '@/components/dashboard';
 import { DriveBrowser } from '@/components/drive-browser';
@@ -148,6 +165,7 @@ type BatchItem = {
 const queryClient = new QueryClient();
 const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v2';
 const OPENROUTER_MODEL_KEY = 'vibe-check-openrouter-model';
+const SIDEBAR_OPEN_KEY = 'vibe-check-sidebar-open';
 const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-flash';
 const AD_COPY_PREVIEW_LENGTH = 56;
 const UPLOAD_CONCURRENCY = 4;
@@ -240,104 +258,162 @@ function useTheme() {
 
 function AppShell() {
   const { theme, toggleTheme } = useTheme();
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false';
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
+  }, [sidebarOpen]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground md:flex">
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-sidebar p-4 md:flex">
-        <Link to="/" className="mb-7 flex items-center gap-2 px-2">
-          <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-card shadow-sm">
-            <FileImage className="size-4" />
-          </span>
-          <span className="font-heading text-base font-semibold">Vibe Check</span>
-        </Link>
-        <nav className="grid gap-1" aria-label="Primary navigation">
-          <ShellLink to="/" label="Dashboard" icon={<LayoutDashboard />} />
-          <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
-          <ShellLink to="/history" label="History" icon={<History />} />
-          <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
-          <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
-          <ShellLink to="/settings" label="Settings" icon={<Settings />} />
-        </nav>
-        <div className="mt-auto grid gap-3">
-          <div className="rounded-lg border bg-card/60 p-3 text-xs leading-5 text-muted-foreground">
-            Results reflect effective policy, with approved internal exceptions identified separately.
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            className="justify-start"
-            onClick={toggleTheme}
-          >
-            {theme === 'dark' ? <Sun /> : <Moon />}
-            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </Button>
+    <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen}>
+      <AppSidebar theme={theme} onToggleTheme={toggleTheme} />
+      <SidebarInset className="min-w-0">
+        <AppHeader theme={theme} onToggleTheme={toggleTheme} />
+        <div className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
+          <Outlet />
         </div>
-      </aside>
-      <div className="min-w-0 flex-1">
-        <header className="sticky top-0 z-20 border-b bg-background/90 px-4 py-3 backdrop-blur md:hidden">
-          <div className="flex items-center justify-between gap-3">
-            <Link to="/" className="flex items-center gap-2 font-heading font-semibold">
-              <span className="grid size-8 place-items-center rounded-lg border bg-card">
-                <FileImage className="size-4" />
-              </span>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+function AppHeader({
+  onToggleTheme,
+  theme,
+}: {
+  onToggleTheme: () => void;
+  theme: Theme;
+}) {
+  const { isMobile, open, openMobile } = useSidebar();
+  const navigationOpen = isMobile ? openMobile : open;
+  const triggerVerb = isMobile
+    ? navigationOpen ? 'Close' : 'Open'
+    : navigationOpen ? 'Collapse' : 'Expand';
+
+  return (
+    <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur sm:px-6">
+      <SidebarTrigger
+        className="-ml-1"
+        aria-label={`${triggerVerb} navigation`}
+        title={`${triggerVerb} navigation (Ctrl+B)`}
+      />
+      <Separator orientation="vertical" className="h-4" />
+      <Link to="/" className="flex items-center gap-2 font-heading text-sm font-semibold md:hidden">
+        <FileImage className="size-4" />
+        Vibe Check
+      </Link>
+      <span className="hidden text-sm text-muted-foreground md:inline">
+        {triggerVerb} navigation
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="ml-auto md:hidden"
+        onClick={onToggleTheme}
+        aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      >
+        {theme === 'dark' ? <Sun /> : <Moon />}
+      </Button>
+    </header>
+  );
+}
+
+function AppSidebar({
+  onToggleTheme,
+  theme,
+}: {
+  onToggleTheme: () => void;
+  theme: Theme;
+}) {
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
+        <div className="flex items-center gap-1">
+          <Link
+            to="/"
+            className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-sidebar-border bg-card shadow-sm">
+              <FileImage className="size-4" />
+            </span>
+            <span className="truncate font-heading text-base font-semibold group-data-[collapsible=icon]:hidden">
               Vibe Check
-            </Link>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={toggleTheme}
-              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            </span>
+          </Link>
+          <SidebarTrigger
+            className="md:hidden"
+            aria-label="Close navigation"
+            title="Close navigation"
+          />
+        </div>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu aria-label="Primary navigation">
+              <ShellLink to="/" label="Dashboard" icon={<LayoutDashboard />} />
+              <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
+              <ShellLink to="/history" label="History" icon={<History />} />
+              <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
+              <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
+              <ShellLink to="/settings" label="Settings" icon={<Settings />} />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
+        <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 text-muted-foreground group-data-[collapsible=icon]:hidden">
+          Results reflect effective policy, with approved internal exceptions identified separately.
+        </div>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              onClick={onToggleTheme}
             >
               {theme === 'dark' ? <Sun /> : <Moon />}
-            </Button>
-          </div>
-          <nav className="mt-3 grid grid-cols-6 gap-1" aria-label="Primary navigation">
-            <ShellLink compact to="/" label="Dashboard" icon={<LayoutDashboard />} />
-            <ShellLink compact to="/reviews/new" label="Review" icon={<Plus />} />
-            <ShellLink compact to="/history" label="History" icon={<History />} />
-            <ShellLink compact to="/live-scans" label="Live" icon={<Radio />} />
-            <ShellLink compact to="/automations" label="Automate" icon={<CalendarClock />} />
-            <ShellLink compact to="/settings" label="Settings" icon={<Settings />} />
-          </nav>
-        </header>
-        <main className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
-          <Outlet />
-        </main>
-      </div>
-    </div>
+              <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
 function ShellLink({
-  compact = false,
   icon,
   label,
   to,
 }: {
-  compact?: boolean;
   icon: React.ReactNode;
   label: string;
   to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/settings';
 }) {
+  const { setOpenMobile } = useSidebar();
+
   return (
-    <Link
-      to={to}
-      activeOptions={{ exact: to === '/' }}
-      className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&_svg]:size-4',
-        compact && 'flex-col gap-1 px-1 py-1.5 text-[11px]'
-      )}
-      activeProps={{
-        className: cn(
-          'bg-sidebar-accent text-sidebar-accent-foreground',
-          compact && 'flex-col gap-1 px-1 py-1.5 text-[11px]'
-        ),
-      }}
-    >
-      {icon}
-      <span>{label}</span>
-    </Link>
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        tooltip={label}
+        render={
+          <Link
+            to={to}
+            activeOptions={{ exact: to === '/' }}
+            activeProps={{ className: 'bg-sidebar-accent text-sidebar-accent-foreground' }}
+            onClick={() => setOpenMobile(false)}
+          />
+        }
+      >
+        {icon}
+        <span>{label}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }
 
@@ -3195,7 +3271,9 @@ const router = createRouter({
 });
 
 createRoot(document.getElementById('root')!).render(
-  <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
-  </QueryClientProvider>
+  <TooltipProvider>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
+  </TooltipProvider>
 );
