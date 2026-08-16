@@ -19,6 +19,7 @@ import {
   RouterProvider,
   useNavigate,
   useParams,
+  useRouterState,
 } from '@tanstack/react-router';
 import {
   AlertCircle,
@@ -272,11 +273,25 @@ function AppShell() {
       <AppSidebar theme={theme} onToggleTheme={toggleTheme} />
       <SidebarInset className="min-w-0">
         <AppHeader theme={theme} onToggleTheme={toggleTheme} />
-        <div className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
-          <Outlet />
-        </div>
+        <AppContent />
       </SidebarInset>
     </SidebarProvider>
+  );
+}
+
+function AppContent() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const isWideLayout = pathname.startsWith('/batches/');
+
+  return (
+    <div
+      className={cn(
+        'mx-auto w-full p-4 sm:p-6 lg:p-8',
+        isWideLayout ? 'max-w-none' : 'max-w-7xl'
+      )}
+    >
+      <Outlet />
+    </div>
   );
 }
 
@@ -287,32 +302,26 @@ function AppHeader({
   onToggleTheme: () => void;
   theme: Theme;
 }) {
-  const { isMobile, open, openMobile } = useSidebar();
-  const navigationOpen = isMobile ? openMobile : open;
-  const triggerVerb = isMobile
-    ? navigationOpen ? 'Close' : 'Open'
-    : navigationOpen ? 'Collapse' : 'Expand';
+  const { openMobile } = useSidebar();
+  const triggerVerb = openMobile ? 'Close' : 'Open';
 
   return (
-    <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur sm:px-6">
+    <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur md:hidden">
       <SidebarTrigger
         className="-ml-1"
         aria-label={`${triggerVerb} navigation`}
-        title={`${triggerVerb} navigation (Ctrl+B)`}
+        title={`${triggerVerb} navigation`}
       />
       <Separator orientation="vertical" className="h-4" />
-      <Link to="/" className="flex items-center gap-2 font-heading text-sm font-semibold md:hidden">
+      <Link to="/" className="flex items-center gap-2 font-heading text-sm font-semibold">
         <FileImage className="size-4" />
         Vibe Check
       </Link>
-      <span className="hidden text-sm text-muted-foreground md:inline">
-        {triggerVerb} navigation
-      </span>
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
-        className="ml-auto md:hidden"
+        className="ml-auto"
         onClick={onToggleTheme}
         aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
       >
@@ -335,7 +344,7 @@ function AppSidebar({
         <div className="flex items-center gap-1">
           <Link
             to="/"
-            className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-[color,background-color,opacity] hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:opacity-0"
           >
             <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-sidebar-border bg-card shadow-sm">
               <FileImage className="size-4" />
@@ -381,8 +390,22 @@ function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+      <SidebarBorderTrigger />
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+function SidebarBorderTrigger() {
+  const { open } = useSidebar();
+  const label = open ? 'Collapse navigation' : 'Expand navigation';
+
+  return (
+    <SidebarTrigger
+      className="absolute top-5 -right-3.5 z-30 hidden size-7 rounded-full border border-sidebar-border bg-background shadow-sm hover:bg-muted md:inline-flex"
+      aria-label={label}
+      title={`${label} (Ctrl+B)`}
+    />
   );
 }
 
@@ -2611,7 +2634,7 @@ function BatchPage() {
   }
 
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle as="h1" className="text-xl">
           Batch report
@@ -2642,22 +2665,31 @@ function BatchPage() {
             Open any row for that creative’s detailed report and individual PDF options.
           </p>
         </div>
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-16">Creative</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                {offerColumns.map((offer) => (
-                  <TableHead key={offer.offer_id} className="min-w-32">{offer.offer_name}</TableHead>
-                ))}
-                <TableHead className="text-right">Report</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {query.data.items.map((item) => (
+        <Table className="table-fixed">
+          <colgroup>
+            <col className="w-14" />
+            <col className="w-28" />
+            <col />
+            <col className="w-24" />
+            {offerColumns.map((offer) => (
+              <col key={offer.offer_id} className="w-28" />
+            ))}
+            <col className="w-32" />
+          </colgroup>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Creative</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Status</TableHead>
+              {offerColumns.map((offer) => (
+                <TableHead key={offer.offer_id} className="text-xs">{offer.offer_name}</TableHead>
+              ))}
+              <TableHead className="text-right">Report</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {query.data.items.map((item) => (
                 <TableRow
                   key={item.item_id}
                   role={item.job_id ? 'link' : undefined}
@@ -2681,8 +2713,8 @@ function BatchPage() {
                     />
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
-                  <TableCell className="w-80 min-w-64 max-w-80 whitespace-normal align-top">
-                    <span className="block truncate font-medium">{item.file_name}</span>
+                  <TableCell className="min-w-0 whitespace-normal align-top">
+                    <span className="block truncate font-medium" title={item.file_name}>{item.file_name}</span>
                     {isFailedBatchStatus(item.status) && item.message ? (
                       <span
                         className="mt-1 block line-clamp-2 break-words text-xs leading-4 text-destructive"
@@ -2695,7 +2727,7 @@ function BatchPage() {
                   <TableCell className="align-top"><StatusBadge status={item.status} /></TableCell>
                   {offerColumns.map((offer) => (
                     <TableCell key={offer.offer_id}>
-                      <OfferOutcomeCell outcome={batchOutcomeForOffer(item, offer)} />
+                      <OfferOutcomeCell compact outcome={batchOutcomeForOffer(item, offer)} />
                     </TableCell>
                   ))}
                   <TableCell className="text-right">
@@ -2721,10 +2753,9 @@ function BatchPage() {
                     )}
                   </TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+            ))}
+          </TableBody>
+        </Table>
       </CardContent>
     </Card>
   );
