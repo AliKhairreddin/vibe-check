@@ -26,6 +26,13 @@ from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
+
+
+def _failure_message(error: Exception) -> str:
+    detail=str(error).strip()
+    if detail:
+        return detail
+    return f'{type(error).__name__}: review processing failed without an upstream error message.'
 logger = logging.getLogger(__name__)
 
 
@@ -399,7 +406,8 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 media_kind,
             )
     except Exception as e:
-        set_status(job_id, JobStatus.failed, 100, str(e))
+        failure_message=_failure_message(e)
+        set_status(job_id, JobStatus.failed, 100, failure_message)
         if meta.live_scan_kind and meta.live_scan_key:
             try:
                 await asyncio.to_thread(
@@ -427,7 +435,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     meta.batch_item_id or '',
                     status='failed',
                     job_id=job_id,
-                    message=str(e),
+                    message=failure_message,
                 )
             except Exception:
                 logger.exception('Batch failure notification failed for job %s', job_id)

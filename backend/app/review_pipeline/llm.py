@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 from pydantic import ValidationError
+
+from .language import first_han_script_field
 from .models import ComplianceReport, LLMComplianceResult
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 
@@ -125,7 +127,9 @@ REVIEW_RESPONSE_SCHEMA = {
         'schema': LLMComplianceResult.model_json_schema(),
     },
 }
-MAX_REVIEW_ATTEMPTS = 2
+DEFAULT_MAX_REVIEW_ATTEMPTS = 3
+MAX_REVIEW_ATTEMPTS_LIMIT = 5
+DEFAULT_RETRY_BASE_SECONDS = 1.0
 DEFAULT_REQUEST_DEADLINE_SECONDS = 180
 SEMANTIC_NORMALIZATION_LIMITATION = (
     'The provider verdict was normalized deterministically from its returned '
@@ -143,6 +147,39 @@ class ComplianceResponseError(ValueError):
     pass
 
 
+def _english_authored_field_issue(report: ComplianceReport) -> str | None:
+    fields: list[tuple[str, Any]] = [
+        ('summary', report.summary),
+        ('safe_rewrite.ad_copy', report.safe_rewrite.ad_copy),
+        ('safe_rewrite.onscreen_text', report.safe_rewrite.onscreen_text),
+        ('limitations', report.limitations),
+    ]
+    for source_name, source_result in (
+        ('creative', report.source_results.creative),
+        ('ad_copy', report.source_results.ad_copy),
+    ):
+        if source_result is not None:
+            fields.append((f'source_results.{source_name}.summary', source_result.summary))
+    for index, finding in enumerate(report.findings):
+        fields.extend((
+            (f'findings[{index}].policy_reason', finding.policy_reason),
+            (f'findings[{index}].suggested_fix', finding.suggested_fix),
+        ))
+    for index, override in enumerate(report.applied_overrides):
+        fields.append((f'applied_overrides[{index}].rationale', override.rationale))
+    return first_han_script_field(fields)
+
+
+def _require_english_authored_fields(report: ComplianceReport) -> ComplianceReport:
+    issue = _english_authored_field_issue(report)
+    if issue is not None:
+        raise ComplianceResponseError(
+            'The policy reviewer returned non-English model-authored text in '
+            f'{issue}; every narrative field must be written in English.'
+        )
+    return report
+
+
 def _request_deadline_seconds() -> int:
     try:
         configured = int(os.getenv(
@@ -152,6 +189,38 @@ def _request_deadline_seconds() -> int:
     except ValueError:
         configured = DEFAULT_REQUEST_DEADLINE_SECONDS
     return max(30, min(configured, 10 * 60))
+
+
+def _max_review_attempts() -> int:
+    try:
+        configured = int(os.getenv(
+            'OPENROUTER_MAX_ATTEMPTS',
+            str(DEFAULT_MAX_REVIEW_ATTEMPTS),
+        ))
+    except ValueError:
+        configured = DEFAULT_MAX_REVIEW_ATTEMPTS
+    return max(1, min(configured, MAX_REVIEW_ATTEMPTS_LIMIT))
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    try:
+        base = float(os.getenv(
+            'OPENROUTER_RETRY_BASE_SECONDS',
+            str(DEFAULT_RETRY_BASE_SECONDS),
+        ))
+    except ValueError:
+        base = DEFAULT_RETRY_BASE_SECONDS
+    return max(0.0, min(base, 30.0)) * (2 ** max(0, attempt - 1))
+
+
+def _retryable_http_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429} or 500 <= status_code <= 599
+
+
+async def _wait_before_retry(attempt: int) -> None:
+    delay = _retry_delay_seconds(attempt)
+    if delay:
+        await asyncio.sleep(delay)
 
 
 def _load_json(text: str) -> Any:
@@ -664,7 +733,7 @@ def parse_strict_report_json(text:str)->ComplianceReport:
             f'The policy reviewer returned an invalid structured result: {exc}'
         ) from exc
     report=ComplianceReport.model_validate(result.model_dump())
-    return normalize_report_semantics(report)
+    return _require_english_authored_fields(normalize_report_semantics(report))
 
 
 async def review_with_openrouter(evidence:dict, model:str|None=None)->ComplianceReport:
@@ -677,10 +746,11 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
         {'role':'system','content':SYSTEM_PROMPT},
         {'role':'user','content':build_user_prompt(evidence)},
     ]
+    max_attempts=_max_review_attempts()
     last_error:ComplianceResponseError|None=None
     last_content:str|None=None
     async with httpx.AsyncClient(timeout=120) as client:
-        for attempt in range(1, MAX_REVIEW_ATTEMPTS + 1):
+        for attempt in range(1, max_attempts + 1):
             payload={
                 'model':selected_model,
                 'messages':messages,
@@ -689,17 +759,87 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                 'plugins':[{'id':'response-healing'}],
                 'temperature':0,
             }
-            async with asyncio.timeout(_request_deadline_seconds()):
-                response=await client.post(
-                    'https://openrouter.ai/api/v1/chat/completions',
-                    headers={
-                        'Authorization':f'Bearer {key}',
-                        'Content-Type':'application/json',
-                    },
-                    json=payload,
+            content:Any=None
+            try:
+                async with asyncio.timeout(_request_deadline_seconds()):
+                    response=await client.post(
+                        'https://openrouter.ai/api/v1/chat/completions',
+                        headers={
+                            'Authorization':f'Bearer {key}',
+                            'Content-Type':'application/json',
+                        },
+                        json=payload,
+                    )
+                response.raise_for_status()
+                content=response.json()['choices'][0]['message']['content']
+            except TimeoutError as exc:
+                last_error=ComplianceResponseError(
+                    f'The policy reviewer timed out on attempt {attempt} of {max_attempts}.'
                 )
-            response.raise_for_status()
-            content=response.json()['choices'][0]['message']['content']
+                logger.warning(
+                    'Policy review request timed out. attempt=%s max_attempts=%s model=%s',
+                    attempt,
+                    max_attempts,
+                    selected_model,
+                )
+                if attempt < max_attempts:
+                    await _wait_before_retry(attempt)
+                    continue
+                break
+            except httpx.HTTPStatusError as exc:
+                status_code=exc.response.status_code
+                if not _retryable_http_status(status_code):
+                    raise
+                last_error=ComplianceResponseError(
+                    'The policy reviewer returned a transient HTTP '
+                    f'{status_code} error on attempt {attempt} of {max_attempts}.'
+                )
+                logger.warning(
+                    'Policy review request returned transient HTTP status. '
+                    'attempt=%s max_attempts=%s model=%s status=%s',
+                    attempt,
+                    max_attempts,
+                    selected_model,
+                    status_code,
+                )
+                if attempt < max_attempts:
+                    await _wait_before_retry(attempt)
+                    continue
+                break
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_error=ComplianceResponseError(
+                    'The policy reviewer had a transient network failure '
+                    f'({type(exc).__name__}) on attempt {attempt} of {max_attempts}.'
+                )
+                logger.warning(
+                    'Policy review request had a transient network failure. '
+                    'attempt=%s max_attempts=%s model=%s error_type=%s',
+                    attempt,
+                    max_attempts,
+                    selected_model,
+                    type(exc).__name__,
+                )
+                if attempt < max_attempts:
+                    await _wait_before_retry(attempt)
+                    continue
+                break
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                last_error=ComplianceResponseError(
+                    'The policy reviewer returned an invalid provider response '
+                    f'on attempt {attempt} of {max_attempts}: {type(exc).__name__}.'
+                )
+                logger.warning(
+                    'Policy review provider response could not be read. '
+                    'attempt=%s max_attempts=%s model=%s error_type=%s',
+                    attempt,
+                    max_attempts,
+                    selected_model,
+                    type(exc).__name__,
+                )
+                if attempt < max_attempts:
+                    await _wait_before_retry(attempt)
+                    continue
+                break
             if not isinstance(content, str):
                 last_error=ComplianceResponseError(
                     'The policy reviewer returned a non-text structured result.'
@@ -717,7 +857,7 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                         type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
                     )
 
-            if attempt < MAX_REVIEW_ATTEMPTS:
+            if attempt < max_attempts:
                 messages=[
                     *messages,
                     {
@@ -727,9 +867,11 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                     {
                         'role':'user',
                         'content':(
-                            'Your previous response did not satisfy the required schema and '
-                            f'verdict rules: {last_error}. Return the complete corrected JSON '
-                            'object only. Green must have zero findings. Amber must include low '
+                            'Your previous response did not satisfy the required language, schema, '
+                            f'or verdict rules: {last_error}. Return the complete corrected JSON '
+                            'object only, with every model-authored narrative field in English. '
+                            'Preserve only direct evidence quotes and exact policy excerpts in '
+                            'their original language. Green must have zero findings. Amber must include low '
                             'or medium findings. Red must include a high finding tied to an '
                             'explicitly critical enforcement consequence in the supplied policy, '
                             'including its enforcement_consequence, exact consequence_policy_basis, '
@@ -737,11 +879,13 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                         ),
                     },
                 ]
+                await _wait_before_retry(attempt)
 
     if last_content is not None:
         try:
             repaired=parse_report_json(last_content)
-        except (json.JSONDecodeError, TypeError, ValidationError, ValueError):
+            _require_english_authored_fields(repaired)
+        except (ComplianceResponseError, json.JSONDecodeError, TypeError, ValidationError, ValueError):
             pass
         else:
             if STRUCTURE_REPAIR_LIMITATION not in repaired.limitations:
@@ -752,8 +896,12 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
             )
             return repaired
 
+    if last_content is None and last_error is not None:
+        raise ComplianceResponseError(
+            f'Policy review failed after {max_attempts} automatic attempts. {last_error}'
+        ) from last_error
     raise ComplianceResponseError(
-        'The policy reviewer did not return a valid structured verdict with '
-        f'supporting findings after {MAX_REVIEW_ATTEMPTS} attempts. '
+        'The policy reviewer did not return a valid English structured verdict with '
+        f'supporting findings after {max_attempts} automatic attempts. '
         'No policy color was assigned.'
     ) from last_error

@@ -7,15 +7,21 @@ from typing import Any
 import httpx
 from PIL import Image, ImageOps
 
+from .language import first_han_script_field
+
 OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions'
 DEFAULT_VISION_MODEL = 'minimax/minimax-m3'
 DEFAULT_MAX_FRAMES = 12
 DEFAULT_MAX_IMAGE_EDGE = 1024
 DEFAULT_JPEG_QUALITY = 75
 DEFAULT_REQUEST_DEADLINE_SECONDS = 180
+DEFAULT_MAX_VISION_ATTEMPTS = 2
 
 VISION_SYSTEM_PROMPT = """You are a visual evidence extractor for ad creative review.
 Return strict JSON only. Do not make the final compliance decision.
+Write every model-authored description, list item, risk, and limitation in English.
+Preserve filenames, visible brand names, and direct OCR quotes in their original language.
+Never switch the narrative to Chinese or another language because OCR or a provider uses it.
 
 Inspect the attached frames for non-text visual elements that may matter to ad policy review:
 people, objects, products, scenes, logos, badges, government-looking documents or seals,
@@ -55,6 +61,13 @@ def _int_env(name:str, default:int)->int:
         return int(os.getenv(name, '').strip() or default)
     except ValueError:
         return default
+
+
+def _max_vision_attempts()->int:
+    return max(1, min(
+        _int_env('OPENROUTER_VISION_MAX_ATTEMPTS', DEFAULT_MAX_VISION_ATTEMPTS),
+        3,
+    ))
 
 
 def _load_json(text:str)->Any:
@@ -209,6 +222,19 @@ def _parse_visual_response(text:str, frame_records:list[dict])->tuple[list[dict]
     return normalized, limitations
 
 
+def _visual_language_issue(observations:list[dict], limitations:list[str])->str|None:
+    fields:list[tuple[str, Any]]=[('limitations', limitations)]
+    for index, observation in enumerate(observations):
+        for key in (
+            'scene',
+            'people',
+            'objects',
+            'policy_relevant_visual_risks',
+        ):
+            fields.append((f'observations[{index}].{key}', observation.get(key)))
+    return first_han_script_field(fields)
+
+
 async def observe_frames_with_openrouter(frames_dir:Path, frame_records:list[dict], ocr:list[dict])->dict[str, Any]:
     if not frame_records:
         return {'source':'not_applicable','observations':[], 'limitations':['No frames were available for visual review.']}
@@ -236,33 +262,62 @@ async def observe_frames_with_openrouter(frames_dir:Path, frame_records:list[dic
             'Use timestamps from the per-frame metadata. Return JSON only.'
         ),
     }, *frame_content]
-    payload={
-        'model': model,
-        'messages': [
-            {'role':'system','content':VISION_SYSTEM_PROMPT},
-            {'role':'user','content':content},
-        ],
-        'response_format': {'type':'json_object'},
-        'temperature': 0,
-    }
+    messages=[
+        {'role':'system','content':VISION_SYSTEM_PROMPT},
+        {'role':'user','content':content},
+    ]
+    max_attempts=_max_vision_attempts()
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            async with asyncio.timeout(max(30, min(
-                _int_env(
-                    'OPENROUTER_REQUEST_TIMEOUT_SECONDS',
-                    DEFAULT_REQUEST_DEADLINE_SECONDS,
-                ),
-                10 * 60,
-            ))):
-                response=await client.post(
-                    OPENROUTER_CHAT_COMPLETIONS_URL,
-                    headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},
-                    json=payload,
-                )
-            response.raise_for_status()
-            text=response.json()['choices'][0]['message']['content']
-        observations, model_limitations=_parse_visual_response(text, included)
+            for attempt in range(1, max_attempts + 1):
+                payload={
+                    'model': model,
+                    'messages': messages,
+                    'response_format': {'type':'json_object'},
+                    'temperature': 0,
+                }
+                async with asyncio.timeout(max(30, min(
+                    _int_env(
+                        'OPENROUTER_REQUEST_TIMEOUT_SECONDS',
+                        DEFAULT_REQUEST_DEADLINE_SECONDS,
+                    ),
+                    10 * 60,
+                ))):
+                    response=await client.post(
+                        OPENROUTER_CHAT_COMPLETIONS_URL,
+                        headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},
+                        json=payload,
+                    )
+                response.raise_for_status()
+                text=response.json()['choices'][0]['message']['content']
+                observations, model_limitations=_parse_visual_response(text, included)
+                language_issue=_visual_language_issue(observations, model_limitations)
+                if language_issue is None:
+                    break
+                if attempt >= max_attempts:
+                    return {
+                        'source':'unavailable',
+                        'model':model,
+                        'observations':[],
+                        'frame_count':len(included),
+                        'limitations':limitations + [
+                            'OpenRouter vision review returned non-English model-authored text '
+                            f'in {language_issue} after {max_attempts} attempts.'
+                        ],
+                    }
+                messages=[
+                    *messages,
+                    {'role':'assistant','content':text[:20_000]},
+                    {
+                        'role':'user',
+                        'content':(
+                            'Return the complete JSON again with every model-authored description, '
+                            'risk, and limitation in English. Preserve only filenames, visible brand '
+                            'names, and direct OCR quotes in their original language.'
+                        ),
+                    },
+                ]
     except httpx.HTTPStatusError as exc:
         return {
             'source':'unavailable',

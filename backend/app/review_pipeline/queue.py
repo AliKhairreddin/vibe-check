@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .drive import DriveFile, get_google_drive_client
@@ -36,6 +36,8 @@ DEFAULT_WORKER_CONCURRENCY = 4
 MAX_WORKER_CONCURRENCY = 8
 DEFAULT_JOB_TIMEOUT_SECONDS = 30 * 60
 MAX_JOB_TIMEOUT_SECONDS = 2 * 60 * 60
+DEFAULT_JOB_MAX_ATTEMPTS = 2
+MAX_JOB_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ class QueuedReviewJob:
     meta: ReviewRequestMeta
     drive_file: DriveFile | None = None
     recovery_payload: RecoveredReviewPayload | None = None
+    attempt: int = 1
 
 
 _queue: asyncio.Queue[QueuedReviewJob] = asyncio.Queue()
@@ -60,6 +63,7 @@ _queue_diagnostics: dict[str, int | str] = {
     'failure_count': 0,
     'finished_count': 0,
     'last_error_type': '',
+    'retry_count': 0,
     'started_count': 0,
     'terminal_count': 0,
 }
@@ -154,6 +158,17 @@ def _job_timeout_seconds() -> int:
     return max(60, min(configured, MAX_JOB_TIMEOUT_SECONDS))
 
 
+def _job_max_attempts() -> int:
+    try:
+        configured = int(os.getenv(
+            'JOB_MAX_ATTEMPTS',
+            str(DEFAULT_JOB_MAX_ATTEMPTS),
+        ))
+    except ValueError:
+        configured = DEFAULT_JOB_MAX_ATTEMPTS
+    return max(1, min(configured, MAX_JOB_MAX_ATTEMPTS))
+
+
 def queue_state() -> dict[str, int | str | bool]:
     return {
         'active': len(_active_jobs),
@@ -166,6 +181,7 @@ def queue_state() -> dict[str, int | str | bool]:
         'last_error_type': str(_queue_diagnostics['last_error_type']),
         'pending': _queue.qsize(),
         'recovery_locked': _recovery_lock.locked(),
+        'retry_count': int(_queue_diagnostics['retry_count']),
         'started_count': int(_queue_diagnostics['started_count']),
         'terminal_count': int(_queue_diagnostics['terminal_count']),
         'unfinished': int(_queue._unfinished_tasks),
@@ -479,6 +495,50 @@ async def _restore_recovery_file(job: QueuedReviewJob) -> None:
     await restore_media(payload, job.media_path)
 
 
+async def _requeue_timed_out_job(job: QueuedReviewJob, worker_index: int) -> bool:
+    max_attempts=_job_max_attempts()
+    if job.attempt >= max_attempts:
+        return False
+
+    retry_payload=job.recovery_payload
+    if (
+        job.media_kind != 'copy_only'
+        and job.drive_file is None
+        and retry_payload is None
+    ):
+        payloads=await load_recovery_payloads([job.job_id])
+        retry_payload=payloads.get(job.job_id)
+        if retry_payload is None or retry_payload.media_url is None:
+            logger.error(
+                'Timed-out job %s could not be retried because its recovery media is unavailable.',
+                job.job_id,
+            )
+            return False
+
+    next_attempt=job.attempt + 1
+    message=(
+        'Processing exceeded the hard job deadline; retrying automatically '
+        f'(attempt {next_attempt} of {max_attempts})'
+    )
+    set_status(job.job_id, JobStatus.queued, 0, message)
+    await _queue.put(replace(
+        job,
+        recovery_payload=retry_payload,
+        attempt=next_attempt,
+    ))
+    _queue_diagnostics['retry_count'] = int(
+        _queue_diagnostics['retry_count']
+    ) + 1
+    logger.warning(
+        'Queue worker %s requeued timed-out job %s for attempt %s of %s.',
+        worker_index + 1,
+        job.job_id,
+        next_attempt,
+        max_attempts,
+    )
+    return True
+
+
 async def _process_queue(worker_index: int) -> None:
     while True:
         job = await _queue.get()
@@ -488,6 +548,7 @@ async def _process_queue(worker_index: int) -> None:
         _active_jobs.add(job.job_id)
         _register_automation_heartbeat(job.job_id, job.meta)
         terminal = False
+        retrying = False
         try:
             async with asyncio.timeout(_job_timeout_seconds()):
                 set_status(job.job_id, JobStatus.queued, 0, f'Starting worker {worker_index + 1}')
@@ -514,6 +575,17 @@ async def _process_queue(worker_index: int) -> None:
                 worker_index + 1,
                 job.job_id,
             )
+            if isinstance(exc, TimeoutError):
+                try:
+                    retrying=await _requeue_timed_out_job(job, worker_index)
+                except Exception:
+                    logger.exception(
+                        'Queue worker %s could not requeue timed-out job %s.',
+                        worker_index + 1,
+                        job.job_id,
+                    )
+                if retrying:
+                    continue
             try:
                 message = (
                     f'Queue processing timed out after {_job_timeout_seconds() // 60} minutes'
@@ -567,7 +639,7 @@ async def _process_queue(worker_index: int) -> None:
                     _queue_diagnostics['terminal_count']
                 ) + 1
                 await delete_job_payload(job.job_id)
-            if job.drive_file is not None and job.media_path is not None:
+            if not retrying and job.drive_file is not None and job.media_path is not None:
                 for path in (
                     job.media_path,
                     job.media_path.with_name(f'.{job.media_path.name}.drive-download'),

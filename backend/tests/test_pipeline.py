@@ -20,6 +20,7 @@ from app.review_pipeline import queue as review_queue
 from app.review_pipeline import recovery as review_recovery
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
+from app.review_pipeline import vision as review_vision
 from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewBatch, ReviewBatchItem, ReviewRequestMeta, ReviewSource
 from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
@@ -1108,6 +1109,37 @@ def test_strict_openrouter_report_accepts_green_with_no_findings():
     assert report.findings == []
 
 
+def test_strict_openrouter_report_rejects_non_english_authored_text():
+    payload=strict_report_payload()
+    payload['summary']='视频需要修改后发布。'
+
+    with pytest.raises(ComplianceResponseError, match='must be written in English'):
+        parse_strict_report_json(json.dumps(payload, ensure_ascii=False))
+
+
+def test_strict_openrouter_report_preserves_original_language_evidence_quotes():
+    payload=strict_report_payload(
+        overall_status='amber',
+        findings=[{
+            'severity':'medium',
+            'source':'onscreen_text',
+            'timestamp_start':'0',
+            'timestamp_end':None,
+            'evidence':'屏幕文字：“立即节省”',
+            'policy_reason':'The savings claim needs substantiation.',
+            'suggested_fix':'Add support for the claim or remove it.',
+            'confidence':'high',
+            'enforcement_consequence':'none',
+            'consequence_policy_basis':'',
+            'controlling_internal_rule_id':None,
+        }],
+    )
+
+    report=parse_strict_report_json(json.dumps(payload, ensure_ascii=False))
+
+    assert report.findings[0].evidence == '屏幕文字：“立即节省”'
+
+
 def test_strict_openrouter_report_downgrades_high_finding_without_severe_consequence():
     payload=strict_report_payload(
         overall_status='red',
@@ -1256,13 +1288,14 @@ async def test_openrouter_repairs_repeated_non_schema_json_after_strict_attempts
             return FakeResponse()
 
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_RETRY_BASE_SECONDS', '0')
     monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
 
     report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
 
     assert report.overall_status == 'amber'
     assert len(report.findings) == 1
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert any(
         'schema repair' in limitation
         for limitation in report.limitations
@@ -1299,10 +1332,95 @@ async def test_openrouter_raises_after_unparseable_results(monkeypatch):
             return FakeResponse()
 
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_RETRY_BASE_SECONDS', '0')
     monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
 
     with pytest.raises(ComplianceResponseError, match='No policy color was assigned'):
         await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+    assert len(calls) == 3
+
+
+@pytest.mark.anyio
+async def test_openrouter_retries_non_english_report_with_explicit_correction(monkeypatch):
+    calls=[]
+    chinese=strict_report_payload()
+    chinese['summary']='视频需要修改后发布。'
+    responses=[chinese, strict_report_payload()]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices':[{
+                    'message':{'content':json.dumps(responses.pop(0), ensure_ascii=False)},
+                }],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append(json)
+            return FakeResponse()
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_RETRY_BASE_SECONDS', '0')
+    monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
+
+    report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+
+    assert report.summary == 'No policy issues were identified.'
+    assert len(calls) == 2
+    assert 'every model-authored narrative field in English' in calls[1]['messages'][-1]['content']
+
+
+@pytest.mark.anyio
+async def test_openrouter_retries_transient_timeout_before_succeeding(monkeypatch):
+    calls=[]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices':[{
+                    'message':{'content':json.dumps(strict_report_payload())},
+                }],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append(json)
+            if len(calls) == 1:
+                raise TimeoutError
+            return FakeResponse()
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_RETRY_BASE_SECONDS', '0')
+    monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
+
+    report=await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+
+    assert report.overall_status == 'green'
     assert len(calls) == 2
 
 
@@ -1316,6 +1434,8 @@ async def test_openrouter_requires_api_key_instead_of_returning_placeholder(monk
 
 @pytest.mark.anyio
 async def test_openrouter_request_has_hard_wall_clock_deadline(monkeypatch):
+    calls=[]
+
     class FakeAsyncClient:
         def __init__(self, timeout):
             assert timeout == 120
@@ -1327,14 +1447,17 @@ async def test_openrouter_request_has_hard_wall_clock_deadline(monkeypatch):
             return None
 
         async def post(self, url, headers, json):
+            calls.append(json)
             await asyncio.Event().wait()
 
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_RETRY_BASE_SECONDS', '0')
     monkeypatch.setattr(review_llm.httpx, 'AsyncClient', FakeAsyncClient)
     monkeypatch.setattr(review_llm, '_request_deadline_seconds', lambda: 0.01)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(ComplianceResponseError, match='failed after 3 automatic attempts'):
         await review_llm.review_with_openrouter({'offer':{'offer_id':'acp'}})
+    assert len(calls) == 3
 
 
 def test_openrouter_report_maps_legacy_pass_to_green_without_findings():
@@ -2954,6 +3077,27 @@ def test_process_job_fails_without_publishing_invalid_policy_result(tmp_path, mo
     assert get_report('invalid-result') is None
 
 
+def test_process_job_records_nonempty_message_for_blank_upstream_error(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+
+    async def timed_out_review(evidence, model):
+        raise TimeoutError
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', timed_out_review)
+    asyncio.run(process_job(
+        'timed-out-result',
+        None,
+        'copy_only',
+        ReviewRequestMeta(ad_copy='Save today.'),
+    ))
+
+    status=get_status('timed-out-result')
+    assert status.status == JobStatus.failed
+    assert status.message.startswith('TimeoutError:')
+
+
 def test_queue_uses_bounded_parallel_workers(monkeypatch):
     monkeypatch.delenv('JOB_WORKER_CONCURRENCY', raising=False)
     assert review_queue._worker_count() == 4
@@ -3517,14 +3661,18 @@ async def test_queue_hard_timeout_fails_job_and_releases_worker(monkeypatch):
     queue=asyncio.Queue()
     status_calls=[]
     deleted=[]
+    process_calls=0
     monkeypatch.setattr(review_queue, '_queue', queue)
     monkeypatch.setattr(review_queue, '_active_jobs', set())
     monkeypatch.setattr(review_queue, '_job_timeout_seconds', lambda: 0.01)
+    monkeypatch.setenv('JOB_MAX_ATTEMPTS', '2')
 
     def fake_set_status(job_id, status, progress, message=''):
         status_calls.append((job_id, status, progress, message))
 
     async def blocked_process_job(*args):
+        nonlocal process_calls
+        process_calls += 1
         await asyncio.Event().wait()
 
     async def fake_delete(job_id):
@@ -3550,6 +3698,8 @@ async def test_queue_hard_timeout_fails_job_and_releases_worker(monkeypatch):
 
     assert status_calls[-1][:3] == ('timed-out', JobStatus.failed, 100)
     assert status_calls[-1][3].startswith('Queue processing timed out after ')
+    assert any('retrying automatically' in call[3] for call in status_calls)
+    assert process_calls == 2
     assert deleted == ['timed-out']
     assert not review_queue._active_jobs
 
@@ -4219,6 +4369,84 @@ def test_select_frame_records_samples_evenly():
     frames=[{'filename':f'frame_{index}.jpg','timestamp':index} for index in range(10)]
     selected=select_frame_records(frames, 4)
     assert [frame['filename'] for frame in selected] == ['frame_0.jpg', 'frame_3.jpg', 'frame_6.jpg', 'frame_9.jpg']
+
+
+@pytest.mark.anyio
+async def test_vision_retries_non_english_model_authored_text(tmp_path, monkeypatch):
+    frames_dir=tmp_path/'frames'
+    frames_dir.mkdir()
+    Image.new('RGB', (16, 16), 'white').save(frames_dir/'frame.jpg')
+    calls=[]
+    responses=[
+        {
+            'observations':[{
+                'filename':'frame.jpg',
+                'timestamp_start':'0',
+                'timestamp_end':None,
+                'scene':'一名男子在镜头前讲话。',
+                'people':['一名男子'],
+                'objects':[],
+                'logos':[],
+                'policy_relevant_visual_risks':[],
+                'confidence':'high',
+            }],
+            'limitations':[],
+        },
+        {
+            'observations':[{
+                'filename':'frame.jpg',
+                'timestamp_start':'0',
+                'timestamp_end':None,
+                'scene':'A man speaks directly to the camera.',
+                'people':['One man'],
+                'objects':[],
+                'logos':[],
+                'policy_relevant_visual_risks':[],
+                'confidence':'high',
+            }],
+            'limitations':[],
+        },
+    ]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                'choices':[{
+                    'message':{'content':json.dumps(responses.pop(0), ensure_ascii=False)},
+                }],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append(json)
+            return FakeResponse()
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_VISION_MAX_ATTEMPTS', '2')
+    monkeypatch.setattr(review_vision.httpx, 'AsyncClient', FakeAsyncClient)
+
+    result=await review_vision.observe_frames_with_openrouter(
+        frames_dir,
+        [{'filename':'frame.jpg','timestamp':0}],
+        [],
+    )
+
+    assert result['source'] == 'openrouter_vision'
+    assert result['observations'][0]['scene'] == 'A man speaks directly to the camera.'
+    assert len(calls) == 2
+    assert 'every model-authored description' in calls[1]['messages'][-1]['content']
 
 
 def test_live_scan_keys_preserve_exact_creative_names_and_keep_copy_variants_separate():
