@@ -2598,6 +2598,7 @@ function ReportPage() {
 function BatchPage() {
   const { batchId } = useParams({ from: '/batches/$batchId' });
   const navigate = useNavigate();
+  const [selectedOfferId, setSelectedOfferId] = useState('all');
   const query = useQuery({
     queryKey: ['batch', batchId],
     queryFn: () => getBatch(batchId),
@@ -2632,6 +2633,8 @@ function BatchPage() {
     offerCatalogQuery.data ?? [],
     query.data.items.map((item) => item.offer_outcomes)
   );
+  const selectedOffer = offerColumns.find((offer) => offer.offer_id === selectedOfferId) ?? null;
+  const visibleOfferColumns = selectedOffer ? [selectedOffer] : offerColumns;
   const pdfOffers = offerColumns.filter((offer) => query.data.items.some((item) =>
     findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
   ));
@@ -2670,7 +2673,12 @@ function BatchPage() {
         </CardAction>
       </CardHeader>
       <CardContent>
-        <BatchStatusDistribution items={query.data.items} />
+        <BatchStatusDistribution
+          items={query.data.items}
+          offers={offerColumns}
+          selectedOfferId={selectedOfferId}
+          onOfferChange={setSelectedOfferId}
+        />
         <div className="mb-4 grid gap-1">
           <h2 className="text-sm font-medium">Individual creative results</h2>
           <p className="text-xs text-muted-foreground">
@@ -2683,7 +2691,7 @@ function BatchPage() {
             <col className="w-28" />
             <col />
             <col className="w-36" />
-            <col className="w-80" />
+            <col className={selectedOffer ? 'w-48' : 'w-80'} />
             <col className="w-32" />
           </colgroup>
           <TableHeader>
@@ -2693,7 +2701,7 @@ function BatchPage() {
               <TableHead>Name</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-xs">
-                <OfferResultsHeader offers={offerColumns} />
+                <OfferResultsHeader offers={visibleOfferColumns} />
               </TableHead>
               <TableHead className="text-right">Report</TableHead>
             </TableRow>
@@ -2736,7 +2744,7 @@ function BatchPage() {
                   </TableCell>
                   <TableCell className="align-top"><StatusBadge status={item.status} /></TableCell>
                   <TableCell>
-                    <BatchOfferResultsRail item={item} offers={offerColumns} />
+                    <BatchOfferResultsRail item={item} offers={visibleOfferColumns} />
                   </TableCell>
                   <TableCell className="text-right">
                     {item.status === 'complete' && item.job_id ? (
