@@ -107,6 +107,7 @@ import {
   KissterraReviewDetailPage,
 } from '@/components/client-dashboard';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
+import { BatchStatusDistribution } from '@/components/batch-status-distribution';
 import {
   BatchHistoryOfferResultsRail,
   BatchOfferResultsRail,
@@ -2669,6 +2670,7 @@ function BatchPage() {
         </CardAction>
       </CardHeader>
       <CardContent>
+        <BatchStatusDistribution items={query.data.items} />
         <div className="mb-4 grid gap-1">
           <h2 className="text-sm font-medium">Individual creative results</h2>
           <p className="text-xs text-muted-foreground">
