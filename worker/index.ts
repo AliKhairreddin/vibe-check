@@ -233,6 +233,7 @@ export class ReviewBackend extends Container<Env> {
       }
       const state = await response.json() as { active?: number; pending?: number };
       if ((state.active ?? 0) > 0 || (state.pending ?? 0) > 0) {
+        this.renewActivityTimeout();
         console.log(JSON.stringify({
           event: "review_backend_kept_awake",
           active: state.active ?? 0,
@@ -245,6 +246,7 @@ export class ReviewBackend extends Container<Env> {
         event: "review_backend_idle_check_failed",
         errorType: error instanceof Error ? error.name : typeof error,
       }));
+      this.renewActivityTimeout();
       return;
     }
     await this.stop();
