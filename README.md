@@ -72,7 +72,7 @@ R2 is intentionally not required. Uploaded creatives, extracted audio, frames, O
 
 Heavy jobs may run ffmpeg, OCR, vision, transcription, and final analysis. The queue therefore uses a configurable semaphore rather than launching an unbounded task for every upload. Browser admission and backend processing are both parallelized without overwhelming a single container. Video transcription starts as soon as audio extraction completes and overlaps frame extraction, OCR, and vision analysis. Short audio is transcribed in one timestamped request; longer audio retains bounded chunking with concurrent requests.
 
-The Worker can consistently shard new review submissions across named container instances with `REVIEW_BACKEND_SHARDS`. Upload requests carry a per-review shard key so every chunk and completion request reaches the same container. The production default remains one shard until a controlled load test selects the target instance count. Convex remains the durable source of job, report, batch, artifact, and processing-timing state across shards.
+The Worker consistently shards new review submissions across named container instances with `REVIEW_BACKEND_SHARDS`. Upload requests carry a per-review shard key so every chunk and completion request reaches the same container. Production uses ten `standard-3` shards with five review workers each, providing a configured ceiling of 50 concurrently processing creatives; the browser admits up to ten uploads at once so large files do not create 50 simultaneous client uploads. Convex remains the durable source of job, report, batch, artifact, and processing-timing state across shards.
 
 ### Evidence and Cost Control
 

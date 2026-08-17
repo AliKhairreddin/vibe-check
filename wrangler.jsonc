@@ -13,7 +13,7 @@
     {
       "class_name": "ReviewBackend",
       "image": "./Dockerfile",
-      "instance_type": "standard-1",
+      "instance_type": "standard-3",
       "max_instances": 50,
       "rollout_active_grace_period": 300
     }
@@ -60,7 +60,7 @@
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
     "JOB_MAX_ATTEMPTS": "2",
     "JOB_PROCESSING_TIMEOUT_SECONDS": "1800",
-    "JOB_WORKER_CONCURRENCY": "4",
+    "JOB_WORKER_CONCURRENCY": "5",
     "MAX_UPLOAD_MB": "400",
     "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash",
     "OPENROUTER_MAX_ATTEMPTS": "3",
@@ -81,7 +81,7 @@
     "OPENROUTER_STT_CHUNK_CONCURRENCY": "3",
     "OPENROUTER_STT_MAX_CHUNKS": "30",
     "OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS": "90",
-    "REVIEW_BACKEND_SHARDS": "1"
+    "REVIEW_BACKEND_SHARDS": "10"
   },
   "observability": {
     "enabled": true,
