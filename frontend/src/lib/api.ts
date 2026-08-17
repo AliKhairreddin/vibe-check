@@ -389,6 +389,7 @@ type ChunkedUpload = {
 
 const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 const MAX_CHUNK_ATTEMPTS = 3;
+const BACKEND_SHARD_HEADER = 'x-vibe-backend-shard';
 const ADMIN_PASSWORD_KEY = 'vibe-check-admin-password';
 
 function clientPasswordKey(clientId: string) {
@@ -471,22 +472,43 @@ async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Pro
   return parseJson<T>(body);
 }
 
+function reviewShardKey(value?: FormData | CreateDriveReviewInput): string {
+  const batchItemId = value instanceof FormData
+    ? value.get('batch_item_id')
+    : value?.batch_item_id;
+  return typeof batchItemId === 'string' && batchItemId.trim()
+    ? batchItemId.trim()
+    : crypto.randomUUID();
+}
+
+function shardHeaders(shardKey: string, headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  result.set(BACKEND_SHARD_HEADER, shardKey);
+  return result;
+}
+
 export async function createReview(
   form: FormData,
   onUploadProgress?: (progress: number) => void
 ): Promise<Status> {
   const creative = form.get('creative');
+  const shardKey = reviewShardKey(form);
   if (onUploadProgress && creative instanceof File && creative.size > CHUNKED_UPLOAD_THRESHOLD) {
-    return createChunkedReview(form, creative, onUploadProgress);
+    return createChunkedReview(form, creative, onUploadProgress, shardKey);
   }
 
   if (!onUploadProgress) {
-    return requestJson<Status>('/api/reviews', { method: 'POST', body: form });
+    return requestJson<Status>('/api/reviews', {
+      method: 'POST',
+      headers: shardHeaders(shardKey),
+      body: form,
+    });
   }
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('POST', '/api/reviews');
+    request.setRequestHeader(BACKEND_SHARD_HEADER, shardKey);
 
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) {
@@ -538,9 +560,10 @@ export async function resolveDriveSelection(
 }
 
 export async function createDriveReview(input: CreateDriveReviewInput): Promise<Status> {
+  const shardKey = reviewShardKey(input);
   return requestJson<Status>('/api/drive/reviews', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: shardHeaders(shardKey, { 'content-type': 'application/json' }),
     body: JSON.stringify(input),
   });
 }
@@ -548,11 +571,12 @@ export async function createDriveReview(input: CreateDriveReviewInput): Promise<
 async function createChunkedReview(
   form: FormData,
   creative: File,
-  onUploadProgress: (progress: number) => void
+  onUploadProgress: (progress: number) => void,
+  shardKey: string
 ): Promise<Status> {
   const upload = await requestJson<ChunkedUpload>('/api/uploads', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: shardHeaders(shardKey, { 'content-type': 'application/json' }),
     body: JSON.stringify({
       file_name: creative.name,
       content_type: creative.type,
@@ -564,7 +588,12 @@ async function createChunkedReview(
   for (let index = 0; index < upload.chunk_count; index += 1) {
     const start = index * upload.chunk_size;
     const end = Math.min(start + upload.chunk_size, creative.size);
-    await sendChunkWithRetry(upload.upload_id, index, creative.slice(start, end));
+    await sendChunkWithRetry(
+      upload.upload_id,
+      index,
+      creative.slice(start, end),
+      shardKey
+    );
     onUploadProgress(Math.round((end / creative.size) * 100));
   }
 
@@ -575,6 +604,7 @@ async function createChunkedReview(
   try {
     return await requestJson<Status>(`/api/uploads/${upload.upload_id}/complete`, {
       method: 'POST',
+      headers: shardHeaders(shardKey),
       body: completionForm,
     });
   } catch (completionError) {
@@ -586,14 +616,19 @@ async function createChunkedReview(
   }
 }
 
-async function sendChunkWithRetry(uploadId: string, index: number, chunk: Blob) {
+async function sendChunkWithRetry(
+  uploadId: string,
+  index: number,
+  chunk: Blob,
+  shardKey: string
+) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt += 1) {
     let response: Response | undefined;
     try {
       response = await fetch(`/api/uploads/${uploadId}/chunks/${index}`, {
         method: 'PUT',
-        headers: { 'content-type': 'application/octet-stream' },
+        headers: shardHeaders(shardKey, { 'content-type': 'application/octet-stream' }),
         body: chunk,
       });
     } catch (error) {

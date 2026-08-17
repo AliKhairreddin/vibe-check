@@ -70,7 +70,9 @@ R2 is intentionally not required. Uploaded creatives, extracted audio, frames, O
 
 ### Bounded Concurrency
 
-Heavy jobs may run ffmpeg, OCR, vision, transcription, and final analysis. The queue therefore uses a configurable semaphore rather than launching an unbounded task for every upload. Browser admission and backend processing are both parallelized without overwhelming a single container.
+Heavy jobs may run ffmpeg, OCR, vision, transcription, and final analysis. The queue therefore uses a configurable semaphore rather than launching an unbounded task for every upload. Browser admission and backend processing are both parallelized without overwhelming a single container. Video transcription starts as soon as audio extraction completes and overlaps frame extraction, OCR, and vision analysis. Short audio is transcribed in one timestamped request; longer audio retains bounded chunking with concurrent requests.
+
+The Worker can consistently shard new review submissions across named container instances with `REVIEW_BACKEND_SHARDS`. Upload requests carry a per-review shard key so every chunk and completion request reaches the same container. The production default remains one shard until a controlled load test selects the target instance count. Convex remains the durable source of job, report, batch, artifact, and processing-timing state across shards.
 
 ### Evidence and Cost Control
 
@@ -140,13 +142,15 @@ The frontend creates one review job per selected creative. With no creative sele
 
 Use [`.env.example`](.env.example) as the source of truth. Important groups include:
 
-- `OPENROUTER_*` for final analysis, vision, and speech-to-text models;
+- `OPENROUTER_*` for final analysis, vision, speech-to-text, throughput-first provider routing, and per-request ZDR/data-collection enforcement on chat and vision calls;
 - `CONVEX_URL`, `CONVEX_DEPLOYMENT`, and `CONVEX_HTTP_SECRET` for durable state;
 - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` and `GOOGLE_DRIVE_FOLDER_ID` for folder-scoped import;
 - `TELEGRAM_*` for batch completion notifications;
 - `ADMIN_PASSWORD` for protected guideline, internal-rule, revision, and history-removal actions;
 - `KISSTERRA_CLIENT_PASSWORD` for the dedicated Kissterra approval portal;
-- `MAX_UPLOAD_MB` and `JOB_WORKER_CONCURRENCY` for resource limits.
+- `MAX_UPLOAD_MB`, `JOB_WORKER_CONCURRENCY`, and `REVIEW_BACKEND_SHARDS` for resource limits and container distribution.
+
+Each review writes its latest processing-attempt timing to one `reviewProcessingMetrics` document after it finishes. The document separates queue wait from per-stage time and supports overlapping stages, so p50/p90 measurements can distinguish Cloudflare CPU work, OpenRouter calls, Convex persistence, and report-artifact generation without adding a Convex mutation at every progress update. Keep OpenRouter's account-wide ZDR setting enabled as well: its transcription endpoint does not currently accept the same per-request provider-routing controls as chat and vision.
 
 Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository.
 The public offer catalog contains names and version counts only. Full official guidelines and current internal rules require an admin password, which the Settings page keeps in browser session storage after it verifies the password with the backend. Configure production with `pnpm exec wrangler secret put ADMIN_PASSWORD` before using Settings or removing history.

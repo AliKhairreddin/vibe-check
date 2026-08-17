@@ -8,6 +8,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from .language import first_han_script_field
+from .openrouter_routing import provider_preferences
 
 OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions'
 DEFAULT_VISION_MODEL = 'minimax/minimax-m3'
@@ -274,6 +275,7 @@ async def observe_frames_with_openrouter(frames_dir:Path, frame_records:list[dic
                 payload={
                     'model': model,
                     'messages': messages,
+                    'provider': provider_preferences(require_parameters=True),
                     'response_format': {'type':'json_object'},
                     'temperature': 0,
                 }

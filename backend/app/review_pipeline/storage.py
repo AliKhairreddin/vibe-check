@@ -35,6 +35,7 @@ CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
 OFFER_SETTINGS_FILE = 'offer_profiles.json'
 OFFER_REVISIONS_FILE = 'offer_profile_revisions.json'
 CLIENT_DECISIONS_FILE = 'client_review_decisions.json'
+PROCESSING_METRICS_FILE = 'processing_metrics.json'
 REPORT_PDF_LAYOUT_VERSION = 3
 MAX_OFFER_PROFILE_BYTES = 850_000
 MAX_REPORT_RESULT_BYTES = 800_000
@@ -305,6 +306,17 @@ def set_report(job_id:str, report:dict[str, Any], automation_run_id:str|None=Non
     if automation_run_id:
         args['automationRunId']=automation_run_id
     _convex_call('mutation', 'reviews:setReport', args)
+
+
+def save_processing_metrics(job_id:str, metrics:dict[str, Any])->None:
+    if metrics.get('jobId') != job_id:
+        raise ValueError('Processing metrics must match the review job ID.')
+    write_json(job_dir(job_id)/PROCESSING_METRICS_FILE, metrics)
+    _convex_call_with_retry(
+        'mutation',
+        'reviewProcessingMetrics:save',
+        metrics,
+    )
 
 def get_report(job_id:str)->dict[str, Any]|None:
     remote=_convex_call('query', 'reviews:getReport', {'jobId': job_id})

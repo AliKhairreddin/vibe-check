@@ -11,9 +11,39 @@ type OptionalSecrets = Env & {
 };
 
 const BACKEND_SLOTS = ["primary-blue", "primary-green", "primary-v25"] as const;
+const BACKEND_SHARD_HEADER = "x-vibe-backend-shard";
+const MAX_BACKEND_SHARDS = 50;
 
 function backendSlot(env: Env): string {
   return env.BACKEND_SLOT || "primary-v25";
+}
+
+function backendShardCount(env: Env): number {
+  const configured = Number.parseInt(env.REVIEW_BACKEND_SHARDS || "1", 10);
+  if (!Number.isFinite(configured)) return 1;
+  return Math.max(1, Math.min(configured, MAX_BACKEND_SHARDS));
+}
+
+function stableShardIndex(value: string, shardCount: number): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % shardCount;
+}
+
+function backendName(env: Env, shardKey = "default"): string {
+  const slot = backendSlot(env);
+  const shardCount = backendShardCount(env);
+  if (shardCount === 1) return slot;
+  return `${slot}-${stableShardIndex(shardKey, shardCount)}`;
+}
+
+function requestShardKey(request: Request): string {
+  const supplied = request.headers.get(BACKEND_SHARD_HEADER)?.trim();
+  if (supplied) return supplied.slice(0, 200);
+  return "default";
 }
 
 async function stopInactiveBackends(env: Env): Promise<void> {
@@ -132,7 +162,9 @@ export class ReviewBackend extends Container<Env> {
       KISSTERRA_CLIENT_PASSWORD: optionalSecrets.KISSTERRA_CLIENT_PASSWORD ?? "",
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB,
       OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
+      OPENROUTER_DATA_COLLECTION: env.OPENROUTER_DATA_COLLECTION,
       OPENROUTER_MODEL: env.OPENROUTER_MODEL,
+      OPENROUTER_PROVIDER_SORT: env.OPENROUTER_PROVIDER_SORT,
       OPENROUTER_REQUEST_TIMEOUT_SECONDS: env.OPENROUTER_REQUEST_TIMEOUT_SECONDS,
       OPENROUTER_VISION_ENABLED: env.OPENROUTER_VISION_ENABLED,
       OPENROUTER_VISION_MODEL: env.OPENROUTER_VISION_MODEL,
@@ -142,7 +174,11 @@ export class ReviewBackend extends Container<Env> {
       OPENROUTER_STT_MODEL: env.OPENROUTER_STT_MODEL,
       OPENROUTER_STT_LANGUAGE: env.OPENROUTER_STT_LANGUAGE,
       OPENROUTER_STT_CHUNK_SECONDS: env.OPENROUTER_STT_CHUNK_SECONDS,
+      OPENROUTER_STT_CHUNK_CONCURRENCY: env.OPENROUTER_STT_CHUNK_CONCURRENCY,
       OPENROUTER_STT_MAX_CHUNKS: env.OPENROUTER_STT_MAX_CHUNKS,
+      OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS: env.OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS,
+      OPENROUTER_ZDR: env.OPENROUTER_ZDR,
+      REVIEW_BACKEND_SHARDS: env.REVIEW_BACKEND_SHARDS,
       TELEGRAM_BOT_TOKEN: optionalSecrets.TELEGRAM_BOT_TOKEN ?? "",
       TELEGRAM_CHAT_ID: optionalSecrets.TELEGRAM_CHAT_ID ?? "",
       TELEGRAM_MESSAGE_THREAD_ID: optionalSecrets.TELEGRAM_MESSAGE_THREAD_ID ?? "",
@@ -220,7 +256,9 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      const backend = env.REVIEW_BACKEND.getByName(backendSlot(env));
+      const backend = env.REVIEW_BACKEND.getByName(
+        backendName(env, requestShardKey(request)),
+      );
       return backend.fetch(request);
     }
 
@@ -242,7 +280,7 @@ export default {
     });
     ctx.waitUntil((async () => {
       await stopInactiveBackends(env);
-      const backend = env.REVIEW_BACKEND.getByName(backendSlot(env));
+      const backend = env.REVIEW_BACKEND.getByName(backendName(env));
       const recoveryResponse = await backend.fetch(new Request(
         new URL("/api/internal/review-recovery", baseUrl),
         { method: "POST", headers },

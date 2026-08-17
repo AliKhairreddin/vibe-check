@@ -2,6 +2,7 @@ import json
 import asyncio
 import logging
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1263,7 +1264,12 @@ async def test_openrouter_uses_strict_schema_and_normalizes_semantic_mismatch_wi
     assert initial['response_format']['type'] == 'json_schema'
     assert initial['response_format']['json_schema']['strict'] is True
     assert initial['response_format']['json_schema']['schema']['additionalProperties'] is False
-    assert initial['provider'] == {'require_parameters':True}
+    assert initial['provider'] == {
+        'data_collection':'deny',
+        'require_parameters':True,
+        'sort':'throughput',
+        'zdr':True,
+    }
     assert initial['plugins'] == [{'id':'response-healing'}]
     assert len(initial['messages']) == 2
 
@@ -3080,6 +3086,16 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     assert report['overall_status'] == 'green'
     assert report['internal_disposition'] == 'clear'
     assert 'No creative was submitted' in report['limitations'][-1]
+    metrics=review_storage.read_json(tmp_path/'j1'/'processing_metrics.json')
+    assert metrics['completed'] is True
+    assert metrics['mediaKind'] == 'copy_only'
+    assert metrics['totalMs'] >= 0
+    assert {stage['name'] for stage in metrics['stages']} >= {
+        'prepare_copy_only_evidence',
+        'offer_reviews',
+        'persist_report',
+        'build_pdf_reports',
+    }
 
 
 def test_process_job_fails_without_publishing_invalid_policy_result(tmp_path, monkeypatch):
@@ -3097,6 +3113,11 @@ def test_process_job_fails_without_publishing_invalid_policy_result(tmp_path, mo
     assert status.status == JobStatus.failed
     assert not status.report_ready
     assert get_report('invalid-result') is None
+    metrics=review_storage.read_json(
+        tmp_path/'invalid-result'/'processing_metrics.json'
+    )
+    assert metrics['completed'] is False
+    assert metrics['errorType'] == 'ComplianceResponseError'
 
 
 def test_process_job_records_nonempty_message_for_blank_upstream_error(tmp_path, monkeypatch):
@@ -3118,6 +3139,69 @@ def test_process_job_records_nonempty_message_for_blank_upstream_error(tmp_path,
     status=get_status('timed-out-result')
     assert status.status == JobStatus.failed
     assert status.message.startswith('TimeoutError:')
+
+
+def test_video_transcription_overlaps_visual_preparation(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    media_path=tmp_path/'overlap.mp4'
+    media_path.write_bytes(b'video')
+    set_status('overlap', JobStatus.queued, 0, 'Queued', media_path.name)
+    transcription_started=threading.Event()
+    frames_finished=threading.Event()
+
+    def fake_extract_audio(source, target):
+        target.write_bytes(b'audio')
+        return True
+
+    def fake_transcribe(path, manual):
+        transcription_started.set()
+        assert frames_finished.wait(1)
+        return {'source':'openrouter', 'chunks':[]}
+
+    def fake_extract_frames(*args):
+        assert transcription_started.wait(1)
+        frames_finished.set()
+        return []
+
+    async def fake_vision(*args):
+        return {'source':'openrouter_vision', 'observations':[]}
+
+    async def green_review(evidence, model):
+        return ComplianceReport(
+            overall_status='green',
+            summary='No policy issues were identified.',
+            source_results={
+                'creative':{
+                    'status':'green',
+                    'summary':'No policy issues were identified in the creative.',
+                },
+                'ad_copy':None,
+            },
+            findings=[],
+        )
+
+    monkeypatch.setattr(review_jobs, 'metadata', lambda path: {'format':{}})
+    monkeypatch.setattr(review_jobs, 'extract_audio', fake_extract_audio)
+    monkeypatch.setattr(review_jobs, 'transcribe', fake_transcribe)
+    monkeypatch.setattr(review_jobs, 'extract_frames', fake_extract_frames)
+    monkeypatch.setattr(review_jobs, 'run_ocr', lambda *args: [])
+    monkeypatch.setattr(review_jobs, 'observe_frames_with_openrouter', fake_vision)
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', green_review)
+    monkeypatch.setattr(review_jobs, 'persist_review_evidence_frames', lambda *args: [])
+    monkeypatch.setattr(review_jobs, 'build_and_store_review_pdf_variants', lambda *args, **kwargs: [])
+    monkeypatch.setattr(review_jobs, 'send_review_message', lambda *args: True)
+
+    asyncio.run(process_job('overlap', media_path, 'video', ReviewRequestMeta()))
+
+    assert get_status('overlap').status == JobStatus.complete
+    metrics=review_storage.read_json(tmp_path/'overlap'/'processing_metrics.json')
+    stages={stage['name']:stage for stage in metrics['stages']}
+    assert stages['transcription']['startedOffsetMs'] <= (
+        stages['extract_frames']['startedOffsetMs']
+        + stages['extract_frames']['durationMs']
+    )
 
 
 def test_queue_uses_bounded_parallel_workers(monkeypatch):
@@ -4351,13 +4435,57 @@ def test_transcribe_uses_openrouter_stt(tmp_path, monkeypatch):
     assert calls['json']['input_audio']['format']=='wav'
     assert calls['json']['input_audio']['data']=='dGVzdCBhdWRpbw=='
     assert calls['json']['language']=='en'
+    assert calls['json']['response_format']=='verbose_json'
+    assert calls['json']['timestamp_granularities']==['segment']
+
+
+def test_transcribe_uses_one_timestamped_request_for_short_audio(tmp_path, monkeypatch):
+    audio=tmp_path/'audio.wav'
+    audio.write_bytes(b'test audio')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS', '90')
+    monkeypatch.setattr('app.review_pipeline.audio._audio_duration_seconds', lambda path: 12.0)
+    calls=[]
+
+    def fake_post(client, chunk_path, model, language):
+        calls.append(chunk_path)
+        return {
+            'text':'First sentence. Second sentence.',
+            'segments':[
+                {'start':0.0, 'end':4.25, 'text':'First sentence.'},
+                {'start':4.25, 'end':11.8, 'text':'Second sentence.'},
+            ],
+            'usage':{'seconds':12},
+        }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout=timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr('app.review_pipeline.audio._post_transcription', fake_post)
+    monkeypatch.setattr('app.review_pipeline.audio.httpx.Client', FakeClient)
+
+    transcript=transcribe(audio)
+
+    assert calls == [audio]
+    assert transcript['chunks'] == [
+        {'timestamp_start':0.0, 'timestamp_end':4.25, 'text':'First sentence.'},
+        {'timestamp_start':4.25, 'timestamp_end':11.8, 'text':'Second sentence.'},
+    ]
+    assert transcript['usage']['seconds'] == 12
 
 def test_transcribe_splits_audio_into_timestamped_chunks(tmp_path, monkeypatch):
     audio=tmp_path/'audio.wav'
     audio.write_bytes(b'test audio')
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
     monkeypatch.setenv('OPENROUTER_STT_CHUNK_SECONDS', '5')
+    monkeypatch.setenv('OPENROUTER_STT_CHUNK_CONCURRENCY', '3')
     monkeypatch.setenv('OPENROUTER_STT_MAX_CHUNKS', '10')
+    monkeypatch.setenv('OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS', '0')
     monkeypatch.setattr('app.review_pipeline.audio._audio_duration_seconds', lambda path: 12.0)
 
     extracted=[]
@@ -4468,6 +4596,12 @@ async def test_vision_retries_non_english_model_authored_text(tmp_path, monkeypa
     assert result['source'] == 'openrouter_vision'
     assert result['observations'][0]['scene'] == 'A man speaks directly to the camera.'
     assert len(calls) == 2
+    assert calls[0]['provider'] == {
+        'data_collection':'deny',
+        'require_parameters':True,
+        'sort':'throughput',
+        'zdr':True,
+    }
     assert 'every model-authored description' in calls[1]['messages'][-1]['content']
 
 

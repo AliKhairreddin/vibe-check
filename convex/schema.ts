@@ -25,6 +25,25 @@ export default defineSchema({
     jobId: v.string(),
     updatedAt: v.number(),
   }).index("by_job_id", ["jobId"]),
+  reviewProcessingMetrics: defineTable({
+    completed: v.boolean(),
+    createdAt: v.number(),
+    errorType: v.optional(v.string()),
+    finishedAt: v.number(),
+    jobId: v.string(),
+    mediaKind: v.string(),
+    queueWaitMs: v.optional(v.number()),
+    stages: v.array(v.object({
+      durationMs: v.number(),
+      name: v.string(),
+      startedOffsetMs: v.number(),
+    })),
+    startedAt: v.number(),
+    totalMs: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_job_id", ["jobId"])
+    .index("by_started_at", ["startedAt"]),
   clientReviewDecisions: defineTable({
     clientId: v.string(),
     createdAt: v.number(),

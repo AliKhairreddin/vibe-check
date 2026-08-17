@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from .language import first_han_script_field
 from .models import ComplianceReport, LLMComplianceResult
+from .openrouter_routing import provider_preferences
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 
 STATUS_ALIASES = {
@@ -755,7 +756,7 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                 'model':selected_model,
                 'messages':messages,
                 'response_format':REVIEW_RESPONSE_SCHEMA,
-                'provider':{'require_parameters':True},
+                'provider':provider_preferences(require_parameters=True),
                 'plugins':[{'id':'response-healing'}],
                 'temperature':0,
             }
