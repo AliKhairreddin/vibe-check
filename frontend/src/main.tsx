@@ -284,7 +284,7 @@ function AppShell() {
 
 function AppContent() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const isWideLayout = pathname.startsWith('/batches/');
+  const isWideLayout = pathname.startsWith('/batches/') || pathname === '/history';
 
   return (
     <div
@@ -1485,14 +1485,14 @@ function HistoryCard({
             </div>
           ) : filteredEntries.length ? (
             <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
-              <Table className="min-w-[48rem] table-fixed">
+              <Table className="min-w-[58rem] table-fixed">
                 <colgroup>
                   <col className="w-8" />
                   <col className="w-14" />
                   <col />
                   <col className="w-28" />
-                  <col className="w-24" />
-                  <col className="w-80" />
+                  <col className="w-44" />
+                  <col className="w-[clamp(20rem,24vw,28rem)]" />
                   <col className="w-28" />
                 </colgroup>
                 <TableHeader className="sticky top-0 z-10 bg-card">

@@ -196,7 +196,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-[96rem] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <Link to="/kissterra" className="flex items-center gap-3">
             <span className="grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground">
               <ShieldCheck className="size-4" />
@@ -212,7 +212,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
           </Button>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">{children}</main>
+      <main className="mx-auto w-full max-w-[96rem] p-4 sm:p-6 lg:p-8">{children}</main>
     </div>
   );
 }
@@ -311,7 +311,7 @@ function KissterraDashboard() {
             </div>
           ) : groups.length ? (
             <div className="overflow-x-auto rounded-lg border">
-              <Table className="min-w-[76rem]">
+              <Table className="min-w-[68rem] 2xl:min-w-[76rem]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-16">Creative</TableHead>

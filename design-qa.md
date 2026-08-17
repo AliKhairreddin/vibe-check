@@ -1,47 +1,55 @@
-# History redesign QA
+# Responsive table width QA
 
 ## Visual truth
 
-- Source screen: `output/ui-audit/09-live-tight-history.png`
-- Source delete-overflow state: `output/ui-audit/10-source-history-delete-overflow.png`
-- Implementation screen: `output/ui-audit/12-history-segmented-final.png`
-- Implementation delete-modal state: `output/ui-audit/13-history-single-delete-modal.png`
-- Full comparison: `output/ui-audit/14-history-full-comparison.png`
-- Focused delete comparison: `output/ui-audit/15-history-delete-comparison.png`
-- Viewport: 1312 × 768 native Dia window
-- State: desktop, light mode, 50 loaded reviews, local frontend using production-shaped review data
+- Kissterra source: `output/ui-audit/19-kissterra-table-before.png` (live production capture)
+- History source: `output/ui-audit/20-history-width-before.png` (live production capture)
+- Kissterra implementation: `output/ui-audit/21-kissterra-table-after-wide.png`
+- History implementation: `output/ui-audit/22-history-width-after-wide.png`
+- Laptop implementations: `output/ui-audit/23-kissterra-table-after-laptop.png` and `output/ui-audit/24-history-width-after-laptop.png`
+- Full comparison: `output/ui-audit/25-table-width-full-comparison.png`
+- Focused comparisons: `output/ui-audit/26-history-table-focused-comparison.png` and `output/ui-audit/27-kissterra-table-focused-comparison.png`
+- Wide CSS viewport: 1724 x 893, device scale factor 1
+- Laptop CSS viewports: 1279 x 800 for Kissterra and 1280 x 800 for History, device scale factor 1
+- State: desktop, light mode; Kissterra batch collapsed for visual comparison and expanded separately for overflow validation; History populated with one grouped batch row
 
-## Comparison
+The Kissterra source capture was 1709 x 885 pixels because the production browser reserved scrollbar chrome while reporting a 1724 x 893 CSS viewport. It was normalized to 1724 x 893 only inside the comparison montage. The implementation capture was 1724 x 893 pixels. History source and implementation captures were both 1724 x 893 pixels. Laptop captures used their native CSS viewport sizes without density normalization.
 
-The revised table keeps the source typography, navigation, density, status treatment, and row rhythm. Four offer columns are consolidated into one aligned “Offer results” rail. Each offer retains an equal-width segment, label, result color, hover title, and accessible text alternative. Gray segments explicitly represent N/A, so a missing offer result is no longer visually ambiguous.
+The local implementation used production-shaped fixture data for the password-protected Kissterra list and read-only production API data for History. Counts and filenames therefore differ from the source captures, but route, interaction state, component structure, typography, and layout are equivalent.
 
-The search/filter row now fits in one compact line. Search, offer, result, and review-type filters were checked, including the empty-filter state and reset behavior. Select-one and select-all-visible states were checked, including the selected-row treatment and bulk action bar.
+## Findings and comparison history
 
-The previous inline delete confirmation extended beyond the table frame. Single and bulk deletion now use a centered modal with an in-frame destructive action, explicit source-retention copy, Cancel focus, and Escape dismissal. No destructive confirmation was activated during QA.
+1. **P2 — Kissterra table always overflowed its card.**
+   - Earlier evidence: the table was fixed at 1216 px while its wrapper was 1182 px, creating a 34 px horizontal scrollbar even on a wide display.
+   - Fix: widened the centered client shell to 1536 px and reduced the table minimum to 1088 px below the 2xl breakpoint while retaining the 1216 px desktop minimum.
+   - Post-fix evidence: at 1724 px the table and wrapper are both 1438 px. At 1279 px they are both 1181 px. The expanded decision row also remains 1181 px with no overflow.
+
+2. **P1 — History status overlapped Offer results.**
+   - Earlier evidence: the status track was 96 px, but the “Complete With Failures” badge measured 148.5 px and visibly crossed into the adjacent rail.
+   - Fix: History now uses the full content canvas, the status track is 176 px, the table minimum is 928 px, and the offer rail scales from 320 px to 448 px with viewport space.
+   - Post-fix evidence: at 1724 px the 148.5 px badge ends 19.5 px before the status boundary; the table and wrapper are both 1380 px. At 1280 px the table and wrapper are both 936 px, status ends exactly where Offer results begins, and actions remain in their own 112 px track.
+
+No actionable P0, P1, or P2 findings remain.
 
 ## Fidelity surfaces
 
-- Typography: existing Geist stack and weight hierarchy preserved.
-- Spacing: page header, filter row, table header, and row density remain compact and aligned.
-- Color: green/yellow/red action semantics use solid rail segments; N/A uses neutral gray.
-- Components: existing report action and trash icon remain consistent with the application.
-- Assets: no new imagery or external assets were required.
-- Responsive behavior: the table preserves a bounded minimum width and horizontal overflow instead of clipping actions.
+- **Fonts and typography:** existing Geist family, weights, sizes, line heights, truncation, and hierarchy are unchanged. Laptop Upload text truncates within its own flexible track instead of colliding with neighbors.
+- **Spacing and layout rhythm:** existing card padding, gutters, row height, radii, and vertical rhythm are preserved. Only the available shell width and table tracks changed.
+- **Colors and visual tokens:** existing background, border, badge, rail, and semantic result tokens are unchanged.
+- **Image quality and assets:** no imagery, icons, or generated assets were added or replaced. Existing creative thumbnails retain their native treatment.
+- **Copy and content:** headings, labels, descriptions, table copy, and actions are unchanged.
 
-## Interaction checks
+## Interaction and responsive checks
 
-- Search and all three filters update the result count.
-- Reset restores the complete loaded set.
-- Row selection, select-all-visible, and Clear work.
-- Single and bulk delete dialogs render inside the viewport.
-- Cancel and Escape close delete dialogs without mutation.
-- Offer rail semantics expose each offer name and result to assistive technology.
-- Production build and repository verification pass.
+- Kissterra expand/collapse works at the laptop viewport.
+- The expanded Kissterra row has no horizontal overflow; the decision and reviewed cells remain separate.
+- History search enters the no-match state and Reset restores the populated table.
+- Wide and 13-inch laptop layouts preserve all persistent controls and table actions.
+- Browser console checked after interactions: no warnings or errors.
+- Production frontend build passes.
 
-## Comparison history
+## Follow-up polish
 
-1. P1: inline delete confirmation clipped at the right edge → replaced with a centered modal.
-2. P2: four pill columns consumed width and repeated labels → replaced with one segmented rail.
-3. P2: selection and filtering were absent → added compact filters and visible-row bulk selection.
+- No P3 items required for this scoped layout fix.
 
 final result: passed
