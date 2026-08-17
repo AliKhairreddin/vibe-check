@@ -750,11 +750,26 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=100)->list[dict[s
             continue
         decision=decisions.get(f'{client_id}:{offer_id}:{review.job_id}')
         batch_source_label=None
+        batch_created_at=review.created_at or 0
         if review.batch_id:
             try:
-                batch_source_label=get_batch(review.batch_id).source_label
+                batch=get_batch(review.batch_id)
+                batch_source_label=batch.source_label
+                batch_created_at=batch.created_at
             except FileNotFoundError:
                 pass
+        report=_report_offer_result(get_report(review.job_id), offer_id)
+        issue_summary=None
+        if outcome.overall_status != 'green' and report:
+            issue_summary=str(report.get('summary') or '').strip()
+            if not issue_summary:
+                findings=report.get('findings') if isinstance(report.get('findings'), list) else []
+                first_finding=findings[0] if findings and isinstance(findings[0], dict) else {}
+                issue_summary=str(first_finding.get('evidence') or '').strip()
+            if len(issue_summary) > 300:
+                issue_summary=f'{issue_summary[:297].rstrip()}...'
+        if outcome.overall_status != 'green' and not issue_summary:
+            issue_summary='Needs review' if outcome.overall_status == 'amber' else 'Critical issue'
         suffix=Path(review.file_name).suffix.lower()
         media_kind=(
             'copy_only' if not review.has_creative
@@ -763,11 +778,13 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=100)->list[dict[s
         )
         reviews.append({
             'aiStatus':outcome.overall_status,
+            'batchCreatedAt':batch_created_at,
             'batchId':review.batch_id,
             'batchSourceLabel':batch_source_label,
             'createdAt':review.created_at or 0,
             'decision':decision,
             'fileName':review.file_name,
+            'issueSummary':issue_summary,
             'jobId':review.job_id,
             'mediaKind':media_kind,
         })

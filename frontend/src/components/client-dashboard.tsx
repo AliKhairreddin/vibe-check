@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import {
   AlertCircle,
   Check,
@@ -8,6 +8,8 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  Download,
+  ExternalLink,
   FileText,
   KeyRound,
   Layers3,
@@ -45,6 +47,7 @@ import {
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import {
   decideClientReview,
+  fetchClientReviewPdf,
   getClientPassword,
   getClientReview,
   listClientReviews,
@@ -65,7 +68,7 @@ const CLIENT_ID = 'kissterra';
 type ReviewGroup = {
   createdAt: number;
   id: string;
-  label: string;
+  kind: 'batch' | 'individual';
   reviews: ClientReviewItem[];
 };
 
@@ -216,6 +219,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
 
 function KissterraDashboard() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const query = useQuery({
     queryKey: ['client', CLIENT_ID, 'reviews'],
@@ -307,15 +311,16 @@ function KissterraDashboard() {
             </div>
           ) : groups.length ? (
             <div className="overflow-x-auto rounded-lg border">
-              <Table className="min-w-[58rem]">
+              <Table className="min-w-[76rem]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-16">Creative</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead className="w-36">Vibe Check</TableHead>
-                    <TableHead className="w-72">Kissterra decision</TableHead>
+                    <TableHead className="w-80">Quick note</TableHead>
+                    <TableHead className="w-64">Kissterra decision</TableHead>
                     <TableHead className="w-32">Reviewed</TableHead>
-                    <TableHead className="w-24 text-right">Details</TableHead>
+                    <TableHead className="w-10"><span className="sr-only">Open</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -324,7 +329,7 @@ function KissterraDashboard() {
                     const decided = group.reviews.filter((review) => review.decision).length;
                     return [
                       <TableRow key={group.id} className="bg-muted/35 hover:bg-muted/50">
-                        <TableCell colSpan={6} className="py-2">
+                        <TableCell colSpan={7} className="py-2">
                           <button
                             type="button"
                             className="flex w-full items-center gap-3 text-left"
@@ -335,9 +340,9 @@ function KissterraDashboard() {
                               {isExpanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                             </span>
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-semibold">{group.label}</span>
+                              <span className="block truncate text-sm font-semibold">{formatDateTime(group.createdAt)}</span>
                               <span className="block text-xs text-muted-foreground">
-                                {formatDate(group.createdAt)} · {group.reviews.length} creative{group.reviews.length === 1 ? '' : 's'}
+                                {group.kind === 'batch' ? 'Batch uploaded' : 'Individual reviews'} · {group.reviews.length} creative{group.reviews.length === 1 ? '' : 's'}
                               </span>
                             </span>
                             <Badge variant={decided === group.reviews.length ? 'secondary' : 'outline'}>
@@ -347,7 +352,28 @@ function KissterraDashboard() {
                         </TableCell>
                       </TableRow>,
                       ...(isExpanded ? group.reviews.map((review) => (
-                        <TableRow key={review.job_id}>
+                        <TableRow
+                          key={review.job_id}
+                          role="link"
+                          tabIndex={0}
+                          aria-label={`Open ${review.file_name}`}
+                          className="cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-[-2px]"
+                          onClick={(event) => {
+                            if (event.target instanceof Element && event.target.closest('button, a')) return;
+                            void navigate({
+                              to: '/kissterra/reviews/$jobId',
+                              params: { jobId: review.job_id },
+                            });
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                            event.preventDefault();
+                            void navigate({
+                              to: '/kissterra/reviews/$jobId',
+                              params: { jobId: review.job_id },
+                            });
+                          }}
+                        >
                           <TableCell>
                             <CreativeThumbnail
                               alt={`Preview of ${review.file_name}`}
@@ -363,6 +389,17 @@ function KissterraDashboard() {
                           </TableCell>
                           <TableCell><AiRecommendation status={review.ai_status} /></TableCell>
                           <TableCell>
+                            <span
+                              className={cn(
+                                'block max-w-80 truncate text-xs',
+                                review.issue_summary ? 'text-foreground' : 'text-muted-foreground'
+                              )}
+                              title={review.issue_summary ?? 'No issues found'}
+                            >
+                              {review.issue_summary ?? 'No issues found'}
+                            </span>
+                          </TableCell>
+                          <TableCell>
                             <DecisionControl
                               review={review}
                               isSaving={decisionMutation.isPending && decisionMutation.variables?.jobId === review.job_id}
@@ -372,14 +409,8 @@ function KissterraDashboard() {
                           <TableCell className="text-xs text-muted-foreground">
                             {formatDateTime(review.created_at)}
                           </TableCell>
-                          <TableCell className="text-right">
-                            <Link
-                              to="/kissterra/reviews/$jobId"
-                              params={{ jobId: review.job_id }}
-                              className={buttonVariants({ variant: 'outline', size: 'xs' })}
-                            >
-                              View
-                            </Link>
+                          <TableCell className="text-right text-muted-foreground">
+                            <ChevronRight className="ml-auto size-4" aria-hidden="true" />
                           </TableCell>
                         </TableRow>
                       )) : []),
@@ -447,7 +478,13 @@ function KissterraReviewDetail() {
     );
   }
 
-  const { report, review, evidence_frames: evidenceFrames } = query.data;
+  const {
+    evidence_frames: evidenceFrames,
+    google_drive_url: googleDriveUrl,
+    report,
+    report_pdf_url: reportPdfUrl,
+    review,
+  } = query.data;
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -480,6 +517,22 @@ function KissterraReviewDetail() {
               <StatusBadge status={review.ai_status} />
               <Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>
               {isClientOverride(review) ? <Badge variant="secondary">Kissterra override</Badge> : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <ClientPdfDownloadButton jobId={jobId} reportUrl={reportPdfUrl} />
+              {googleDriveUrl ? (
+                <a
+                  className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                  href={googleDriveUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink />
+                  Open in Google Drive
+                </a>
+              ) : (
+                <span className="text-xs text-muted-foreground">Google Drive link unavailable for this upload.</span>
+              )}
             </div>
           </div>
         </CardContent>
@@ -611,6 +664,43 @@ function DecisionControl({
   );
 }
 
+function ClientPdfDownloadButton({ jobId, reportUrl }: { jobId: string; reportUrl: string }) {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function download() {
+    if (isDownloading) return;
+    setIsDownloading(true);
+    setError('');
+    try {
+      const { blob, filename } = await fetchClientReviewPdf(CLIENT_ID, jobId, reportUrl);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-1">
+      <Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>
+        {isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}
+        {isDownloading ? 'Preparing PDF' : 'Download Kissterra PDF'}
+      </Button>
+      {error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}
+    </div>
+  );
+}
+
 function MetricCard({ icon: Icon, label, value }: { icon: typeof FileText; label: string; value: number }) {
   return (
     <Card size="sm">
@@ -628,9 +718,14 @@ function MetricCard({ icon: Icon, label, value }: { icon: typeof FileText; label
 }
 
 function AiRecommendation({ status }: { status: OverallStatus }) {
-  const approved = status === 'green';
+  const approved = status !== 'red';
   return (
-    <Badge variant={approved ? 'secondary' : 'destructive'}>
+    <Badge
+      className={cn(
+        status === 'amber' && 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:text-orange-300'
+      )}
+      variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}
+    >
       {approved ? <CheckCircle2 /> : <XCircle />}
       {approved ? 'Approve' : 'Disapprove'}
     </Badge>
@@ -662,14 +757,17 @@ function groupReviews(reviews: ClientReviewItem[]): ReviewGroup[] {
     const dateKey = new Date(review.created_at).toISOString().slice(0, 10);
     const id = review.batch_id ? `batch:${review.batch_id}` : `individual:${dateKey}`;
     const existing = groups.get(id);
-    const label = review.batch_id
-      ? review.batch_source_label || `Batch ${review.batch_id.slice(0, 8)}`
-      : 'Individual reviews';
+    const createdAt = review.batch_id ? review.batch_created_at : review.created_at;
     if (existing) {
       existing.reviews.push(review);
-      existing.createdAt = Math.max(existing.createdAt, review.created_at);
+      if (!review.batch_id) existing.createdAt = Math.max(existing.createdAt, createdAt);
     } else {
-      groups.set(id, { createdAt: review.created_at, id, label, reviews: [review] });
+      groups.set(id, {
+        createdAt,
+        id,
+        kind: review.batch_id ? 'batch' : 'individual',
+        reviews: [review],
+      });
     }
   }
   return [...groups.values()]
@@ -696,7 +794,7 @@ function nearestEvidenceFrame(
 
 function isClientOverride(review: ClientReviewItem) {
   if (!review.decision) return false;
-  const aiDecision: ClientDecisionValue = review.ai_status === 'green' ? 'approved' : 'disapproved';
+  const aiDecision: ClientDecisionValue = review.ai_status === 'red' ? 'disapproved' : 'approved';
   return review.decision.decision !== aiDecision;
 }
 
@@ -751,10 +849,6 @@ function parseTimestampSeconds(value: string | null | undefined) {
   }
   const parsed = Number.parseFloat(value);
   return Number.isNaN(parsed) ? null : parsed;
-}
-
-function formatDate(value: number) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
 }
 
 function formatDateTime(value: number) {

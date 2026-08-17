@@ -199,11 +199,13 @@ export type ClientReviewDecision = {
 
 export type ClientReviewItem = {
   ai_status: OverallStatus;
+  batch_created_at: number;
   batch_id: string | null;
   batch_source_label: string | null;
   created_at: number;
   decision: ClientReviewDecision | null;
   file_name: string;
+  issue_summary: string | null;
   job_id: string;
   media_kind: 'video' | 'image' | 'copy_only';
 };
@@ -220,6 +222,8 @@ export type ClientReviewDetail = {
   review: ClientReviewItem;
   report: OfferResult;
   evidence_frames: ReviewEvidenceFrame[];
+  google_drive_url: string | null;
+  report_pdf_url: string;
 };
 
 export type ReviewHistoryItem = Status & {
@@ -848,4 +852,31 @@ export async function fetchClientReviewImage(
     throw new Error(apiErrorMessage(body, response.status));
   }
   return response.blob();
+}
+
+export async function fetchClientReviewPdf(
+  clientId: string,
+  jobId: string,
+  reportUrl: string
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(reportUrl, { headers: clientHeaders(clientId) });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(apiErrorMessage(body, response.status));
+  }
+  const blob = await response.blob();
+  const signature = await blob.slice(0, 5).text();
+  if (signature !== '%PDF-') throw new Error('The server returned a non-PDF response.');
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const encodedName = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1];
+  const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+  let filename = `${jobId}-Kissterra-report.pdf`;
+  try {
+    filename = encodedName ? decodeURIComponent(encodedName) : (quotedName || filename);
+  } catch {
+    filename = quotedName || filename;
+  }
+  filename = filename.split(/[\\/]/).pop() || `${jobId}-Kissterra-report.pdf`;
+  if (!filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
+  return { blob: new Blob([blob], { type: 'application/pdf' }), filename };
 }

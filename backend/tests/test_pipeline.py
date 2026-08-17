@@ -20,7 +20,7 @@ from app.review_pipeline import queue as review_queue
 from app.review_pipeline import recovery as review_recovery
 from app.review_pipeline import storage as review_storage
 from app.review_pipeline import telegram as review_telegram
-from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewBatch, ReviewBatchItem, ReviewRequestMeta
+from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewBatch, ReviewBatchItem, ReviewRequestMeta, ReviewSource
 from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
 from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
@@ -2718,6 +2718,22 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     monkeypatch.delenv('APP_PASSWORD', raising=False)
     monkeypatch.setenv('KISSTERRA_CLIENT_PASSWORD', 'client-secret')
     job_id='6' * 32
+    batch_id='8' * 32
+    batch_item_id='9' * 32
+    batch=create_batch(
+        batch_id,
+        [CreateBatchItem(
+            item_id=batch_item_id,
+            file_name='Kissterra creative.mp4',
+            media_kind='video',
+        )],
+        [OfferOutcome(
+            offer_id='kissterra',
+            offer_name='Kissterra',
+            evaluation_state='evaluated',
+        )],
+        source_label='1 selected file',
+    )
     set_status(
         job_id,
         JobStatus.queued,
@@ -2726,7 +2742,18 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
         'Kissterra creative.mp4',
         offer_ids=['acp','kissterra'],
         primary_offer_id='acp',
+        batch_id=batch_id,
+        batch_item_id=batch_item_id,
     )
+    review_storage.set_review_source(job_id, ReviewSource(
+        kind='google_drive_file',
+        status='linked',
+        url='https://drive.google.com/file/d/kissterra-creative/view',
+        file_id='kissterra-creative',
+        label='Open in Google Drive',
+        message='Linked to the source creative in Google Drive.',
+        checked_at=1_786_579_200_000,
+    ))
     set_report(job_id, {
         'schema_version':2,
         'primary_offer_id':'acp',
@@ -2774,6 +2801,8 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
         unauthorized=await client.get('/api/client/kissterra/reviews')
         reviews=await client.get('/api/client/kissterra/reviews', headers=headers)
         detail=await client.get(f'/api/client/kissterra/reviews/{job_id}', headers=headers)
+        unauthorized_pdf=await client.get(f'/api/client/kissterra/reviews/{job_id}/report.pdf')
+        pdf=await client.get(f'/api/client/kissterra/reviews/{job_id}/report.pdf', headers=headers)
         missing=await client.get(f'/api/client/kissterra/reviews/{"7" * 32}', headers=headers)
         decision=await client.put(
             f'/api/client/kissterra/reviews/{job_id}/decision',
@@ -2785,8 +2814,15 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert unauthorized.status_code == 401
     assert reviews.status_code == 200
     assert reviews.json()['reviews'][0]['ai_status'] == 'amber'
+    assert reviews.json()['reviews'][0]['batch_created_at'] == batch.created_at
+    assert reviews.json()['reviews'][0]['issue_summary'] == 'A Kissterra issue needs review.'
     assert detail.status_code == 200
+    assert detail.json()['google_drive_url'] == 'https://drive.google.com/file/d/kissterra-creative/view'
+    assert detail.json()['report_pdf_url'].endswith(f'/{job_id}/report.pdf')
     assert missing.status_code == 404
+    assert unauthorized_pdf.status_code == 401
+    assert pdf.status_code == 200
+    assert pdf.content.startswith(b'%PDF-')
     assert detail.json()['report']['offer_id'] == 'kissterra'
     assert 'ACP-only result' not in detail.text
     assert decision.status_code == 200

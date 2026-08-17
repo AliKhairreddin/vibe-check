@@ -23,11 +23,13 @@ const decisionValidator = v.object({
 });
 const reviewValidator = v.object({
   aiStatus: v.union(v.literal("green"), v.literal("amber"), v.literal("red")),
+  batchCreatedAt: v.number(),
   batchId: v.union(v.string(), v.null()),
   batchSourceLabel: v.union(v.string(), v.null()),
   createdAt: v.number(),
   decision: v.union(decisionValidator, v.null()),
   fileName: v.string(),
+  issueSummary: v.union(v.string(), v.null()),
   jobId: v.string(),
   mediaKind: v.union(v.literal("video"), v.literal("image"), v.literal("copy_only")),
 });
@@ -41,6 +43,37 @@ function mediaKind(fileName: string, hasCreative: boolean | undefined) {
     || normalized.endsWith(".png")
     || normalized.endsWith(".webp")
   ) ? "image" as const : "video" as const;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function offerReport(value: unknown, offerId: string): Record<string, unknown> | null {
+  const report = objectValue(value);
+  if (!report) return null;
+  const offerResults = Array.isArray(report.offer_results) ? report.offer_results : [];
+  const matching = offerResults
+    .map(objectValue)
+    .find((candidate) => candidate?.offer_id === offerId);
+  if (matching) return matching;
+  if (report.offer_id === offerId) return report;
+  const primaryOfferId = report.primary_offer_id ?? report.offer_id ?? "acp";
+  return primaryOfferId === offerId ? report : null;
+}
+
+function issueSummary(value: unknown, status: ResultStatus): string | null {
+  if (status === "green") return null;
+  const report = objectValue(value);
+  const summary = typeof report?.summary === "string" ? report.summary.trim() : "";
+  const findings = Array.isArray(report?.findings) ? report.findings : [];
+  const firstFinding = objectValue(findings[0]);
+  const evidence = typeof firstFinding?.evidence === "string" ? firstFinding.evidence.trim() : "";
+  const text = summary || evidence;
+  if (!text) return status === "amber" ? "Needs review" : "Critical issue";
+  return text.length > 300 ? `${text.slice(0, 297).trimEnd()}...` : text;
 }
 
 export const list = query({
@@ -93,17 +126,28 @@ export const list = query({
         )
         .unique()
     ));
+    const storedReports = await Promise.all(stats.map((stat) =>
+      ctx.db
+        .query("reviewOfferReports")
+        .withIndex("by_job_id_offer_id", (q) =>
+          q.eq("jobId", stat.jobId).eq("offerId", args.offerId)
+        )
+        .unique()
+    ));
 
     return stats.flatMap((stat, index) => {
       const review = reviews[index];
       const aiStatus = normalizeResultStatus(stat.resultStatus);
       if (!review || review.deletedAt !== undefined || !aiStatus) return [];
       const decision = decisions[index];
+      const batch = review.batchId ? batchById.get(review.batchId) : null;
+      const report = offerReport(storedReports[index]?.report ?? review.report, args.offerId);
       return [{
         aiStatus,
+        batchCreatedAt: batch?.createdAt ?? review.createdAt,
         batchId: review.batchId ?? null,
         batchSourceLabel: review.batchId
-          ? batchById.get(review.batchId)?.sourceLabel ?? null
+          ? batch?.sourceLabel ?? null
           : null,
         createdAt: review.createdAt,
         decision: decision ? {
@@ -111,6 +155,7 @@ export const list = query({
           decision: decision.decision,
         } : null,
         fileName: review.fileName,
+        issueSummary: issueSummary(report, aiStatus),
         jobId: review.jobId,
         mediaKind: mediaKind(review.fileName, review.hasCreative),
       }];

@@ -357,6 +357,7 @@ def public_client_review(value:dict)->dict:
     decision=value.get('decision') if isinstance(value.get('decision'), dict) else None
     return {
         'ai_status':value.get('aiStatus'),
+        'batch_created_at':value.get('batchCreatedAt') or value.get('createdAt'),
         'batch_id':value.get('batchId'),
         'batch_source_label':value.get('batchSourceLabel'),
         'created_at':value.get('createdAt'),
@@ -365,6 +366,7 @@ def public_client_review(value:dict)->dict:
             'decision':decision.get('decision'),
         } if decision else None),
         'file_name':value.get('fileName'),
+        'issue_summary':value.get('issueSummary'),
         'job_id':value.get('jobId'),
         'media_kind':value.get('mediaKind'),
     }
@@ -429,11 +431,13 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
         'display_name':config['display_name'],
         'review':public_client_review(matching or {
             'aiStatus':report.get('overall_status'),
+            'batchCreatedAt':status.created_at or 0,
             'batchId':status.batch_id,
             'batchSourceLabel':None,
             'createdAt':status.created_at or 0,
             'decision':None,
             'fileName':status.file_name,
+            'issueSummary':report.get('summary') if report.get('overall_status') != 'green' else None,
             'jobId':status.job_id,
             'mediaKind':'copy_only' if not status.has_creative else (
                 'image' if Path(status.file_name).suffix.lower() in {'.jpg','.jpeg','.png','.webp'} else 'video'
@@ -441,7 +445,32 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
         }),
         'report':report,
         'evidence_frames':public_evidence_frames(job_id),
+        'google_drive_url':(
+            status.source_url
+            if (
+                status.source_kind == 'google_drive_file'
+                and status.source_status == 'linked'
+                and status.source_url
+            )
+            else None
+        ),
+        'report_pdf_url':f'/api/client/{client_id}/reviews/{job_id}/report.pdf',
     }
+
+
+@app.get('/api/client/{client_id}/reviews/{job_id}/report.pdf')
+def client_review_pdf(client_id:str, job_id:str, request:Request):
+    config=require_client(request, client_id)
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Client review not found')
+    if get_client_review_report(client_id, config['offer_id'], job_id) is None:
+        raise HTTPException(404, 'Client review not found')
+    try:
+        return pdf_artifact_response(ensure_review_pdf(job_id, config['offer_id']))
+    except FileNotFoundError:
+        raise HTTPException(404, 'Report not ready') from None
+    except KeyError:
+        raise HTTPException(404, 'Offer report not found') from None
 
 
 @app.put('/api/client/{client_id}/reviews/{job_id}/decision')
