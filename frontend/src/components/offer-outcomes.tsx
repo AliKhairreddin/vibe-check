@@ -31,10 +31,10 @@ const STATUS_META: Record<
     className: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
     railClassName: 'bg-emerald-500 dark:bg-emerald-400',
   },
-  amber: {
-    label: 'Amber',
-    className: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
-    railClassName: 'bg-orange-500 dark:bg-orange-400',
+  yellow: {
+    label: 'Yellow',
+    className: 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-300',
+    railClassName: 'bg-yellow-400 dark:bg-yellow-300',
   },
   red: {
     label: 'Red',
@@ -462,12 +462,12 @@ function outcomeDetails(outcome: OfferOutcome) {
 }
 
 function normalizeStatus(status: unknown): OverallStatus | null {
-  if (status === 'green' || status === 'amber' || status === 'red') {
+  if (status === 'green' || status === 'yellow' || status === 'red') {
     return status;
   }
-  if (status === 'yellow' || status === 'orange') return 'amber';
+  if (status === 'amber' || status === 'orange') return 'yellow';
   if (status === 'pass') return 'green';
-  if (status === 'needs_review') return 'amber';
+  if (status === 'needs_review') return 'yellow';
   if (status === 'likely_violation') return 'red';
   return null;
 }

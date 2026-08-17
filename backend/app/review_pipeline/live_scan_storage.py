@@ -423,7 +423,7 @@ def get_live_scan_day(observation_date:str)->LiveScanDay:
                 'accounts_observed':0,
                 'copy_variants':0,
                 'live_ads':0,
-                'outcomes':{'green':0,'amber':0,'red':0},
+                'outcomes':{'green':0,'yellow':0,'red':0},
                 'pending':0,
                 'unique_creatives':0,
             },
@@ -499,7 +499,7 @@ def get_live_scan_day(observation_date:str)->LiveScanDay:
             'scan_count':account['scan_count'],
             'source_url':account.get('source_url'),
         })
-    outcomes={'green':0,'amber':0,'red':0}
+    outcomes={'green':0,'yellow':0,'red':0}
     pending=0
     for state in states.values():
         result=normalize_result_status(state.get('result'))

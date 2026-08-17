@@ -35,20 +35,21 @@ CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
 OFFER_SETTINGS_FILE = 'offer_profiles.json'
 OFFER_REVISIONS_FILE = 'offer_profile_revisions.json'
 CLIENT_DECISIONS_FILE = 'client_review_decisions.json'
-REPORT_PDF_LAYOUT_VERSION = 2
+REPORT_PDF_LAYOUT_VERSION = 3
 MAX_OFFER_PROFILE_BYTES = 850_000
 MAX_REPORT_RESULT_BYTES = 800_000
 MAX_OFFER_OVERRIDES = 100
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
-RESULT_STATUSES = {'green','amber','red'}
+RESULT_STATUSES = {'green','yellow','red'}
 TRANSIENT_CONVEX_HTTP_CODES = {408, 409, 425, 429}
 CONVEX_CALL_ATTEMPTS = 4
 CONVEX_RETRY_BASE_SECONDS = 0.2
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'yellow': 'amber',
-    'orange': 'amber',
-    'needs_review': 'amber',
+    'amber': 'yellow',
+    'yellow': 'yellow',
+    'orange': 'yellow',
+    'needs_review': 'yellow',
     'likely_violation': 'red',
 }
 
@@ -56,6 +57,31 @@ def _normalize_result_status(status:Any)->str|None:
     if status in RESULT_STATUSES:
         return status
     return LEGACY_RESULT_STATUSES.get(status)
+
+
+REPORT_STATUS_FIELDS = {
+    'ad_copy_result',
+    'adCopyResult',
+    'creative_result',
+    'creativeResult',
+    'overall_status',
+    'overallStatus',
+    'status',
+}
+
+
+def _normalize_report_statuses(value:Any)->Any:
+    if isinstance(value, list):
+        return [_normalize_report_statuses(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    normalized={}
+    for key,item in value.items():
+        if key in REPORT_STATUS_FIELDS:
+            normalized[key]=_normalize_result_status(item) or item
+        else:
+            normalized[key]=_normalize_report_statuses(item)
+    return normalized
 
 def job_dir(job_id:str)->Path:
     p=JOB_DATA_DIR/job_id; p.mkdir(parents=True, exist_ok=True); return p
@@ -283,13 +309,13 @@ def set_report(job_id:str, report:dict[str, Any], automation_run_id:str|None=Non
 def get_report(job_id:str)->dict[str, Any]|None:
     remote=_convex_call('query', 'reviews:getReport', {'jobId': job_id})
     if convex_enabled():
-        return remote
+        return _normalize_report_statuses(remote)
     if (JOB_DATA_DIR/job_id/'deleted.json').exists():
         return None
     p=job_dir(job_id)/'report.json'
     if not p.exists():
         return None
-    return read_json(p)
+    return _normalize_report_statuses(read_json(p))
 
 
 def get_batch_offer_summaries(job_ids:list[str])->dict[str, dict[str, Any]]:
@@ -553,7 +579,7 @@ def _split_result(report:dict[str, Any]|None, source_matches)->str|None:
         return 'green' if status in RESULT_STATUSES else None
     if any(isinstance(finding, dict) and finding.get('severity') == 'high' for finding in relevant):
         return 'red'
-    return 'amber'
+    return 'yellow'
 
 def _creative_result(report:dict[str, Any]|None, has_creative:bool=True)->str|None:
     if not has_creative:
@@ -769,7 +795,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=100)->list[dict[s
             if len(issue_summary) > 300:
                 issue_summary=f'{issue_summary[:297].rstrip()}...'
         if outcome.overall_status != 'green' and not issue_summary:
-            issue_summary='Needs review' if outcome.overall_status == 'amber' else 'Critical issue'
+            issue_summary='Needs review' if outcome.overall_status == 'yellow' else 'Critical issue'
         suffix=Path(review.file_name).suffix.lower()
         media_kind=(
             'copy_only' if not review.has_creative

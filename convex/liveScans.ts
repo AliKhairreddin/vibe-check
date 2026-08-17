@@ -1,7 +1,7 @@
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 
-type ResultStatus = "green" | "amber" | "red";
+type ResultStatus = "green" | "yellow" | "red";
 type ReviewKind = "creative" | "copy";
 
 const CLAIM_LEASE_MS = 15 * 60 * 1000;
@@ -14,12 +14,12 @@ function requireSecret(secret: string) {
 }
 
 function normalizeResultStatus(status: unknown): ResultStatus | null {
-  if (status === "green" || status === "amber" || status === "red") {
+  if (status === "green" || status === "yellow" || status === "red") {
     return status;
   }
-  if (status === "yellow" || status === "orange") return "amber";
+  if (status === "amber" || status === "orange") return "yellow";
   if (status === "pass") return "green";
-  if (status === "needs_review") return "amber";
+  if (status === "needs_review") return "yellow";
   if (status === "likely_violation") return "red";
   return null;
 }
@@ -201,6 +201,7 @@ export const finishReview = mutation({
     result: v.optional(v.union(
       v.literal("green"),
       v.literal("amber"),
+      v.literal("yellow"),
       v.literal("red")
     )),
     secret: v.string(),
@@ -210,9 +211,10 @@ export const finishReview = mutation({
     requireSecret(args.secret);
     const claim = await getClaim(ctx, args.kind, args.key);
     if (!claim || claim.jobId !== args.jobId) return null;
+    const result = normalizeResultStatus(args.result);
     await ctx.db.patch(claim._id, {
       leaseExpiresAt: undefined,
-      result: args.result,
+      result: result ?? undefined,
       status: args.status,
       updatedAt: Date.now(),
     });
@@ -221,7 +223,7 @@ export const finishReview = mutation({
       job_id: claim.jobId,
       key: claim.key,
       kind: claim.kind,
-      result: args.result ?? null,
+      result,
       status: args.status,
     };
   },
@@ -551,7 +553,7 @@ export const getDay = query({
       ...[...uniqueCreativeKeys].map((key) => creativeStates.get(key)),
       ...[...uniqueCopyKeys].map((key) => copyStates.get(key)),
     ].filter((state): state is NonNullable<typeof state> => Boolean(state));
-    const outcomes = { green: 0, amber: 0, red: 0 };
+    const outcomes = { green: 0, yellow: 0, red: 0 };
     let pending = 0;
     for (const state of uniqueStates) {
       const result = normalizeResultStatus(state.result);

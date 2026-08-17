@@ -18,34 +18,34 @@ STATUS_ALIASES = {
     'pass': 'green',
     'passed': 'green',
     'safe': 'green',
-    'amber': 'amber',
-    'yellow': 'amber',
-    'caution': 'amber',
-    'low risk': 'amber',
-    'low_risk': 'amber',
-    'minor issue': 'amber',
-    'minor_issue': 'amber',
-    'orange': 'amber',
-    'uncertain': 'amber',
-    'manual_review': 'amber',
-    'needs human review': 'amber',
-    'needs_human_review': 'amber',
-    'needs review': 'amber',
-    'needs_review': 'amber',
-    'possible_issue': 'amber',
-    'possible issue': 'amber',
-    'review': 'amber',
-    'fail': 'amber',
-    'failed': 'amber',
-    'non compliant': 'amber',
-    'non-compliant': 'amber',
-    'non_compliant': 'amber',
-    'not compliant': 'amber',
-    'rejected': 'amber',
-    'violation': 'amber',
-    'violates': 'amber',
-    'high_risk': 'amber',
-    'high risk': 'amber',
+    'amber': 'yellow',
+    'yellow': 'yellow',
+    'caution': 'yellow',
+    'low risk': 'yellow',
+    'low_risk': 'yellow',
+    'minor issue': 'yellow',
+    'minor_issue': 'yellow',
+    'orange': 'yellow',
+    'uncertain': 'yellow',
+    'manual_review': 'yellow',
+    'needs human review': 'yellow',
+    'needs_human_review': 'yellow',
+    'needs review': 'yellow',
+    'needs_review': 'yellow',
+    'possible_issue': 'yellow',
+    'possible issue': 'yellow',
+    'review': 'yellow',
+    'fail': 'yellow',
+    'failed': 'yellow',
+    'non compliant': 'yellow',
+    'non-compliant': 'yellow',
+    'non_compliant': 'yellow',
+    'not compliant': 'yellow',
+    'rejected': 'yellow',
+    'violation': 'yellow',
+    'violates': 'yellow',
+    'high_risk': 'yellow',
+    'high risk': 'yellow',
     'red': 'red',
     'critical': 'red',
     'critical risk': 'red',
@@ -117,7 +117,7 @@ STATUS_KEYS = (
 
 MISSING_VERDICT_LIMITATION = (
     'The model response did not include a recognized explicit compliance verdict '
-    'or any findings; the result was set to amber for human review.'
+    'or any findings; the result was set to yellow for human review.'
 )
 REVIEW_RESPONSE_SCHEMA = {
     'type': 'json_schema',
@@ -239,7 +239,7 @@ def _clean_token(value: Any) -> str:
 
 def _status_from_value(value: Any) -> str | None:
     if isinstance(value, bool):
-        return 'green' if value else 'amber'
+        return 'green' if value else 'yellow'
     if value is None:
         return None
 
@@ -257,7 +257,7 @@ def _status_from_value(value: Any) -> str | None:
     ):
         return 'red'
     if 'review' in cleaned or 'uncertain' in cleaned or 'possible' in cleaned:
-        return 'amber'
+        return 'yellow'
     if (
         'minor' in cleaned
         or 'low risk' in cleaned
@@ -268,7 +268,7 @@ def _status_from_value(value: Any) -> str | None:
         or 'fail' in cleaned
         or 'reject' in cleaned
     ):
-        return 'amber'
+        return 'yellow'
     if 'compliant' in cleaned or 'pass' in cleaned or 'approved' in cleaned:
         return 'green'
     return None
@@ -560,8 +560,8 @@ def _infer_status(findings: list[dict[str, Any]]) -> str:
     if any(finding.get('severity') == 'high' for finding in findings):
         return 'red'
     if findings:
-        return 'amber'
-    return 'amber'
+        return 'yellow'
+    return 'yellow'
 
 
 def _normalize_report(data: Any) -> dict[str, Any]:
@@ -619,7 +619,7 @@ def _status_for_findings(findings:list[Any])->str:
     if any(finding.severity == 'high' for finding in findings):
         return 'red'
     if findings:
-        return 'amber'
+        return 'yellow'
     return 'green'
 
 
@@ -682,12 +682,12 @@ def normalize_report_semantics(
             )
         )
     ):
-        expected_status='amber'
+        expected_status='yellow'
     if report.overall_status != expected_status:
         report.overall_status=expected_status
         report.summary={
             'green':'No effective-policy issue was supported by the returned findings.',
-            'amber':'This review needs an edit or human review under the effective policy.',
+            'yellow':'This review needs an edit or human review under the effective policy.',
             'red':'This review identifies a severe-consequence issue under the effective policy.',
         }[expected_status]
         changed=True
@@ -708,13 +708,13 @@ def normalize_report_semantics(
             and not report.findings
             and source_result.status != 'green'
         ):
-            expected_source_status='amber'
+            expected_source_status='yellow'
         if source_result.status == expected_source_status:
             continue
         source_result.status=expected_source_status
         source_result.summary={
             'green':'No effective-policy issue was supported for this source.',
-            'amber':'This source needs an edit or human review.',
+            'yellow':'This source needs an edit or human review.',
             'red':'This source includes a severe-consequence issue.',
         }[expected_source_status]
         changed=True
@@ -871,7 +871,7 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                             f'or verdict rules: {last_error}. Return the complete corrected JSON '
                             'object only, with every model-authored narrative field in English. '
                             'Preserve only direct evidence quotes and exact policy excerpts in '
-                            'their original language. Green must have zero findings. Amber must include low '
+                            'their original language. Green must have zero findings. Yellow must include low '
                             'or medium findings. Red must include a high finding tied to an '
                             'explicitly critical enforcement consequence in the supplied policy, '
                             'including its enforcement_consequence, exact consequence_policy_basis, '

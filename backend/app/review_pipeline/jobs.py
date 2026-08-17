@@ -118,7 +118,7 @@ def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->
         )
         if report.overall_status == 'green':
             first_invalid=invalid_applications[0]
-            report.overall_status='amber'
+            report.overall_status='yellow'
             report.summary=(
                 'The effective result needs human review because the model relied on an '
                 'internal override that is not saved for this offer.'
@@ -137,7 +137,7 @@ def _validate_applied_overrides(report:ComplianceReport, profile:OfferProfile)->
                 else report.source_results.creative
             )
             if affected is not None:
-                affected.status='amber'
+                affected.status='yellow'
                 affected.summary='An unknown internal override requires human review.'
     if duplicate_ids:
         report.limitations.append(

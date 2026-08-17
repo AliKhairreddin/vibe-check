@@ -23,7 +23,7 @@ The previous inline delete confirmation extended beyond the table frame. Single 
 
 - Typography: existing Geist stack and weight hierarchy preserved.
 - Spacing: page header, filter row, table header, and row density remain compact and aligned.
-- Color: green/amber/red action semantics use solid rail segments; N/A uses neutral gray.
+- Color: green/yellow/red action semantics use solid rail segments; N/A uses neutral gray.
 - Components: existing report action and trash icon remain consistent with the application.
 - Assets: no new imagery or external assets were required.
 - Responsive behavior: the table preserves a bounded minimum width and horizontal overflow instead of clipping actions.

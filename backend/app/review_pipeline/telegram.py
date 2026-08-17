@@ -19,15 +19,16 @@ STATUS_LABELS = {
     'complete': 'Complete',
     'failed': 'Failed',
     'green': '🟢 Green — Ready to run',
-    'amber': '🟠 Amber — Fix or review before publishing',
+    'yellow': '🟡 Yellow — Fix or review before publishing',
     'red': '🔴 Red — Critical stop',
 }
-RESULT_STATUSES = {'green', 'amber', 'red'}
+RESULT_STATUSES = {'green', 'yellow', 'red'}
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'yellow': 'amber',
-    'orange': 'amber',
-    'needs_review': 'amber',
+    'amber': 'yellow',
+    'yellow': 'yellow',
+    'orange': 'yellow',
+    'needs_review': 'yellow',
     'likely_violation': 'red',
 }
 WRAP_WIDTH = 34
@@ -815,7 +816,7 @@ def _split_result(report: dict[str, Any], source_matches) -> str | None:
         return 'green' if status in RESULT_STATUSES else None
     if any(finding.get('severity') == 'high' for finding in relevant):
         return 'red'
-    return 'amber'
+    return 'yellow'
 
 
 def _overall_status(report: dict[str, Any]) -> str | None:

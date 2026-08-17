@@ -4,7 +4,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ResultStatus = Literal['green','amber','red']
+ResultStatus = Literal['green','yellow','red']
 EnforcementConsequence = Literal[
     'none',
     'payment_withheld_or_forfeited',
@@ -16,14 +16,25 @@ ReviewSourceKind = Literal['google_drive_file','google_sheet','meta_ads']
 ReviewSourceStatus = Literal['linked','not_found','ambiguous','unavailable']
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'yellow': 'amber',
-    'orange': 'amber',
-    'needs_review': 'amber',
+    'amber': 'yellow',
+    'yellow': 'yellow',
+    'orange': 'yellow',
+    'needs_review': 'yellow',
     'likely_violation': 'red',
 }
 
 def normalize_result_status(value):
     return LEGACY_RESULT_STATUSES.get(value, value)
+
+
+def normalize_result_counts(value):
+    if not isinstance(value, dict):
+        return value
+    normalized={}
+    for status,count in value.items():
+        canonical=normalize_result_status(status)
+        normalized[canonical]=normalized.get(canonical, 0) + count
+    return normalized
 
 class JobStatus(str, Enum):
     queued='queued'; downloading_from_drive='downloading_from_drive'; processing_video='processing_video'; processing_image='processing_image'; extracting_audio='extracting_audio'; extracting_frames='extracting_frames'; running_ocr='running_ocr'; analyzing_visuals='analyzing_visuals'; preparing_transcript='preparing_transcript'; reviewing_with_llm='reviewing_with_llm'; complete='complete'; failed='failed'
@@ -420,6 +431,11 @@ class LiveScanTotals(BaseModel):
     pending: int = 0
     unique_creatives: int = 0
 
+    @field_validator('outcomes', mode='before')
+    @classmethod
+    def normalize_legacy_outcomes(cls, value):
+        return normalize_result_counts(value)
+
 
 class LiveScanDay(BaseModel):
     accounts: list[LiveScanAccount] = Field(default_factory=list)
@@ -475,8 +491,13 @@ class CreateDriveReview(BaseModel):
 
 class ReviewOutcomeCounts(BaseModel):
     green: int = 0
-    amber: int = 0
+    yellow: int = 0
     red: int = 0
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_legacy_outcomes(cls, value):
+        return normalize_result_counts(value)
 
 class ReviewStats(BaseModel):
     offer_id: str = 'acp'

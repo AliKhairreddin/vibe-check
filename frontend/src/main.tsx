@@ -186,7 +186,7 @@ const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | '
   complete: 'Complete',
   failed: 'Failed',
   green: 'Green',
-  amber: 'Amber',
+  yellow: 'Yellow',
   red: 'Red',
 };
 const RESULT_META: Record<OverallStatus, {
@@ -199,10 +199,10 @@ const RESULT_META: Record<OverallStatus, {
     badgeClass: 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300',
     dotClass: 'bg-emerald-500',
   },
-  amber: {
+  yellow: {
     description: 'Needs attention — fix or review the routine issue before publishing.',
-    badgeClass: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
-    dotClass: 'bg-orange-500',
+    badgeClass: 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-300',
+    dotClass: 'bg-yellow-400',
   },
   red: {
     description: 'Critical stop — the policy explicitly identifies serious enforcement risk.',
@@ -1406,7 +1406,7 @@ function HistoryCard({
                   >
                     <option value="all">All results</option>
                     <option value="red">Red</option>
-                    <option value="amber">Amber</option>
+                    <option value="yellow">Yellow</option>
                     <option value="green">Green</option>
                     <option value="na">N/A</option>
                   </select>
@@ -3147,12 +3147,12 @@ function formatStatus(status: string) {
 function normalizeResultStatus(status?: string | null): OverallStatus | null {
   const normalized: Record<ResultStatus, OverallStatus> = {
     green: 'green',
-    amber: 'amber',
-    yellow: 'amber',
-    orange: 'amber',
+    amber: 'yellow',
+    yellow: 'yellow',
+    orange: 'yellow',
     red: 'red',
     pass: 'green',
-    needs_review: 'amber',
+    needs_review: 'yellow',
     likely_violation: 'red',
   };
   return normalized[status as ResultStatus] ?? null;

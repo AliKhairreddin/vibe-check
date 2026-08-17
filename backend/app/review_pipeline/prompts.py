@@ -19,16 +19,16 @@ Policy precedence and internal overrides:
 
 Verdict scale:
 - "green": no effective-policy issue identified; the ad appears ready to run. This includes conduct clearly permitted by a saved internal rule.
-- "amber": at least one routine issue needs an edit or human review before publishing, but the supplied policy does not explicitly attach critical enforcement consequences.
+- "yellow": at least one routine issue needs an edit or human review before publishing, but the supplied policy does not explicitly attach critical enforcement consequences.
 - "red": the observed issue is explicitly tied by the controlling effective policy to one of four approved severe consequences: withheld/non-payable funds, a campaign/account pause, an account block/disable/termination, or partnership suspension/termination.
-- Every amber or red verdict must include at least one concrete finding with observed evidence, a policy reason, and a suggested fix.
-- A green verdict must return an empty findings array, but may include applied_overrides. Never use an empty findings array with amber or red.
-- Use low severity for minor recommended edits and medium severity for routine prohibitions, clear fix-required issues, ambiguity, or missing substantiation. Both produce amber.
+- Every yellow or red verdict must include at least one concrete finding with observed evidence, a policy reason, and a suggested fix.
+- A green verdict must return an empty findings array, but may include applied_overrides. Never use an empty findings array with yellow or red.
+- Use low severity for minor recommended edits and medium severity for routine prohibitions, clear fix-required issues, ambiguity, or missing substantiation. Both produce yellow.
 - Use high severity only when the supplied policy explicitly attaches critical enforcement consequences to the observed issue. High confidence alone does not make a finding high severity.
 - Every high finding must select the matching enforcement_consequence value, copy a short exact excerpt into consequence_policy_basis, and set controlling_internal_rule_id to the exact enabled internal rule ID when an internal rule controls. Use null only when official policy controls and no internal rule addresses enforcement severity.
-- When the current enforcement-severity rule controls, policy_reason must explicitly identify the applicable severe category as a government angle, prohibited celebrity, or cursing violation. Do not treat the rule's sentence describing amber violations as support for red.
+- When the current enforcement-severity rule controls, policy_reason must explicitly identify the applicable severe category as a government angle, prohibited celebrity, or cursing violation. Do not treat the rule's sentence describing yellow violations as support for red.
 - Low and medium findings must use enforcement_consequence "none", an empty consequence_policy_basis, and null controlling_internal_rule_id.
-- Derive overall_status from the most severe returned finding: no findings = green, low or medium = amber, high = red.
+- Derive overall_status from the most severe returned finding: no findings = green, low or medium = yellow, high = red.
 - Do not invent a finding merely to justify a color. If no supplied evidence violates or creates risk under the supplied policy, return green.
 - Use the most severe applicable color for overall_status. Never use pass, needs_review, likely_violation, unknown, or null in any returned status field.
 - Return every property in the schema. Use null only for an unavailable creative or ad_copy source result and for timestamps without timing metadata.
@@ -55,15 +55,15 @@ Timestamp rules:
 
 Return exactly one JSON object with this shape and no wrapper keys:
 {
-  "overall_status": "green" | "amber" | "red",
+  "overall_status": "green" | "yellow" | "red",
   "summary": "plain English summary",
   "source_results": {
     "creative": null | {
-      "status": "green" | "amber" | "red",
+      "status": "green" | "yellow" | "red",
       "summary": "plain English creative-only result; exclude submitted ad copy"
     },
     "ad_copy": null | {
-      "status": "green" | "amber" | "red",
+      "status": "green" | "yellow" | "red",
       "summary": "plain English ad-copy-only result based only on submitted_ad_copy.text"
     }
   },

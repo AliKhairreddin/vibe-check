@@ -126,8 +126,8 @@ export type Finding = {
   } | null;
 };
 
-export type OverallStatus = 'green' | 'amber' | 'red';
-export type LegacyOverallStatus = 'yellow' | 'orange' | 'pass' | 'needs_review' | 'likely_violation';
+export type OverallStatus = 'green' | 'yellow' | 'red';
+export type LegacyOverallStatus = 'amber' | 'orange' | 'pass' | 'needs_review' | 'likely_violation';
 export type ResultStatus = OverallStatus | LegacyOverallStatus;
 
 export type OfferOutcome = {

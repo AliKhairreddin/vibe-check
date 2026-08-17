@@ -42,7 +42,7 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-const RESULT_ORDER: OverallStatus[] = ['green', 'amber', 'red'];
+const RESULT_ORDER: OverallStatus[] = ['green', 'yellow', 'red'];
 const RESULT_META: Record<OverallStatus, {
   className: string;
   icon: typeof CheckCircle2;
@@ -53,10 +53,10 @@ const RESULT_META: Record<OverallStatus, {
     icon: CheckCircle2,
     label: 'Green',
   },
-  amber: {
-    className: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:text-orange-300',
+  yellow: {
+    className: 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300',
     icon: TriangleAlert,
-    label: 'Amber',
+    label: 'Yellow',
   },
   red: {
     className: 'border-red-600/30 bg-red-500/15 text-red-700 dark:text-red-300',

@@ -722,7 +722,7 @@ function AiRecommendation({ status }: { status: OverallStatus }) {
   return (
     <Badge
       className={cn(
-        status === 'amber' && 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:text-orange-300'
+        status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300'
       )}
       variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}
     >
@@ -737,7 +737,7 @@ function StatusBadge({ status }: { status: OverallStatus }) {
     <Badge
       className={cn(
         status === 'green' && 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
-        status === 'amber' && 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:text-orange-300',
+        status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300',
         status === 'red' && 'border-red-600/30 bg-red-500/15 text-red-700 dark:text-red-300'
       )}
       variant="outline"
@@ -824,7 +824,7 @@ function mediaLabel(value: ClientReviewItem['media_kind']) {
 
 function statusLabel(status: OverallStatus) {
   if (status === 'green') return 'Green - ready to run';
-  if (status === 'amber') return 'Amber - fix or review';
+  if (status === 'yellow') return 'Yellow - fix or review';
   return 'Red - critical stop';
 }
 

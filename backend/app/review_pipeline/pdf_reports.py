@@ -32,25 +32,26 @@ logger = logging.getLogger(__name__)
 
 ArtifactOwnerType = Literal['review', 'batch']
 PDF_CONTENT_TYPE = 'application/pdf'
-PDF_LAYOUT_VERSION = 2
+PDF_LAYOUT_VERSION = 3
 PAGE_SIZE = landscape(letter)
 PAGE_WIDTH, PAGE_HEIGHT = PAGE_SIZE
 TERMINAL_BATCH_STATUSES = {'complete', 'failed', 'upload_failed'}
 STATUS_COLORS = {
     'green': colors.HexColor('#16803a'),
-    'amber': colors.HexColor('#b65f00'),
+    'yellow': colors.HexColor('#c2a500'),
     'red': colors.HexColor('#c62828'),
 }
 STATUS_LABELS = {
     'green': 'Green - Ready to run',
-    'amber': 'Amber - Fix or review',
+    'yellow': 'Yellow - Fix or review',
     'red': 'Red - Critical stop',
 }
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
-    'yellow': 'amber',
-    'orange': 'amber',
-    'needs_review': 'amber',
+    'amber': 'yellow',
+    'yellow': 'yellow',
+    'orange': 'yellow',
+    'needs_review': 'yellow',
     'likely_violation': 'red',
 }
 SOURCE_LABELS = {
@@ -997,7 +998,7 @@ def _draw_finding_card(
     severity = _plain(finding.get('severity') or 'not available').title()
     severity_color = {
         'High': STATUS_COLORS['red'],
-        'Medium': STATUS_COLORS['amber'],
+        'Medium': STATUS_COLORS['yellow'],
         'Low': colors.HexColor('#3d72b4'),
     }.get(severity, colors.HexColor('#64748b'))
     pdf.setFillColor(colors.white)

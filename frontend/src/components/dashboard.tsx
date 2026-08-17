@@ -50,7 +50,7 @@ import {
   type OfferColumn,
 } from '@/components/offer-outcomes';
 
-const RESULT_ORDER: OverallStatus[] = ['green', 'amber', 'red'];
+const RESULT_ORDER: OverallStatus[] = ['green', 'yellow', 'red'];
 const RESULT_META: Record<OverallStatus, {
   badgeClass: string;
   barClass: string;
@@ -67,13 +67,13 @@ const RESULT_META: Record<OverallStatus, {
     label: 'Green',
     valueClass: 'text-emerald-700 dark:text-emerald-300',
   },
-  amber: {
-    badgeClass: 'border-orange-600/30 bg-orange-500/15 text-orange-700 dark:border-orange-400/30 dark:bg-orange-400/15 dark:text-orange-300',
-    barClass: 'bg-orange-500',
+  yellow: {
+    badgeClass: 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:border-yellow-400/30 dark:bg-yellow-400/15 dark:text-yellow-300',
+    barClass: 'bg-yellow-400',
     description: 'Fix or review',
     icon: TriangleAlert,
-    label: 'Amber',
-    valueClass: 'text-orange-700 dark:text-orange-300',
+    label: 'Yellow',
+    valueClass: 'text-yellow-700 dark:text-yellow-300',
   },
   red: {
     badgeClass: 'border-red-600/30 bg-red-500/15 text-red-700 dark:border-red-400/30 dark:bg-red-400/15 dark:text-red-300',
@@ -621,12 +621,12 @@ function DashboardStatsSkeleton() {
 }
 
 function normalizeResultStatus(status?: string | null): OverallStatus | null {
-  if (status === 'green' || status === 'amber' || status === 'red') {
+  if (status === 'green' || status === 'yellow' || status === 'red') {
     return status;
   }
-  if (status === 'yellow' || status === 'orange') return 'amber';
+  if (status === 'amber' || status === 'orange') return 'yellow';
   if (status === 'pass') return 'green';
-  if (status === 'needs_review') return 'amber';
+  if (status === 'needs_review') return 'yellow';
   if (status === 'likely_violation') return 'red';
   return null;
 }

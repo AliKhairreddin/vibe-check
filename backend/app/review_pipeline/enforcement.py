@@ -11,7 +11,7 @@ GLOBAL_ENFORCEMENT_SEVERE_BASIS = (
     'funds-withheld/account-paused risk.'
 )
 DOWNGRADE_LIMITATION = (
-    'One or more red findings were changed to amber because the controlling policy '
+    'One or more red findings were changed to yellow because the controlling policy '
     'did not explicitly support an approved severe consequence.'
 )
 
@@ -131,7 +131,7 @@ def _status_for_findings(findings) -> str:
     if any(finding.severity == 'high' for finding in findings):
         return 'red'
     if findings:
-        return 'amber'
+        return 'yellow'
     return 'green'
 
 
@@ -157,7 +157,7 @@ def enforce_consequence_based_red(
 
     previous_status = report.overall_status
     report.overall_status = _status_for_findings(report.findings)
-    if previous_status == 'red' and report.overall_status == 'amber':
+    if previous_status == 'red' and report.overall_status == 'yellow':
         report.summary = (
             'This review needs a fix or review, but the effective policy does not '
             'support a severe-consequence red result.'
@@ -175,7 +175,7 @@ def enforce_consequence_based_red(
             continue
         previous_source_status = source_result.status
         source_result.status = _status_for_findings(source_findings[source_name])
-        if previous_source_status == 'red' and source_result.status == 'amber':
+        if previous_source_status == 'red' and source_result.status == 'yellow':
             source_result.summary = (
                 'This source needs a fix or review; no approved severe consequence was confirmed.'
             )

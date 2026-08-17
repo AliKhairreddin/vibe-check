@@ -1,7 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
-type ResultStatus = "green" | "amber" | "red";
+type ResultStatus = "green" | "yellow" | "red";
 
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
@@ -9,9 +9,9 @@ function requireSecret(secret: string) {
 }
 
 function normalizeResultStatus(value: unknown): ResultStatus | null {
-  if (value === "green" || value === "amber" || value === "red") return value;
+  if (value === "green" || value === "yellow" || value === "red") return value;
   if (value === "pass") return "green";
-  if (value === "yellow" || value === "orange" || value === "needs_review") return "amber";
+  if (value === "amber" || value === "orange" || value === "needs_review") return "yellow";
   if (value === "likely_violation") return "red";
   return null;
 }
@@ -22,7 +22,7 @@ const decisionValidator = v.object({
   decision: decisionValueValidator,
 });
 const reviewValidator = v.object({
-  aiStatus: v.union(v.literal("green"), v.literal("amber"), v.literal("red")),
+  aiStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
   batchCreatedAt: v.number(),
   batchId: v.union(v.string(), v.null()),
   batchSourceLabel: v.union(v.string(), v.null()),
@@ -72,7 +72,7 @@ function issueSummary(value: unknown, status: ResultStatus): string | null {
   const firstFinding = objectValue(findings[0]);
   const evidence = typeof firstFinding?.evidence === "string" ? firstFinding.evidence.trim() : "";
   const text = summary || evidence;
-  if (!text) return status === "amber" ? "Needs review" : "Critical issue";
+  if (!text) return status === "yellow" ? "Needs review" : "Critical issue";
   return text.length > 300 ? `${text.slice(0, 297).trimEnd()}...` : text;
 }
 

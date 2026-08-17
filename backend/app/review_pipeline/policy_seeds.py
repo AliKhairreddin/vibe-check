@@ -68,7 +68,7 @@ def _common_rules(*, prohibit_agent_terms: bool = False) -> list[dict[str, objec
             'This rule is the final authority for enforcement severity and supersedes broader consequence '
             'language in every offer’s official policy. The literal words “rebate” and “refund” are '
             'prohibited. Only clear government-angle, prohibited celebrity, and cursing violations carry '
-            'funds-withheld/account-paused risk. Every other violation is amber: it may reject the creative '
+            'funds-withheld/account-paused risk. Every other violation is yellow: it may reject the creative '
             'or require a fix, but does not by itself cause withheld payment, an account or campaign pause, '
             'an account block/disable/termination, or partnership suspension/termination.',
         ),

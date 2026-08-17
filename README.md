@@ -27,7 +27,7 @@ The system is intentionally hybrid:
 - Produces strict JSON reports with separate creative and ad-copy results.
 - Evaluates one evidence bundle against every active offer with saved guidelines; inactive or unconfigured offers remain visible as N/A.
 - Applies offer-scoped current internal rules above source guidelines on exact conflicts, while recording every permitted exception that changes a run decision.
-- Uses a three-level action model: green for ready-to-run results, amber for routine fixes or review, and red only when a deterministic server guard verifies an approved severe consequence in the controlling effective policy.
+- Uses a three-level action model: green for ready-to-run results, yellow for routine fixes or review, and red only when a deterministic server guard verifies an approved severe consequence in the controlling effective policy.
 - Handles files up to 400 MB through retryable 8 MB chunks.
 - Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.

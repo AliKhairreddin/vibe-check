@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { type MutationCtx, mutation, query } from "./_generated/server";
 import { getConvexSize, v, type Value } from "convex/values";
 
-type ResultStatus = "green" | "amber" | "red";
+type ResultStatus = "green" | "yellow" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
 const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 const INTERRUPTIBLE_STATUSES = [
@@ -73,12 +73,12 @@ function overallStatus(report: unknown): ResultStatus | null {
 }
 
 function normalizeResultStatus(status: unknown): ResultStatus | null {
-  if (status === "green" || status === "amber" || status === "red") {
+  if (status === "green" || status === "yellow" || status === "red") {
     return status;
   }
-  if (status === "yellow" || status === "orange") return "amber";
+  if (status === "amber" || status === "orange") return "yellow";
   if (status === "pass") return "green";
-  if (status === "needs_review") return "amber";
+  if (status === "needs_review") return "yellow";
   if (status === "likely_violation") return "red";
   return null;
 }
@@ -386,7 +386,7 @@ function splitResult(
       typeof finding === "object" &&
       (finding as { severity?: unknown }).severity === "high"
   )) return "red";
-  return "amber";
+  return "yellow";
 }
 
 function creativeResult(report: unknown, hasCreative: boolean) {
@@ -1034,7 +1034,7 @@ export const getStats = query({
 
     const outcomes: Record<ResultStatus, number> = {
       green: 0,
-      amber: 0,
+      yellow: 0,
       red: 0,
     };
     let acceptedOverrides = 0;
