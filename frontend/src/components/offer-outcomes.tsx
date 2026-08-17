@@ -1,4 +1,7 @@
+import { Popover } from '@base-ui/react/popover';
 import { ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { Cell, Pie, PieChart } from 'recharts';
 
 import { Badge } from '@/components/ui/badge';
 import type {
@@ -266,58 +269,159 @@ export function BatchHistoryOfferResultsRail({
   items: ReviewBatchItem[];
   offers: OfferColumn[];
 }) {
-  const groups = offers.map((offer) => ({
-    offer,
-    results: items.map((item, index) => {
-      const outcome = batchOutcomeForOffer(item, offer);
-      return {
-        ...railOutcomeMeta(outcome),
-        fileName: item.file_name,
-        index,
-      };
-    }),
-  }));
-  const accessibleLabel = groups
-    .map(({ offer, results }) => `${offer.offer_name}: ${historyResultSummary(results)}`)
-    .join('; ');
+  const groups = offers.map((offer) => summarizeBatchOffer(items, offer));
 
   return (
     <div
-      className="grid h-3 w-full min-w-0 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10"
+      className="grid h-6 w-full min-w-0 gap-1"
       style={{
         gridTemplateColumns: `repeat(${Math.max(groups.length, 1)}, minmax(0, 1fr))`,
       }}
-      role="img"
-      aria-label={`Batch results by offer. Within each offer, creatives are ordered left to right by upload. ${accessibleLabel}`}
-      title="Each offer block shows one segment per creative in upload order."
+      role="group"
+      aria-label="Batch results by offer. Open an offer for its detailed breakdown."
     >
-      {groups.map(({ offer, results }, offerIndex) => (
-        <span
-          key={offer.offer_id}
-          className={cn('grid h-full', offerIndex > 0 && 'border-l-2 border-card')}
-          style={{
-            gridTemplateColumns: `repeat(${Math.max(results.length, 1)}, minmax(0, 1fr))`,
-          }}
-        >
-          {results.length ? results.map((result, itemIndex) => (
-            <span
-              key={`${offer.offer_id}:${result.index}`}
-              aria-hidden="true"
-              className={cn(
-                'grid h-full min-w-0 place-items-center',
-                itemIndex > 0 && results.length <= 12 && 'border-l border-card/60',
-                result.className
-              )}
-              title={`${offer.offer_name} · ${result.fileName}: ${result.label}`}
-            >
-              {result.withOverride && results.length <= 12 ? (
-                <span className="size-1 rounded-full bg-white shadow-sm" />
-              ) : null}
-            </span>
-          )) : <span className="h-full bg-muted-foreground/15" />}
-        </span>
-      ))}
+      {groups.map((group) => <BatchOfferSummaryPopover key={group.offer.offer_id} group={group} />)}
     </div>
+  );
+}
+
+type BatchResultCategoryKey = OverallStatus | 'na' | 'not-ready';
+
+type BatchResultCategory = {
+  key: BatchResultCategoryKey;
+  label: string;
+  count: number;
+  className: string;
+  chartColor: string;
+};
+
+type BatchOfferSummary = {
+  offer: OfferColumn;
+  categories: BatchResultCategory[];
+  total: number;
+  exceptionCount: number;
+  accessibleSummary: string;
+};
+
+const BATCH_RESULT_CATEGORIES: Array<Omit<BatchResultCategory, 'count'>> = [
+  {
+    key: 'green',
+    label: 'Green',
+    className: STATUS_META.green.railClassName,
+    chartColor: '#10b981',
+  },
+  {
+    key: 'yellow',
+    label: 'Yellow',
+    className: STATUS_META.yellow.railClassName,
+    chartColor: '#facc15',
+  },
+  {
+    key: 'red',
+    label: 'Red',
+    className: STATUS_META.red.railClassName,
+    chartColor: '#ef4444',
+  },
+  {
+    key: 'na',
+    label: 'N/A',
+    className: 'bg-muted-foreground/15',
+    chartColor: '#a1a1aa',
+  },
+  {
+    key: 'not-ready',
+    label: 'Not ready',
+    className: 'bg-muted-foreground/35',
+    chartColor: '#71717a',
+  },
+];
+
+function BatchOfferSummaryPopover({ group }: { group: BatchOfferSummary }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger
+        type="button"
+        openOnHover
+        delay={160}
+        closeDelay={180}
+        onFocus={() => window.requestAnimationFrame(() => setOpen(true))}
+        className="group flex h-6 min-w-0 items-center rounded-md px-1 outline-none transition-colors hover:bg-muted data-popup-open:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+        aria-label={`${group.offer.offer_name} results: ${group.accessibleSummary}. Open breakdown.`}
+      >
+        <span
+          aria-hidden="true"
+          className="flex h-2.5 w-full min-w-0 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10 transition-transform group-hover:scale-y-125 group-data-popup-open:scale-y-125"
+        >
+          {group.categories.map((category) => (
+            <span
+              key={category.key}
+              className={cn('h-full min-w-px', category.className)}
+              style={{ flexGrow: category.count, flexBasis: 0 }}
+            />
+          ))}
+        </span>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner sideOffset={8} className="z-50 max-w-[calc(100vw-1rem)]">
+          <Popover.Popup className="w-[19rem] max-w-[calc(100vw-1rem)] origin-[var(--transform-origin)] rounded-xl border bg-popover p-4 text-popover-foreground shadow-xl outline-none transition-[transform,opacity] duration-150 data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0">
+            <Popover.Title className="text-sm font-semibold">{group.offer.offer_name}</Popover.Title>
+            <Popover.Description className="mt-0.5 text-xs text-muted-foreground">
+              {group.total} creative{group.total === 1 ? '' : 's'} in this batch
+            </Popover.Description>
+
+            <div className="mt-3 grid grid-cols-[7rem_1fr] items-center gap-3">
+              <div
+                role="img"
+                aria-label={`${group.offer.offer_name} result distribution: ${group.accessibleSummary}`}
+                className="size-28"
+              >
+                <PieChart width={112} height={112} accessibilityLayer={false}>
+                  <Pie
+                    data={group.categories}
+                    dataKey="count"
+                    nameKey="label"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={32}
+                    outerRadius={51}
+                    paddingAngle={group.categories.length > 1 ? 1 : 0}
+                    stroke="none"
+                    isAnimationActive={false}
+                  >
+                    {group.categories.map((category) => (
+                      <Cell key={category.key} fill={category.chartColor} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </div>
+
+              <dl className="grid gap-2">
+                {group.categories.map((category) => (
+                  <div key={category.key} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs">
+                    <span
+                      aria-hidden="true"
+                      className={cn('size-2.5 rounded-full', category.className)}
+                    />
+                    <dt>{category.label}</dt>
+                    <dd className="tabular-nums text-muted-foreground">
+                      {category.count} · {formatBatchPercentage(category.count, group.total)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+
+            {group.exceptionCount > 0 ? (
+              <p className="mt-3 border-t pt-3 text-xs leading-4 text-muted-foreground">
+                {group.exceptionCount} Green result{group.exceptionCount === 1 ? '' : 's'} use{group.exceptionCount === 1 ? 's' : ''} an approved internal exception.
+              </p>
+            ) : null}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -432,10 +536,39 @@ function railOutcomeMeta(outcome: OfferOutcome | null) {
   };
 }
 
-function historyResultSummary(results: Array<ReturnType<typeof railOutcomeMeta>>) {
-  const counts = new Map<string, number>();
-  for (const result of results) counts.set(result.label, (counts.get(result.label) ?? 0) + 1);
-  return Array.from(counts, ([label, count]) => `${count} ${label}`).join(', ') || 'No creatives';
+function summarizeBatchOffer(items: ReviewBatchItem[], offer: OfferColumn): BatchOfferSummary {
+  const counts = new Map<BatchResultCategoryKey, number>();
+  let exceptionCount = 0;
+
+  for (const item of items) {
+    const outcome = batchOutcomeForOffer(item, offer);
+    const key = batchResultCategoryKey(outcome);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (outcome?.with_override) exceptionCount += 1;
+  }
+
+  const categories = BATCH_RESULT_CATEGORIES.flatMap((category) => {
+    const count = counts.get(category.key) ?? 0;
+    return count > 0 ? [{ ...category, count }] : [];
+  });
+  const total = items.length;
+  const accessibleSummary = categories
+    .map((category) => `${category.count} ${category.label} (${formatBatchPercentage(category.count, total)})`)
+    .join(', ') || 'No creatives';
+
+  return { offer, categories, total, exceptionCount, accessibleSummary };
+}
+
+function batchResultCategoryKey(outcome: OfferOutcome | null): BatchResultCategoryKey {
+  if (!outcome || outcome.evaluation_state !== 'evaluated') return 'na';
+  return outcome.overall_status ?? 'not-ready';
+}
+
+function formatBatchPercentage(count: number, total: number) {
+  if (!total) return '0%';
+  const percentage = (count / total) * 100;
+  const digits = percentage < 10 && percentage % 1 !== 0 ? 1 : 0;
+  return `${percentage.toFixed(digits)}%`;
 }
 
 function outcomeDetails(outcome: OfferOutcome) {

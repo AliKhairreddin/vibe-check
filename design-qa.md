@@ -52,4 +52,38 @@ No actionable P0, P1, or P2 findings remain.
 
 - No P3 items required for this scoped layout fix.
 
+## Aggregated batch offer results QA
+
+### Visual truth
+
+- Source at 13-inch width: `output/ui-audit/32-history-offer-rail-source-laptop.png`
+- Final closed state: `output/ui-audit/33-history-offer-summaries-final-laptop.png`
+- Final hover popover: `output/ui-audit/34-history-offer-donut-final-laptop.png`
+- Same-viewport source/implementation comparison: `output/ui-audit/35-history-offer-results-comparison.png`
+- CSS viewport: 1280 x 800, device scale factor 1
+- State: desktop, light mode, collapsed navigation, one grouped batch with 78 creatives
+
+### Findings and resolution
+
+1. **P1 — The batch rail encoded all 78 creatives as individual slices.**
+   - Earlier evidence: each offer contained dozens of sub-pixel slices, making the rail difficult to scan and impossible to read precisely.
+   - Fix: each offer now renders one proportional mini-bar with only Green, Yellow, Red, N/A, and Not ready aggregates.
+   - Post-fix evidence: all four mini-bars remain aligned with their offer headings and use the available Offer results track without overlap.
+
+2. **P1 — Exact batch distributions were unavailable from the compact row.**
+   - Fix: hover, keyboard focus, or click opens a named popover with a donut chart, exact counts, percentages, total creatives, and approved internal-exception count.
+   - Post-fix evidence: Lead Economy shows 16 Green (21%), 56 Yellow (72%), 1 Red (1.3%), and 5 N/A (6.4%) for the 78-creative batch.
+
+No actionable P0, P1, or P2 findings remain.
+
+### Interaction and responsive checks
+
+- Hover opens the matching offer popover after the short intent delay.
+- Click opens the popover without navigating the batch row.
+- Keyboard focus opens the focused offer; Escape closes it and Tab advances to the next offer.
+- Popover content exposes headings, terms, exact values, and an accessible distribution label.
+- At 1280 x 800, document scroll width equals viewport width and table columns do not overlap.
+- Clean-tab browser console check: no warnings or errors.
+- Production frontend build passes.
+
 final result: passed
