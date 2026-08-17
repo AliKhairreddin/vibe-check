@@ -16,6 +16,7 @@ import type * as offers from "../offers.js";
 import type * as reportArtifacts from "../reportArtifacts.js";
 import type * as reviewEvidenceFrames from "../reviewEvidenceFrames.js";
 import type * as reviewPayloads from "../reviewPayloads.js";
+import type * as reviewProcessingMetrics from "../reviewProcessingMetrics.js";
 import type * as reviews from "../reviews.js";
 
 import type {
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   reportArtifacts: typeof reportArtifacts;
   reviewEvidenceFrames: typeof reviewEvidenceFrames;
   reviewPayloads: typeof reviewPayloads;
+  reviewProcessingMetrics: typeof reviewProcessingMetrics;
   reviews: typeof reviews;
 }>;
 
