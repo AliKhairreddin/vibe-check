@@ -147,7 +147,11 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
 - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` and `GOOGLE_DRIVE_FOLDER_ID` for folder-scoped import;
 - `TELEGRAM_*` for batch completion notifications;
 - `ADMIN_PASSWORD` for protected guideline, internal-rule, revision, and history-removal actions;
-- `KISSTERRA_CLIENT_PASSWORD` for the dedicated Kissterra approval portal;
+- `CLIENT_ADMIN_PASSWORD`, `KISSTERRA_CLIENT_PASSWORD`, `ACP_CLIENT_PASSWORD`,
+  `LEAD_ECONOMY_CLIENT_PASSWORD`, and `SMART_FINANCIAL_CLIENT_PASSWORD` for the
+  role-scoped client review portal. Usernames default to `admin`, `kissterra`,
+  `acp`, `lead-economy`, and `smart-financial` and can be overridden with the
+  matching `*_CLIENT_USERNAME` variables;
 - `MAX_UPLOAD_MB`, `JOB_WORKER_CONCURRENCY`, and `REVIEW_BACKEND_SHARDS` for resource limits and container distribution.
 
 Each review writes its latest processing-attempt timing to one `reviewProcessingMetrics` document after it finishes. The document separates queue wait from per-stage time and supports overlapping stages, so p50/p90 measurements can distinguish Cloudflare CPU work, OpenRouter calls, Convex persistence, and report-artifact generation without adding a Convex mutation at every progress update. Keep OpenRouter's account-wide ZDR setting enabled as well: its transcription endpoint does not currently accept the same per-request provider-routing controls as chat and vision.
@@ -155,7 +159,12 @@ Each review writes its latest processing-attempt timing to one `reviewProcessing
 Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository.
 The public offer catalog contains names and version counts only. Full official guidelines and current internal rules require an admin password, which the Settings page keeps in browser session storage after it verifies the password with the backend. Configure production with `pnpm exec wrangler secret put ADMIN_PASSWORD` before using Settings or removing history.
 
-The Kissterra portal is available at `/kissterra`. It only returns Kissterra results, stores the client password in browser session storage after server verification, and persists client approve/disapprove decisions separately from the automated verdict. The route is intentionally host-ready: after DNS and a Cloudflare custom-domain route are added, the same portal can be served from `kissterra.<domain>` without a second frontend.
+The client portal is available at `/client`. It uses username/password access,
+stores the credentials in browser session storage after server verification,
+and persists client approve/disapprove decisions separately from the automated
+verdict. The client admin account can switch between Kissterra, ACP, Lead
+Economy, and Smart Financial. Each client account is enforced server-side to its
+own offer. The former `/kissterra` routes redirect into this shared portal.
 
 ## API Overview
 
@@ -171,8 +180,9 @@ The Kissterra portal is available at `/kissterra`. It only returns Kissterra res
 | `GET /api/reviews/{job_id}/report` | Read structured report JSON |
 | `GET /api/reviews/{job_id}/source` | Resolve safe creative/copy source links |
 | `GET /api/reviews/{job_id}/evidence` | List durable timestamped evidence frames |
-| `GET /api/client/kissterra/reviews` | Password-protected Kissterra batch review queue |
-| `PUT /api/client/kissterra/reviews/{job_id}/decision` | Save a Kissterra approval or disapproval |
+| `GET /api/client/check` | Verify client credentials and return the allowed client scopes |
+| `GET /api/client/{client_id}/reviews` | Read the authenticated account's offer-scoped review queue |
+| `PUT /api/client/{client_id}/reviews/{job_id}/decision` | Save or reset a client approval decision |
 | `POST /api/live-scans/observe` | Ingest live Meta ad observations and queue unseen primary-text reviews |
 | `POST /api/live-scans/creative` | Upload an unseen live creative requested by name |
 | `GET /api/live-scans?date=YYYY-MM-DD` | Read accounts and findings observed live on a date |

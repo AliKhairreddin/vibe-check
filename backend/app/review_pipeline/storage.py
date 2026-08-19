@@ -766,8 +766,8 @@ def _read_local_client_decisions()->dict[str, dict[str, Any]]:
     return value if isinstance(value, dict) else {}
 
 
-def list_client_reviews(client_id:str, offer_id:str, limit:int=100)->list[dict[str, Any]]:
-    limit=max(1, min(limit, 100))
+def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[str, Any]]:
+    limit=max(1, min(limit, 1000))
     remote=_convex_call('query', 'clientReviews:list', {
         'clientId':client_id,
         'offerId':offer_id,
@@ -867,6 +867,26 @@ def set_client_review_decision(
     decisions[f'{client_id}:{offer_id}:{job_id}']=value
     write_json(_client_decisions_path(), decisions)
     return value
+
+
+def clear_client_review_decision(
+    client_id:str,
+    offer_id:str,
+    job_id:str,
+)->None:
+    remote=_convex_call('mutation', 'clientReviews:clearDecision', {
+        'clientId':client_id,
+        'offerId':offer_id,
+        'jobId':job_id,
+    })
+    if isinstance(remote, dict):
+        return
+    report=_report_offer_result(get_report(job_id), offer_id)
+    if report is None:
+        raise FileNotFoundError(job_id)
+    decisions=_read_local_client_decisions()
+    decisions.pop(f'{client_id}:{offer_id}:{job_id}', None)
+    write_json(_client_decisions_path(), decisions)
 
 
 def _offer_settings_path()->Path:

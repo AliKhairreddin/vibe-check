@@ -190,7 +190,7 @@ export type ReviewEvidence = {
   frames: ReviewEvidenceFrame[];
 };
 
-export type ClientDecisionValue = 'approved' | 'disapproved';
+export type ClientDecisionValue = 'pending' | 'approved' | 'disapproved';
 
 export type ClientReviewDecision = {
   decided_at: number;
@@ -214,6 +214,24 @@ export type ClientReviewList = {
   client_id: string;
   display_name: string;
   reviews: ClientReviewItem[];
+};
+
+export type ClientPortalSummary = {
+  category: string;
+  client_id: string;
+  display_name: string;
+};
+
+export type ClientSession = {
+  portals: ClientPortalSummary[];
+  role: 'admin' | 'client';
+  username: string;
+};
+
+export type ClientCredentials = {
+  password: string;
+  session: ClientSession;
+  username: string;
 };
 
 export type ClientReviewDetail = {
@@ -391,10 +409,7 @@ const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 const MAX_CHUNK_ATTEMPTS = 3;
 const BACKEND_SHARD_HEADER = 'x-vibe-backend-shard';
 const ADMIN_PASSWORD_KEY = 'vibe-check-admin-password';
-
-function clientPasswordKey(clientId: string) {
-  return `vibe-check-client-password:${clientId}`;
-}
+const CLIENT_CREDENTIALS_KEY = 'vibe-check-client-credentials';
 
 export function getAdminPassword(): string {
   if (typeof window === 'undefined') return '';
@@ -414,21 +429,39 @@ function adminHeaders(headers?: HeadersInit, password = getAdminPassword()): Hea
   return result;
 }
 
-export function getClientPassword(clientId: string): string {
-  if (typeof window === 'undefined') return '';
-  return window.sessionStorage.getItem(clientPasswordKey(clientId)) ?? '';
+export function getClientCredentials(): ClientCredentials | null {
+  if (typeof window === 'undefined') return null;
+  const stored = window.sessionStorage.getItem(CLIENT_CREDENTIALS_KEY);
+  if (!stored) return null;
+  try {
+    const value = JSON.parse(stored) as Partial<ClientCredentials>;
+    if (
+      typeof value.username !== 'string'
+      || typeof value.password !== 'string'
+      || !value.session
+      || !Array.isArray(value.session.portals)
+    ) return null;
+    return value as ClientCredentials;
+  } catch {
+    return null;
+  }
 }
 
-export function setClientPassword(clientId: string, password: string): void {
+export function setClientCredentials(credentials: ClientCredentials | null): void {
   if (typeof window === 'undefined') return;
-  const normalized = password.trim();
-  if (normalized) window.sessionStorage.setItem(clientPasswordKey(clientId), normalized);
-  else window.sessionStorage.removeItem(clientPasswordKey(clientId));
+  if (credentials) window.sessionStorage.setItem(CLIENT_CREDENTIALS_KEY, JSON.stringify(credentials));
+  else window.sessionStorage.removeItem(CLIENT_CREDENTIALS_KEY);
 }
 
-function clientHeaders(clientId: string, headers?: HeadersInit, password = getClientPassword(clientId)) {
+function clientHeaders(
+  headers?: HeadersInit,
+  credentials = getClientCredentials()
+) {
   const result = new Headers(headers);
-  if (password) result.set('x-client-password', password);
+  if (credentials) {
+    result.set('x-client-username', credentials.username);
+    result.set('x-client-password', credentials.password);
+  }
   return result;
 }
 
@@ -831,17 +864,24 @@ export async function getReviewEvidence(id: string): Promise<ReviewEvidence> {
   return requestJson<ReviewEvidence>(`/api/reviews/${id}/evidence`);
 }
 
-export async function verifyClientPassword(clientId: string, password: string): Promise<void> {
-  await requestJson(`/api/client/${encodeURIComponent(clientId)}/check`, {
-    headers: clientHeaders(clientId, undefined, password),
+export async function verifyClientCredentials(
+  username: string,
+  password: string
+): Promise<ClientSession> {
+  return requestJson<ClientSession>('/api/client/check', {
+    headers: clientHeaders(undefined, {
+      password,
+      session: { portals: [], role: 'client', username },
+      username,
+    }),
   });
 }
 
-export async function listClientReviews(clientId: string, limit = 100): Promise<ClientReviewList> {
+export async function listClientReviews(clientId: string, limit = 1000): Promise<ClientReviewList> {
   const params = new URLSearchParams({ limit: String(limit) });
   return requestJson<ClientReviewList>(
     `/api/client/${encodeURIComponent(clientId)}/reviews?${params}`,
-    { headers: clientHeaders(clientId) }
+    { headers: clientHeaders() }
   );
 }
 
@@ -851,7 +891,7 @@ export async function getClientReview(
 ): Promise<ClientReviewDetail> {
   return requestJson<ClientReviewDetail>(
     `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}`,
-    { headers: clientHeaders(clientId) }
+    { headers: clientHeaders() }
   );
 }
 
@@ -859,12 +899,12 @@ export async function decideClientReview(
   clientId: string,
   jobId: string,
   decision: ClientDecisionValue
-): Promise<ClientReviewDecision> {
-  return requestJson<ClientReviewDecision>(
+): Promise<ClientReviewDecision | null> {
+  return requestJson<ClientReviewDecision | null>(
     `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/decision`,
     {
       method: 'PUT',
-      headers: clientHeaders(clientId, { 'content-type': 'application/json' }),
+      headers: clientHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ decision }),
     }
   );
@@ -880,7 +920,7 @@ export async function fetchClientReviewImage(
     : '/thumbnail';
   const response = await fetch(
     `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}${suffix}`,
-    { headers: clientHeaders(clientId) }
+    { headers: clientHeaders() }
   );
   if (!response.ok) {
     const body = await response.text();
@@ -894,7 +934,7 @@ export async function fetchClientReviewPdf(
   jobId: string,
   reportUrl: string
 ): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(reportUrl, { headers: clientHeaders(clientId) });
+  const response = await fetch(reportUrl, { headers: clientHeaders() });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(apiErrorMessage(body, response.status));
@@ -905,13 +945,13 @@ export async function fetchClientReviewPdf(
   const disposition = response.headers.get('content-disposition') ?? '';
   const encodedName = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1];
   const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
-  let filename = `${jobId}-Kissterra-report.pdf`;
+  let filename = `${jobId}-client-report.pdf`;
   try {
     filename = encodedName ? decodeURIComponent(encodedName) : (quotedName || filename);
   } catch {
     filename = quotedName || filename;
   }
-  filename = filename.split(/[\\/]/).pop() || `${jobId}-Kissterra-report.pdf`;
+  filename = filename.split(/[\\/]/).pop() || `${jobId}-client-report.pdf`;
   if (!filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
   return { blob: new Blob([blob], { type: 'application/pdf' }), filename };
 }

@@ -45,6 +45,7 @@ from .review_pipeline.models import (
 )
 from .review_pipeline.storage import (
     backfill_review_offer_stats,
+    clear_client_review_decision,
     create_batch,
     delete_review,
     disable_offer_profile,
@@ -128,15 +129,44 @@ OBSERVATION_DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 MAX_BATCH_ITEMS = 100
 ADMIN_PASSWORD_HEADER = 'x-admin-password'
+CLIENT_USERNAME_HEADER = 'x-client-username'
 CLIENT_PASSWORD_HEADER = 'x-client-password'
 AUTOMATION_SECRET_HEADER = 'x-automation-secret'
 CLIENT_PORTALS = {
+    'acp': {
+        'display_name': 'ACP',
+        'offer_id': 'acp',
+        'username_env': 'ACP_CLIENT_USERNAME',
+        'username_default': 'acp',
+        'password_env': 'ACP_CLIENT_PASSWORD',
+        'category': 'Auto Insurance',
+    },
     'kissterra': {
         'display_name': 'Kissterra',
         'offer_id': 'kissterra',
+        'username_env': 'KISSTERRA_CLIENT_USERNAME',
+        'username_default': 'kissterra',
         'password_env': 'KISSTERRA_CLIENT_PASSWORD',
+        'category': 'Auto Insurance',
+    },
+    'lead-economy': {
+        'display_name': 'Lead Economy',
+        'offer_id': 'lead-economy',
+        'username_env': 'LEAD_ECONOMY_CLIENT_USERNAME',
+        'username_default': 'lead-economy',
+        'password_env': 'LEAD_ECONOMY_CLIENT_PASSWORD',
+        'category': 'Auto Insurance',
+    },
+    'smart-financial': {
+        'display_name': 'Smart Financial',
+        'offer_id': 'smart-financial',
+        'username_env': 'SMART_FINANCIAL_CLIENT_USERNAME',
+        'username_default': 'smart-financial',
+        'password_env': 'SMART_FINANCIAL_CLIENT_PASSWORD',
+        'category': 'Auto Insurance',
     },
 }
+CLIENT_PORTAL_ORDER = ('kissterra', 'acp', 'lead-economy', 'smart-financial')
 logger = logging.getLogger(__name__)
 background_tasks:set[asyncio.Task]=set()
 
@@ -326,17 +356,68 @@ def client_portal(client_id:str)->dict[str, str]:
     return config
 
 
+def public_client_portal(client_id:str, config:dict[str, str])->dict[str, str]:
+    return {
+        'category':config['category'],
+        'client_id':client_id,
+        'display_name':config['display_name'],
+    }
+
+
+def authenticate_client(request:Request)->dict:
+    username=request.headers.get(CLIENT_USERNAME_HEADER, '').strip()
+    password=request.headers.get(CLIENT_PASSWORD_HEADER, '')
+    if not username or not password:
+        raise HTTPException(401, 'Invalid or missing client credentials.')
+
+    admin_username=os.getenv('CLIENT_ADMIN_USERNAME', 'admin').strip() or 'admin'
+    admin_password=os.getenv('CLIENT_ADMIN_PASSWORD', '') or os.getenv('ADMIN_PASSWORD', '')
+    if (
+        admin_password
+        and secrets.compare_digest(username, admin_username)
+        and secrets.compare_digest(password, admin_password)
+    ):
+        return {
+            'role':'admin',
+            'username':admin_username,
+            'portal_ids':list(CLIENT_PORTAL_ORDER),
+        }
+
+    for client_id,config in CLIENT_PORTALS.items():
+        expected_username=(
+            os.getenv(config['username_env'], config['username_default']).strip()
+            or config['username_default']
+        )
+        expected_password=os.getenv(config['password_env'], '')
+        if (
+            expected_password
+            and secrets.compare_digest(username, expected_username)
+            and secrets.compare_digest(password, expected_password)
+        ):
+            return {
+                'role':'client',
+                'username':expected_username,
+                'portal_ids':[client_id],
+            }
+    raise HTTPException(401, 'Invalid or missing client credentials.')
+
+
+def public_client_session(session:dict)->dict:
+    return {
+        'portals':[
+            public_client_portal(client_id, CLIENT_PORTALS[client_id])
+            for client_id in session['portal_ids']
+        ],
+        'role':session['role'],
+        'username':session['username'],
+    }
+
+
 def require_client(request:Request, client_id:str)->dict[str, str]:
     config=client_portal(client_id)
-    expected=os.getenv(config['password_env'], '')
-    if not expected:
-        raise HTTPException(
-            503,
-            f'{config["display_name"]} client access is not configured.',
-        )
-    provided=request.headers.get(CLIENT_PASSWORD_HEADER, '')
-    if not provided or not secrets.compare_digest(provided, expected):
-        raise HTTPException(401, 'Invalid or missing client password.')
+    session=authenticate_client(request)
+    if client_id not in session['portal_ids']:
+        raise HTTPException(404, 'Client portal not found.')
     return config
 
 
@@ -393,6 +474,11 @@ def evidence_frame_response(job_id:str, filename:str)->Response:
     raise HTTPException(404, 'Evidence frame not found')
 
 
+@app.get('/api/client/check')
+def client_session_check(request:Request):
+    return public_client_session(authenticate_client(request))
+
+
 @app.get('/api/client/{client_id}/check')
 def client_check(client_id:str, request:Request):
     config=require_client(request, client_id)
@@ -400,7 +486,7 @@ def client_check(client_id:str, request:Request):
 
 
 @app.get('/api/client/{client_id}/reviews')
-def client_reviews(client_id:str, request:Request, limit:int=100):
+def client_reviews(client_id:str, request:Request, limit:int=1000):
     config=require_client(request, client_id)
     reviews=list_client_reviews(client_id, config['offer_id'], limit)
     return {
@@ -419,7 +505,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
     if report is None:
         raise HTTPException(404, 'Client review not found')
     matching=next((
-        review for review in list_client_reviews(client_id, config['offer_id'], 100)
+        review for review in list_client_reviews(client_id, config['offer_id'], 1000)
         if review.get('jobId') == job_id
     ), None)
     try:
@@ -483,6 +569,12 @@ def decide_client_review(
     config=require_client(request, client_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Client review not found')
+    if payload.decision == 'pending':
+        try:
+            clear_client_review_decision(client_id, config['offer_id'], job_id)
+        except FileNotFoundError:
+            raise HTTPException(404, 'Client review not found') from None
+        return None
     try:
         value=set_client_review_decision(
             client_id,

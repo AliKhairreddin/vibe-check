@@ -1,89 +1,56 @@
-# Responsive table width QA
+# Client portal design QA
 
 ## Visual truth
 
-- Kissterra source: `output/ui-audit/19-kissterra-table-before.png` (live production capture)
-- History source: `output/ui-audit/20-history-width-before.png` (live production capture)
-- Kissterra implementation: `output/ui-audit/21-kissterra-table-after-wide.png`
-- History implementation: `output/ui-audit/22-history-width-after-wide.png`
-- Laptop implementations: `output/ui-audit/23-kissterra-table-after-laptop.png` and `output/ui-audit/24-history-width-after-laptop.png`
-- Full comparison: `output/ui-audit/25-table-width-full-comparison.png`
-- Focused comparisons: `output/ui-audit/26-history-table-focused-comparison.png` and `output/ui-audit/27-kissterra-table-focused-comparison.png`
-- Wide CSS viewport: 1724 x 893, device scale factor 1
-- Laptop CSS viewports: 1279 x 800 for Kissterra and 1280 x 800 for History, device scale factor 1
-- State: desktop, light mode; Kissterra batch collapsed for visual comparison and expanded separately for overflow validation; History populated with one grouped batch row
+- Live reference: `https://creative-compliance-cp.netlify.app/`
+- Reference dashboard capture: `/tmp/vibe-check-client-qa/source-final.png`
+- Local dashboard capture: `/tmp/vibe-check-client-qa/implementation-final.png`
+- Full dashboard comparison: `/tmp/vibe-check-client-qa/comparison-final.png`
+- Focused dashboard comparison: `/tmp/vibe-check-client-qa/comparison-focus-final.png`
+- Reference expanded-card capture: `/tmp/vibe-check-client-qa/source-expanded-actions.png`
+- Local expanded-card capture: `/tmp/vibe-check-client-qa/implementation-expanded-actions.png`
+- Focused expanded-card comparison: `/tmp/vibe-check-client-qa/comparison-expanded-actions.png`
+- Reference CSS viewport: 1440 x 900 at device pixel ratio 1; captured image: 1425 x 891 pixels because browser chrome reserved the remaining area.
+- Local CSS viewport: 1458 x 806 at device pixel ratio 2; the Browser capture is CSS-pixel normalized to 1458 x 806 pixels.
+- Comparison method: native captured pixels with no scaling; each full image was padded to a common 1460 x 892 canvas before horizontal composition.
+- State: desktop, light mode, admin signed in, Kissterra selected, All status, All batches, first batch open. Both collapsed-card and one-expanded-flagged-card states were compared.
 
-The Kissterra source capture was 1709 x 885 pixels because the production browser reserved scrollbar chrome while reporting a 1724 x 893 CSS viewport. It was normalized to 1724 x 893 only inside the comparison montage. The implementation capture was 1724 x 893 pixels. History source and implementation captures were both 1724 x 893 pixels. Laptop captures used their native CSS viewport sizes without density normalization.
-
-The local implementation used production-shaped fixture data for the password-protected Kissterra list and read-only production API data for History. Counts and filenames therefore differ from the source captures, but route, interaction state, component structure, typography, and layout are equivalent.
+The user asked for the reference information architecture and interaction model while retaining VibeCheck's existing shadcn visual language. Differences in fonts, colors, button treatments, and icon style are therefore intentional. Synthetic local preview data also differs from the reference's production-shaped filenames and totals.
 
 ## Findings and comparison history
 
-1. **P2 — Kissterra table always overflowed its card.**
-   - Earlier evidence: the table was fixed at 1216 px while its wrapper was 1182 px, creating a 34 px horizontal scrollbar even on a wide display.
-   - Fix: widened the centered client shell to 1536 px and reduced the table minimum to 1088 px below the 2xl breakpoint while retaining the 1216 px desktop minimum.
-   - Post-fix evidence: at 1724 px the table and wrapper are both 1438 px. At 1279 px they are both 1181 px. The expanded decision row also remains 1181 px with no overflow.
+1. **P2 — The first local pass used two creative columns at the desktop QA width.**
+   - Earlier evidence: `/tmp/vibe-check-client-qa/comparison.png` showed materially larger cards and less batch density than the reference.
+   - Fix: the responsive grid now renders three columns at the desktop breakpoint while retaining two columns on medium screens and one on mobile.
+   - Post-fix evidence: `/tmp/vibe-check-client-qa/comparison-final.png` and `/tmp/vibe-check-client-qa/comparison-focus-final.png` show equivalent three-column scanning density.
 
-2. **P1 — History status overlapped Offer results.**
-   - Earlier evidence: the status track was 96 px, but the “Complete With Failures” badge measured 148.5 px and visibly crossed into the adjacent rail.
-   - Fix: History now uses the full content canvas, the status track is 176 px, the table minimum is 928 px, and the offer rail scales from 320 px to 448 px with viewport space.
-   - Post-fix evidence: at 1724 px the 148.5 px badge ends 19.5 px before the status boundary; the table and wrapper are both 1380 px. At 1280 px the table and wrapper are both 936 px, status ends exactly where Offer results begins, and actions remain in their own 112 px track.
+2. **P2 — The first local batch heading carried a redundant secondary label and excess vertical space.**
+   - Fix: the normalized batch date plus `Auto` is now the single primary title, with state and totals kept in their own compact tracks.
+   - Post-fix evidence: final batch rows match the reference hierarchy and expand/collapse rhythm.
 
 No actionable P0, P1, or P2 findings remain.
 
 ## Fidelity surfaces
 
-- **Fonts and typography:** existing Geist family, weights, sizes, line heights, truncation, and hierarchy are unchanged. Laptop Upload text truncates within its own flexible track instead of colliding with neighbors.
-- **Spacing and layout rhythm:** existing card padding, gutters, row height, radii, and vertical rhythm are preserved. Only the available shell width and table tracks changed.
-- **Colors and visual tokens:** existing background, border, badge, rail, and semantic result tokens are unchanged.
-- **Image quality and assets:** no imagery, icons, or generated assets were added or replaced. Existing creative thumbnails retain their native treatment.
-- **Copy and content:** headings, labels, descriptions, table copy, and actions are unchanged.
+- **Structure:** persistent client navigation, client-level totals, search, status filters, batch filters, accordion batches, three-column creative grid, per-creative decision control, and bulk approval are present.
+- **Expanded creative:** the expanded card preserves the reference's preview, flag/summary, and Drive action, then adds the user-requested `View full details` action to the existing VibeCheck detail screen.
+- **Typography and tokens:** the existing Geist/shadcn typography, neutral palette, semantic warning/success colors, borders, radii, focus rings, and Lucide icons remain the visual source of truth.
+- **Responsive behavior:** navigation stacks above content on narrow screens; filters wrap; batches remain readable; creative cards become a single column.
+- **Assets:** the implementation displays the review evidence thumbnail already stored by VibeCheck. No reference assets were copied.
 
-## Interaction and responsive checks
+## Interaction, authorization, and responsive checks
 
-- Kissterra expand/collapse works at the laptop viewport.
-- The expanded Kissterra row has no horizontal overflow; the decision and reviewed cells remain separate.
-- History search enters the no-match state and Reset restores the populated table.
-- Wide and 13-inch laptop layouts preserve all persistent controls and table actions.
-- Browser console checked after interactions: no warnings or errors.
-- Production frontend build passes.
+- Admin login can switch among Kissterra, ACP, Lead Economy, and Smart Financial.
+- Each client login sees only its own portal; a server-side cross-client request returns 404.
+- All four portals currently display the single `Auto Insurance` category.
+- Batch expansion, creative expansion, search, status filters, batch filters, per-creative Pending/Approved/Disapproved changes, reset to Pending, and bulk approval were exercised locally.
+- `Open in Drive` and `View full details` are both visible in the expanded card; the detailed route opens the existing review page successfully.
+- A 390 x 844 mobile viewport was checked with client-only login, wrapped filters, and single-column cards.
+- Browser console checked after the interactions: no warnings or errors.
+- Full repository verification passes: 160 backend tests, Convex TypeScript validation, Worker typecheck, and frontend production build.
 
 ## Follow-up polish
 
-- No P3 items required for this scoped layout fix.
-
-## Aggregated batch offer results QA
-
-### Visual truth
-
-- Source at 13-inch width: `output/ui-audit/32-history-offer-rail-source-laptop.png`
-- Final closed state: `output/ui-audit/33-history-offer-summaries-final-laptop.png`
-- Final hover popover: `output/ui-audit/34-history-offer-donut-final-laptop.png`
-- Same-viewport source/implementation comparison: `output/ui-audit/35-history-offer-results-comparison.png`
-- CSS viewport: 1280 x 800, device scale factor 1
-- State: desktop, light mode, collapsed navigation, one grouped batch with 78 creatives
-
-### Findings and resolution
-
-1. **P1 — The batch rail encoded all 78 creatives as individual slices.**
-   - Earlier evidence: each offer contained dozens of sub-pixel slices, making the rail difficult to scan and impossible to read precisely.
-   - Fix: each offer now renders one proportional mini-bar with only Green, Yellow, Red, N/A, and Not ready aggregates.
-   - Post-fix evidence: all four mini-bars remain aligned with their offer headings and use the available Offer results track without overlap.
-
-2. **P1 — Exact batch distributions were unavailable from the compact row.**
-   - Fix: hover, keyboard focus, or click opens a named popover with a donut chart, exact counts, percentages, total creatives, and approved internal-exception count.
-   - Post-fix evidence: Lead Economy shows 16 Green (21%), 56 Yellow (72%), 1 Red (1.3%), and 5 N/A (6.4%) for the 78-creative batch.
-
-No actionable P0, P1, or P2 findings remain.
-
-### Interaction and responsive checks
-
-- Hover opens the matching offer popover after the short intent delay.
-- Click opens the popover without navigating the batch row.
-- Keyboard focus opens the focused offer; Escape closes it and Tab advances to the next offer.
-- Popover content exposes headings, terms, exact values, and an accessible distribution label.
-- At 1280 x 800, document scroll width equals viewport width and table columns do not overlap.
-- Clean-tab browser console check: no warnings or errors.
-- Production frontend build passes.
+- No P3 items are required for the requested local approval build.
 
 final result: passed

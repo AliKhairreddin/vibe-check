@@ -551,7 +551,7 @@ class ReviewBatch(BaseModel):
 
 
 class ClientReviewDecisionInput(BaseModel):
-    decision: Literal['approved', 'disapproved']
+    decision: Literal['pending', 'approved', 'disapproved']
 
 
 class ReviewAutomationInput(BaseModel):

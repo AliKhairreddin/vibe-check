@@ -2867,6 +2867,8 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
     monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
     monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('ACP_CLIENT_PASSWORD', 'acp-secret')
+    monkeypatch.setenv('CLIENT_ADMIN_PASSWORD', 'admin-secret')
     monkeypatch.setenv('KISSTERRA_CLIENT_PASSWORD', 'client-secret')
     job_id='6' * 32
     batch_id='8' * 32
@@ -2946,11 +2948,27 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     })
     set_status(job_id, JobStatus.complete, 100, 'Complete')
     transport=httpx.ASGITransport(app=app)
-    headers={'x-client-password':'client-secret'}
+    headers={
+        'x-client-username':'kissterra',
+        'x-client-password':'client-secret',
+    }
+    admin_headers={
+        'x-client-username':'admin',
+        'x-client-password':'admin-secret',
+    }
+    acp_headers={
+        'x-client-username':'acp',
+        'x-client-password':'acp-secret',
+    }
 
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
         unauthorized=await client.get('/api/client/kissterra/reviews')
+        session=await client.get('/api/client/check', headers=headers)
+        admin_session=await client.get('/api/client/check', headers=admin_headers)
         reviews=await client.get('/api/client/kissterra/reviews', headers=headers)
+        cross_scoped=await client.get('/api/client/acp/reviews', headers=headers)
+        acp_reviews=await client.get('/api/client/acp/reviews', headers=acp_headers)
+        admin_acp_reviews=await client.get('/api/client/acp/reviews', headers=admin_headers)
         detail=await client.get(f'/api/client/kissterra/reviews/{job_id}', headers=headers)
         unauthorized_pdf=await client.get(f'/api/client/kissterra/reviews/{job_id}/report.pdf')
         pdf=await client.get(f'/api/client/kissterra/reviews/{job_id}/report.pdf', headers=headers)
@@ -2961,8 +2979,29 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
             json={'decision':'approved'},
         )
         updated=await client.get('/api/client/kissterra/reviews', headers=headers)
+        reset=await client.put(
+            f'/api/client/kissterra/reviews/{job_id}/decision',
+            headers=headers,
+            json={'decision':'pending'},
+        )
+        reset_reviews=await client.get('/api/client/kissterra/reviews', headers=headers)
 
     assert unauthorized.status_code == 401
+    assert session.status_code == 200
+    assert session.json()['role'] == 'client'
+    assert [portal['client_id'] for portal in session.json()['portals']] == ['kissterra']
+    assert admin_session.status_code == 200
+    assert admin_session.json()['role'] == 'admin'
+    assert [portal['client_id'] for portal in admin_session.json()['portals']] == [
+        'kissterra',
+        'acp',
+        'lead-economy',
+        'smart-financial',
+    ]
+    assert cross_scoped.status_code == 404
+    assert acp_reviews.status_code == 200
+    assert acp_reviews.json()['reviews'][0]['ai_status'] == 'green'
+    assert admin_acp_reviews.status_code == 200
     assert reviews.status_code == 200
     assert reviews.json()['reviews'][0]['ai_status'] == 'yellow'
     assert reviews.json()['reviews'][0]['batch_created_at'] == batch.created_at
@@ -2979,6 +3018,9 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert decision.status_code == 200
     assert decision.json()['decision'] == 'approved'
     assert updated.json()['reviews'][0]['decision']['decision'] == 'approved'
+    assert reset.status_code == 200
+    assert reset.json() is None
+    assert reset_reviews.json()['reviews'][0]['decision'] is None
 
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

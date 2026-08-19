@@ -17,6 +17,7 @@ import {
   Link,
   Outlet,
   RouterProvider,
+  redirect,
   useNavigate,
   useParams,
   useRouterState,
@@ -102,10 +103,7 @@ import { AdminAccessGate } from '@/components/admin-access-gate';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
 import { LiveScansPage } from '@/components/live-scans-page';
-import {
-  KissterraDashboardPage,
-  KissterraReviewDetailPage,
-} from '@/components/client-dashboard';
+import { ClientDashboardPage, ClientReviewDetailPage } from '@/components/client-dashboard';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import { BatchStatusDistribution } from '@/components/batch-status-distribution';
 import {
@@ -443,18 +441,19 @@ function ShellLink({
   );
 }
 
-function isKissterraPortalLocation() {
+function isClientPortalLocation() {
   if (typeof window === 'undefined') return false;
-  return window.location.pathname.startsWith('/kissterra')
+  return window.location.pathname.startsWith('/client')
+    || window.location.pathname.startsWith('/kissterra')
     || window.location.hostname.split('.')[0]?.toLowerCase() === 'kissterra';
 }
 
 function RootLayout() {
-  return isKissterraPortalLocation() ? <Outlet /> : <AppShell />;
+  return isClientPortalLocation() ? <Outlet /> : <AppShell />;
 }
 
 function HomePage() {
-  return isKissterraPortalLocation() ? <KissterraDashboardPage /> : <DashboardPage />;
+  return isClientPortalLocation() ? <ClientDashboardPage /> : <DashboardPage />;
 }
 
 const rootRoute = createRootRoute({ component: RootLayout });
@@ -3254,12 +3253,29 @@ const indexRoute = createRoute({
 const kissterraRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/kissterra',
-  component: KissterraDashboardPage,
+  beforeLoad: () => {
+    throw redirect({ to: '/client' });
+  },
 });
 const kissterraReviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/kissterra/reviews/$jobId',
-  component: KissterraReviewDetailPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/client/$clientId/reviews/$jobId',
+      params: { clientId: 'kissterra', jobId: params.jobId },
+    });
+  },
+});
+const clientRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client',
+  component: ClientDashboardPage,
+});
+const clientReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/$clientId/reviews/$jobId',
+  component: ClientReviewDetailPage,
 });
 const newReviewRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -3304,6 +3320,8 @@ const automationsRoute = createRoute({
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
+    clientRoute,
+    clientReviewRoute,
     kissterraRoute,
     kissterraReviewRoute,
     newReviewRoute,

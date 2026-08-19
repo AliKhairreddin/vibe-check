@@ -1,10 +1,19 @@
 import { Container } from "@cloudflare/containers";
 
 type OptionalSecrets = Env & {
+  ACP_CLIENT_PASSWORD?: string;
+  ACP_CLIENT_USERNAME?: string;
   ADMIN_PASSWORD?: string;
   APP_PASSWORD?: string;
   APP_PUBLIC_URL?: string;
+  CLIENT_ADMIN_PASSWORD?: string;
+  CLIENT_ADMIN_USERNAME?: string;
   KISSTERRA_CLIENT_PASSWORD?: string;
+  KISSTERRA_CLIENT_USERNAME?: string;
+  LEAD_ECONOMY_CLIENT_PASSWORD?: string;
+  LEAD_ECONOMY_CLIENT_USERNAME?: string;
+  SMART_FINANCIAL_CLIENT_PASSWORD?: string;
+  SMART_FINANCIAL_CLIENT_USERNAME?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
   TELEGRAM_MESSAGE_THREAD_ID?: string;
@@ -147,10 +156,14 @@ export class ReviewBackend extends Container<Env> {
     super(ctx, env);
     const optionalSecrets = env as OptionalSecrets;
     this.envVars = {
+      ACP_CLIENT_PASSWORD: optionalSecrets.ACP_CLIENT_PASSWORD ?? "",
+      ACP_CLIENT_USERNAME: optionalSecrets.ACP_CLIENT_USERNAME ?? "acp",
       ADMIN_PASSWORD: optionalSecrets.ADMIN_PASSWORD ?? "",
       APP_PASSWORD: optionalSecrets.APP_PASSWORD ?? "",
       APP_ALLOWED_HOSTS: env.APP_ALLOWED_HOSTS,
       APP_PUBLIC_URL: optionalSecrets.APP_PUBLIC_URL ?? "",
+      CLIENT_ADMIN_PASSWORD: optionalSecrets.CLIENT_ADMIN_PASSWORD ?? "",
+      CLIENT_ADMIN_USERNAME: optionalSecrets.CLIENT_ADMIN_USERNAME ?? "admin",
       CONVEX_HTTP_SECRET: env.CONVEX_HTTP_SECRET,
       CONVEX_URL: env.CONVEX_URL,
       GOOGLE_AD_COPY_SHEET_URL: env.GOOGLE_AD_COPY_SHEET_URL,
@@ -160,6 +173,9 @@ export class ReviewBackend extends Container<Env> {
       JOB_PROCESSING_TIMEOUT_SECONDS: env.JOB_PROCESSING_TIMEOUT_SECONDS,
       JOB_WORKER_CONCURRENCY: env.JOB_WORKER_CONCURRENCY,
       KISSTERRA_CLIENT_PASSWORD: optionalSecrets.KISSTERRA_CLIENT_PASSWORD ?? "",
+      KISSTERRA_CLIENT_USERNAME: optionalSecrets.KISSTERRA_CLIENT_USERNAME ?? "kissterra",
+      LEAD_ECONOMY_CLIENT_PASSWORD: optionalSecrets.LEAD_ECONOMY_CLIENT_PASSWORD ?? "",
+      LEAD_ECONOMY_CLIENT_USERNAME: optionalSecrets.LEAD_ECONOMY_CLIENT_USERNAME ?? "lead-economy",
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB,
       OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
       OPENROUTER_DATA_COLLECTION: env.OPENROUTER_DATA_COLLECTION,
@@ -179,6 +195,8 @@ export class ReviewBackend extends Container<Env> {
       OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS: env.OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS,
       OPENROUTER_ZDR: env.OPENROUTER_ZDR,
       REVIEW_BACKEND_SHARDS: env.REVIEW_BACKEND_SHARDS,
+      SMART_FINANCIAL_CLIENT_PASSWORD: optionalSecrets.SMART_FINANCIAL_CLIENT_PASSWORD ?? "",
+      SMART_FINANCIAL_CLIENT_USERNAME: optionalSecrets.SMART_FINANCIAL_CLIENT_USERNAME ?? "smart-financial",
       TELEGRAM_BOT_TOKEN: optionalSecrets.TELEGRAM_BOT_TOKEN ?? "",
       TELEGRAM_CHAT_ID: optionalSecrets.TELEGRAM_CHAT_ID ?? "",
       TELEGRAM_MESSAGE_THREAD_ID: optionalSecrets.TELEGRAM_MESSAGE_THREAD_ID ?? "",

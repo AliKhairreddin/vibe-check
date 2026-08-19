@@ -86,7 +86,7 @@ export const list = query({
   returns: v.array(reviewValidator),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const limit = Math.max(1, Math.min(args.limit, 100));
+    const limit = Math.max(1, Math.min(args.limit, 1000));
     const stats = await ctx.db
       .query("reviewOfferStats")
       .withIndex("by_offer_id_and_deleted_at_and_status_and_created_at", (q) =>
@@ -176,7 +176,7 @@ export const getReport = query({
     const stats = await ctx.db
       .query("reviewOfferStats")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .collect();
+      .take(100);
     if (!stats.some((stat) => stat.offerId === args.offerId && stat.deletedAt === undefined)) {
       return null;
     }
@@ -215,7 +215,7 @@ export const decide = mutation({
     const stats = await ctx.db
       .query("reviewOfferStats")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .collect();
+      .take(100);
     if (!stats.some((stat) =>
       stat.offerId === args.offerId
       && stat.deletedAt === undefined
@@ -247,5 +247,41 @@ export const decide = mutation({
       await ctx.db.insert("clientReviewDecisions", { ...value, createdAt: now });
     }
     return { decidedAt: now, decision: args.decision };
+  },
+});
+
+export const clearDecision = mutation({
+  args: {
+    secret: v.string(),
+    clientId: v.string(),
+    offerId: v.string(),
+    jobId: v.string(),
+  },
+  returns: v.object({ cleared: v.boolean() }),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const stats = await ctx.db
+      .query("reviewOfferStats")
+      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+      .collect();
+    if (!stats.some((stat) =>
+      stat.offerId === args.offerId
+      && stat.deletedAt === undefined
+      && stat.status === "complete"
+    )) {
+      throw new Error("Client review is unavailable");
+    }
+    const existing = await ctx.db
+      .query("clientReviewDecisions")
+      .withIndex("by_client_id_and_offer_id_and_job_id", (q) =>
+        q
+          .eq("clientId", args.clientId)
+          .eq("offerId", args.offerId)
+          .eq("jobId", args.jobId)
+      )
+      .unique();
+    if (!existing) return { cleared: false };
+    await ctx.db.delete(existing._id);
+    return { cleared: true };
   },
 });
