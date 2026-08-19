@@ -766,6 +766,45 @@ def _read_local_client_decisions()->dict[str, dict[str, Any]]:
     return value if isinstance(value, dict) else {}
 
 
+def _client_review_preview(
+    report:dict[str, Any]|None,
+    status:str,
+    review:JobRecord,
+)->dict[str, Any]:
+    findings=report.get('findings') if report and isinstance(report.get('findings'), list) else []
+    evidence=[]
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        value=str(finding.get('evidence') or '').strip()
+        if value:
+            evidence.append(value[:400])
+        if len(evidence) == 3:
+            break
+    summary=str(report.get('summary') or '').strip() if report else ''
+    if not summary:
+        summary=(
+            'No policy issues were identified.' if status == 'green'
+            else 'Critical issue' if status == 'red'
+            else 'Needs review'
+        )
+    google_drive_url=(
+        review.source_url
+        if (
+            review.source_kind == 'google_drive_file'
+            and review.source_status == 'linked'
+            and review.source_url
+        )
+        else None
+    )
+    return {
+        'findingCount':len(findings),
+        'findings':evidence,
+        'googleDriveUrl':google_drive_url,
+        'summary':summary[:600],
+    }
+
+
 def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[str, Any]]:
     limit=max(1, min(limit, 1000))
     remote=_convex_call('query', 'clientReviews:list', {
@@ -825,6 +864,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
             'issueSummary':issue_summary,
             'jobId':review.job_id,
             'mediaKind':media_kind,
+            'preview':_client_review_preview(report, outcome.overall_status, review),
         })
     return reviews
 
@@ -841,6 +881,25 @@ def get_client_review_report(client_id:str, offer_id:str, job_id:str)->dict[str,
         return _report_offer_result(get_report(job_id), offer_id)
     except FileNotFoundError:
         return None
+
+
+def get_client_review_detail(client_id:str, offer_id:str, job_id:str)->dict[str, Any]|None:
+    remote=_convex_call('query', 'clientReviews:getDetail', {
+        'clientId':client_id,
+        'offerId':offer_id,
+        'jobId':job_id,
+    })
+    return remote if isinstance(remote, dict) else None
+
+
+def client_review_exists(offer_id:str, job_id:str)->bool:
+    remote=_convex_call('query', 'clientReviews:hasReview', {
+        'offerId':offer_id,
+        'jobId':job_id,
+    })
+    if isinstance(remote, bool):
+        return remote
+    return get_client_review_report('', offer_id, job_id) is not None
 
 
 def set_client_review_decision(

@@ -82,7 +82,7 @@ export const tickState = query({
     requireSecret(args.secret);
     const maintenance = await ctx.db
       .query("maintenanceState")
-      .withIndex("by_key", (q) => q.eq("key", "reviewOfferStatsV1"))
+      .withIndex("by_key", (q) => q.eq("key", "reviewOfferStatsV2"))
       .unique();
     const running = await ctx.db
       .query("automationRuns")

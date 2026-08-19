@@ -166,12 +166,18 @@ export default defineSchema({
     ])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewOfferStats: defineTable({
+    batchId: v.optional(v.string()),
     createdAt: v.number(),
     deletedAt: v.optional(v.number()),
+    fileName: v.optional(v.string()),
     hasCreative: v.boolean(),
     internalDisposition: v.optional(v.string()),
     jobId: v.string(),
     offerId: v.string(),
+    previewFindingCount: v.optional(v.number()),
+    previewFindings: v.optional(v.array(v.string())),
+    previewReady: v.optional(v.boolean()),
+    previewSummary: v.optional(v.string()),
     resultStatus: v.optional(v.union(
       v.literal("green"),
       v.literal("amber"),
@@ -179,6 +185,9 @@ export default defineSchema({
       v.literal("orange"),
       v.literal("red")
     )),
+    sourceKind: v.optional(v.string()),
+    sourceStatus: v.optional(v.string()),
+    sourceUrl: v.optional(v.string()),
     status: v.string(),
     updatedAt: v.number(),
   })

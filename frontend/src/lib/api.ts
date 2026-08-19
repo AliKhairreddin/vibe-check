@@ -208,6 +208,12 @@ export type ClientReviewItem = {
   issue_summary: string | null;
   job_id: string;
   media_kind: 'video' | 'image' | 'copy_only';
+  preview: {
+    finding_count: number;
+    findings: string[];
+    google_drive_url: string | null;
+    summary: string;
+  };
 };
 
 export type ClientReviewList = {
@@ -910,6 +916,8 @@ export async function decideClientReview(
   );
 }
 
+const clientReviewImageCache = new Map<string, Promise<Blob>>();
+
 export async function fetchClientReviewImage(
   clientId: string,
   jobId: string,
@@ -918,15 +926,39 @@ export async function fetchClientReviewImage(
   const suffix = filename
     ? `/frames/${encodeURIComponent(filename)}`
     : '/thumbnail';
-  const response = await fetch(
+  const cacheKey = `${clientId}:${jobId}:${filename ?? 'thumbnail'}`;
+  const cached = clientReviewImageCache.get(cacheKey);
+  if (cached) return cached;
+  const request = fetch(
     `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}${suffix}`,
     { headers: clientHeaders() }
-  );
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(apiErrorMessage(body, response.status));
+  ).then(async (response) => {
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(apiErrorMessage(body, response.status));
+    }
+    return response.blob();
+  });
+  clientReviewImageCache.set(cacheKey, request);
+  try {
+    const blob = await request;
+    if (clientReviewImageCache.size > 200) {
+      const oldest = clientReviewImageCache.keys().next().value;
+      if (oldest) clientReviewImageCache.delete(oldest);
+    }
+    return blob;
+  } catch (error) {
+    clientReviewImageCache.delete(cacheKey);
+    throw error;
   }
-  return response.blob();
+}
+
+export function preloadClientReviewImage(
+  clientId: string,
+  jobId: string,
+  filename?: string
+): void {
+  void fetchClientReviewImage(clientId, jobId, filename).catch(() => undefined);
 }
 
 export async function fetchClientReviewPdf(

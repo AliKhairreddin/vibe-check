@@ -50,6 +50,7 @@ import {
   getClientCredentials,
   getClientReview,
   listClientReviews,
+  preloadClientReviewImage,
   setClientCredentials,
   verifyClientCredentials,
   type ClientDecisionValue,
@@ -108,8 +109,8 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
   const storedCredentials = getClientCredentials();
   const [username, setUsername] = useState(storedCredentials?.username ?? '');
   const [password, setPassword] = useState(storedCredentials?.password ?? '');
-  const [session, setSession] = useState<ClientSession | null>(null);
-  const [isChecking, setIsChecking] = useState(Boolean(storedCredentials));
+  const [session, setSession] = useState<ClientSession | null>(storedCredentials?.session ?? null);
+  const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -128,12 +129,10 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
       .catch((reason) => {
         if (!active) return;
         setClientCredentials(null);
+        setSession(null);
         setPassword('');
         setError(errorMessage(reason));
       })
-      .finally(() => {
-        if (active) setIsChecking(false);
-      });
     return () => {
       active = false;
     };
@@ -151,6 +150,14 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
     try {
       const nextSession = await verifyClientCredentials(normalizedUsername, password);
       setClientCredentials({ password, session: nextSession, username: normalizedUsername });
+      const firstPortal = nextSession.portals[0];
+      if (firstPortal) {
+        void queryClient.prefetchQuery({
+          queryKey: ['client', firstPortal.client_id, 'reviews'],
+          queryFn: () => listClientReviews(firstPortal.client_id),
+          staleTime: 30_000,
+        });
+      }
       setSession(nextSession);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -243,12 +250,16 @@ function ClientDashboard() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [batchFilter, setBatchFilter] = useState<BatchFilter>('all');
+  const [loadBackgroundPortals, setLoadBackgroundPortals] = useState(false);
 
   const queries = useQueries({
     queries: session.portals.map((portal) => ({
+      enabled: portal.client_id === selectedClientId || loadBackgroundPortals,
       queryKey: ['client', portal.client_id, 'reviews'],
       queryFn: () => listClientReviews(portal.client_id),
-      refetchInterval: 30_000,
+      refetchInterval: portal.client_id === selectedClientId ? 30_000 : 120_000,
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
     })),
   });
   const selectedIndex = session.portals.findIndex((portal) => portal.client_id === selectedClientId);
@@ -281,8 +292,28 @@ function ClientDashboard() {
       if (!next.size && allGroups[0]) next.add(allGroups[0].id);
       return setsEqual(current, next) ? current : next;
     });
-    setExpandedCreatives(new Set());
   }, [allGroups]);
+
+  useEffect(() => {
+    if (loadBackgroundPortals || session.role !== 'admin' || !selectedQuery?.data) return;
+    const timeout = window.setTimeout(() => setLoadBackgroundPortals(true), 1_500);
+    return () => window.clearTimeout(timeout);
+  }, [loadBackgroundPortals, selectedQuery?.data, session.role]);
+
+  useEffect(() => {
+    if (!selectedPortal) return;
+    const visibleReviews = allGroups
+      .filter((group) => expandedGroups.has(group.id))
+      .flatMap((group) => group.reviews.slice(0, 9));
+    for (const review of visibleReviews) {
+      preloadClientReviewImage(selectedPortal.client_id, review.job_id);
+      void queryClient.prefetchQuery({
+        queryKey: ['client', selectedPortal.client_id, 'review', review.job_id],
+        queryFn: () => getClientReview(selectedPortal.client_id, review.job_id),
+        staleTime: 60_000,
+      });
+    }
+  }, [allGroups, expandedGroups, queryClient, selectedPortal]);
 
   const decisionMutation = useMutation({
     mutationFn: ({ clientId, jobId, decision }: {
@@ -335,6 +366,16 @@ function ClientDashboard() {
     setBatchFilter('all');
     setExpandedGroups(new Set());
     setExpandedCreatives(new Set());
+  }
+
+  function prefetchCreative(review: ClientReviewItem) {
+    if (!selectedPortal) return;
+    preloadClientReviewImage(selectedPortal.client_id, review.job_id);
+    void queryClient.prefetchQuery({
+      queryKey: ['client', selectedPortal.client_id, 'review', review.job_id],
+      queryFn: () => getClientReview(selectedPortal.client_id, review.job_id),
+      staleTime: 60_000,
+    });
   }
 
   return (
@@ -422,7 +463,11 @@ function ClientDashboard() {
                               isSaving={decisionMutation.isPending && decisionMutation.variables?.jobId === review.job_id}
                               review={review}
                               onDecide={(decision) => decisionMutation.mutate({ clientId: selectedPortal.client_id, decision, jobId: review.job_id })}
-                              onToggle={() => setExpandedCreatives((current) => toggleSetValue(current, review.job_id))}
+                              onPrefetch={() => prefetchCreative(review)}
+                              onToggle={() => {
+                                prefetchCreative(review);
+                                setExpandedCreatives((current) => toggleSetValue(current, review.job_id));
+                              }}
                             />
                           ))}
                         </div>
@@ -520,16 +565,17 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
   );
 }
 
-function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onToggle, review }: {
+function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefetch, onToggle, review }: {
   clientId: string;
   isExpanded: boolean;
   isSaving: boolean;
   onDecide: (decision: ClientDecisionValue) => void;
+  onPrefetch: () => void;
   onToggle: () => void;
   review: ClientReviewItem;
 }) {
   return (
-    <article className={cn('self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors', review.ai_status !== 'green' && 'border-yellow-600/45', isExpanded && 'ring-1 ring-ring/30')}>
+    <article className={cn('self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors', review.ai_status !== 'green' && 'border-yellow-600/45', isExpanded && 'ring-1 ring-ring/30')} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
       <div className="flex items-center gap-2 p-3">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={isExpanded} onClick={onToggle}>
           {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
@@ -558,27 +604,24 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onToggle
 }
 
 function InlineCreativeDetails({ clientId, review }: { clientId: string; review: ClientReviewItem }) {
-  const query = useQuery({ queryKey: ['client', clientId, 'review', review.job_id], queryFn: () => getClientReview(clientId, review.job_id) });
-  if (query.isLoading) return <div className="grid gap-3 border-t p-3"><Skeleton className="h-52" /><Skeleton className="h-20" /></div>;
-  if (!query.data) return <p role="alert" className="border-t p-3 text-sm text-destructive">{query.error ? errorMessage(query.error) : 'Creative details could not be loaded.'}</p>;
-  const { google_drive_url: googleDriveUrl, report } = query.data;
+  const { preview } = review;
   return (
     <div className="grid gap-4 border-t bg-muted/10 p-3">
       <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-64 w-full rounded-lg" clientId={clientId} jobId={review.job_id} />
       <div className="grid gap-2">
-        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge></div>
-        <p className="text-sm leading-6 text-muted-foreground">{report.summary}</p>
+        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge></div>
+        <p className="text-sm leading-6 text-muted-foreground">{preview.summary}</p>
       </div>
       <div className="grid gap-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flags</p>
-        {report.findings.length ? (
+        {preview.findings.length ? (
           <ul className="grid gap-2">
-            {report.findings.slice(0, 3).map((finding, index) => <li key={`${finding.source}-${index}`} className="border-l-2 border-yellow-500 pl-3 text-sm leading-5">{finding.evidence}</li>)}
+            {preview.findings.map((finding, index) => <li key={`${review.job_id}-${index}`} className="border-l-2 border-yellow-500 pl-3 text-sm leading-5">{finding}</li>)}
           </ul>
         ) : <p className="text-sm text-muted-foreground">No policy flags were found.</p>}
       </div>
       <div className="flex flex-wrap gap-2">
-        {googleDriveUrl ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={googleDriveUrl} target="_blank" rel="noreferrer"><ExternalLink />Open in Drive</a> : null}
+        {preview.google_drive_url ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={preview.google_drive_url} target="_blank" rel="noreferrer"><ExternalLink />Open in Drive</a> : null}
         <Link to="/client/$clientId/reviews/$jobId" params={{ clientId, jobId: review.job_id }} className={buttonVariants({ size: 'sm' })}><FileText />View full details</Link>
       </div>
     </div>
@@ -590,7 +633,13 @@ function ClientReviewDetail() {
   const { session } = useClientAuth();
   const queryClient = useQueryClient();
   const portal = session.portals.find((candidate) => candidate.client_id === clientId);
-  const query = useQuery({ queryKey: ['client', clientId, 'review', jobId], queryFn: () => getClientReview(clientId, jobId), enabled: Boolean(portal) });
+  const query = useQuery({
+    queryKey: ['client', clientId, 'review', jobId],
+    queryFn: () => getClientReview(clientId, jobId),
+    enabled: Boolean(portal),
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
   const decisionMutation = useMutation({
     mutationFn: (decision: ClientDecisionValue) => decideClientReview(clientId, jobId, decision),
     onSuccess: (decision) => {

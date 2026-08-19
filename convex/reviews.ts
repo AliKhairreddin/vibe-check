@@ -25,13 +25,18 @@ type OfferResultEntry = {
 };
 
 type ReviewForStats = {
+  batchId?: string;
   createdAt: number;
   deletedAt?: number;
+  fileName?: string;
   hasCreative?: boolean;
   jobId: string;
   offerIds?: string[];
   primaryOfferId?: string;
   report?: unknown;
+  sourceKind?: string;
+  sourceStatus?: string;
+  sourceUrl?: string;
   status: string;
 };
 
@@ -263,6 +268,58 @@ function internalDispositionForReview(review: ReviewForStats, requestedOfferId: 
   return typeof disposition === "string" ? disposition : null;
 }
 
+function reportForOffer(review: ReviewForStats, requestedOfferId: string) {
+  if (!review.report || typeof review.report !== "object" || Array.isArray(review.report)) {
+    return null;
+  }
+  const parent = review.report as Record<string, unknown>;
+  const candidates = Array.isArray(parent.offer_results)
+    ? parent.offer_results
+    : parent.offer_results && typeof parent.offer_results === "object"
+      ? Object.entries(parent.offer_results).map(([offerId, value]) => (
+          value && typeof value === "object" && !Array.isArray(value)
+            ? { offer_id: offerId, ...value }
+            : value
+        ))
+      : [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const value = candidate as Record<string, unknown>;
+    if (normalizeOfferId(value.offer_id ?? value.offerId ?? value.id) === requestedOfferId) {
+      return value;
+    }
+  }
+  const topLevelOfferId = normalizeOfferId(
+    parent.offer_id ?? parent.offerId ?? parent.primary_offer_id ?? review.primaryOfferId
+  ) ?? "acp";
+  return topLevelOfferId === requestedOfferId ? parent : null;
+}
+
+function previewForReport(report: Record<string, unknown> | null, status: ResultStatus | null) {
+  const rawFindings = Array.isArray(report?.findings) ? report.findings : [];
+  const findings = rawFindings.flatMap((finding) => {
+    if (!finding || typeof finding !== "object" || Array.isArray(finding)) return [];
+    const evidence = (finding as { evidence?: unknown }).evidence;
+    return typeof evidence === "string" && evidence.trim()
+      ? [evidence.trim().slice(0, 400)]
+      : [];
+  });
+  const rawSummary = typeof report?.summary === "string" ? report.summary.trim() : "";
+  const summary = rawSummary || (
+    status === "green"
+      ? "No policy issues were identified."
+      : status === "red"
+        ? "Critical issue"
+        : "Needs review"
+  );
+  return {
+    previewFindingCount: rawFindings.length,
+    previewFindings: findings.slice(0, 3),
+    previewReady: true,
+    previewSummary: summary.slice(0, 600),
+  };
+}
+
 async function syncReviewOfferStats(
   ctx: MutationCtx,
   review: ReviewForStats,
@@ -296,14 +353,21 @@ async function syncReviewOfferStats(
   for (const offerId of activeOfferIds) {
     const resultStatus = resultStatusForReview(projectedReview, offerId) ?? undefined;
     const internalDisposition = internalDispositionForReview(projectedReview, offerId) ?? undefined;
+    const preview = previewForReport(reportForOffer(projectedReview, offerId), resultStatus ?? null);
     const value = {
+      batchId: review.batchId,
       createdAt: review.createdAt,
       deletedAt: review.deletedAt,
+      fileName: review.fileName ?? "",
       hasCreative: review.hasCreative ?? true,
       internalDisposition,
       jobId: review.jobId,
       offerId,
+      ...preview,
       resultStatus,
+      sourceKind: review.sourceKind,
+      sourceStatus: review.sourceStatus,
+      sourceUrl: review.sourceUrl,
       status: review.status,
       updatedAt,
     };
@@ -687,15 +751,18 @@ export const setSource = mutation({
     if (!existing || existing.deletedAt !== undefined) {
       throw new Error("Review job not found");
     }
-    await ctx.db.patch(existing._id, {
+    const updatedAt = Date.now();
+    const source = {
       sourceCheckedAt: args.checkedAt,
       sourceFileId: args.fileId,
       sourceKind: args.kind,
       sourceMessage: args.message,
       sourceStatus: args.status,
       sourceUrl: args.url,
-      updatedAt: Date.now(),
-    });
+      updatedAt,
+    };
+    await ctx.db.patch(existing._id, source);
+    await syncReviewOfferStats(ctx, { ...existing, ...source }, updatedAt);
   },
 });
 
@@ -962,7 +1029,7 @@ export const backfillOfferStats = mutation({
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const migrationKey = "reviewOfferStatsV1";
+    const migrationKey = "reviewOfferStatsV2";
     const state = await ctx.db
       .query("maintenanceState")
       .withIndex("by_key", (query) => query.eq("key", migrationKey))

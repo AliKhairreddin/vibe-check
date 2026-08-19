@@ -58,6 +58,8 @@ from .review_pipeline.storage import (
     list_reviews,
     list_reviews_page,
     list_client_reviews,
+    client_review_exists,
+    get_client_review_detail,
     get_client_review_report,
     get_review_stats,
     list_offer_profiles,
@@ -436,6 +438,7 @@ def admin_check(request:Request):
 
 def public_client_review(value:dict)->dict:
     decision=value.get('decision') if isinstance(value.get('decision'), dict) else None
+    preview=value.get('preview') if isinstance(value.get('preview'), dict) else {}
     return {
         'ai_status':value.get('aiStatus'),
         'batch_created_at':value.get('batchCreatedAt') or value.get('createdAt'),
@@ -450,27 +453,42 @@ def public_client_review(value:dict)->dict:
         'issue_summary':value.get('issueSummary'),
         'job_id':value.get('jobId'),
         'media_kind':value.get('mediaKind'),
+        'preview':{
+            'finding_count':int(preview.get('findingCount') or 0),
+            'findings':[
+                str(finding)
+                for finding in preview.get('findings', [])
+                if isinstance(finding, str)
+            ][:3],
+            'google_drive_url':preview.get('googleDriveUrl'),
+            'summary':str(
+                preview.get('summary')
+                or value.get('issueSummary')
+                or 'No policy issues were identified.'
+            ),
+        },
     }
 
 
-def public_evidence_frames(job_id:str)->list[dict]:
+def public_evidence_frames(job_id:str, frames:list[dict]|None=None)->list[dict]:
     return [{
         'filename':str(frame.get('filename') or ''),
         'timestamp':frame.get('timestamp'),
         'url':f'/api/reviews/{job_id}/frames/{frame.get("filename")}',
-    } for frame in list_review_evidence_frames(job_id) if frame.get('filename')]
+    } for frame in (frames if frames is not None else list_review_evidence_frames(job_id)) if frame.get('filename')]
 
 
 def evidence_frame_response(job_id:str, filename:str)->Response:
+    cache_headers={'cache-control':'private, max-age=3600'}
     resolved=resolve_review_evidence_frame(job_id, filename)
     if isinstance(resolved, Path):
-        return FileResponse(resolved)
+        return FileResponse(resolved, headers=cache_headers)
     if isinstance(resolved, str):
         try:
             content,content_type=read_remote_evidence_frame(resolved)
         except httpx.HTTPError:
             raise HTTPException(404, 'Evidence frame not found') from None
-        return Response(content, media_type=content_type)
+        return Response(content, media_type=content_type, headers=cache_headers)
     raise HTTPException(404, 'Evidence frame not found')
 
 
@@ -501,6 +519,22 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Client review not found')
+    fast_detail=get_client_review_detail(client_id, config['offer_id'], job_id)
+    if fast_detail:
+        return {
+            'client_id':client_id,
+            'display_name':config['display_name'],
+            'review':public_client_review(fast_detail.get('review') or {}),
+            'report':fast_detail.get('report'),
+            'evidence_frames':public_evidence_frames(
+                job_id,
+                fast_detail.get('evidenceFrames')
+                if isinstance(fast_detail.get('evidenceFrames'), list)
+                else [],
+            ),
+            'google_drive_url':fast_detail.get('googleDriveUrl'),
+            'report_pdf_url':f'/api/client/{client_id}/reviews/{job_id}/report.pdf',
+        }
     report=get_client_review_report(client_id, config['offer_id'], job_id)
     if report is None:
         raise HTTPException(404, 'Client review not found')
@@ -595,7 +629,7 @@ def decide_client_review(
 @app.get('/api/client/{client_id}/reviews/{job_id}/thumbnail')
 def client_review_thumbnail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
-    if get_client_review_report(client_id, config['offer_id'], job_id) is None:
+    if not client_review_exists(config['offer_id'], job_id):
         raise HTTPException(404, 'Client review not found')
     frames=list_review_evidence_frames(job_id)
     if not frames:
@@ -606,7 +640,7 @@ def client_review_thumbnail(client_id:str, job_id:str, request:Request):
 @app.get('/api/client/{client_id}/reviews/{job_id}/frames/{filename}')
 def client_review_frame(client_id:str, job_id:str, filename:str, request:Request):
     config=require_client(request, client_id)
-    if get_client_review_report(client_id, config['offer_id'], job_id) is None:
+    if not client_review_exists(config['offer_id'], job_id):
         raise HTTPException(404, 'Client review not found')
     return evidence_frame_response(job_id, filename)
 

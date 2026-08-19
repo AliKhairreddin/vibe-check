@@ -2985,6 +2985,39 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
             json={'decision':'pending'},
         )
         reset_reviews=await client.get('/api/client/kissterra/reviews', headers=headers)
+        monkeypatch.setattr('app.main.get_client_review_detail', lambda client_id, offer_id, requested_job_id: {
+            'evidenceFrames':[],
+            'googleDriveUrl':'https://drive.google.com/file/d/kissterra-creative/view',
+            'report':{
+                'offer_id':'kissterra',
+                'overall_status':'yellow',
+                'summary':'Loaded from the direct detail query.',
+                'findings':[],
+            },
+            'review':{
+                'aiStatus':'yellow',
+                'batchCreatedAt':batch.created_at,
+                'batchId':batch_id,
+                'batchSourceLabel':'1 selected file',
+                'createdAt':batch.created_at,
+                'decision':None,
+                'fileName':'Kissterra creative.mp4',
+                'issueSummary':'Loaded from the direct detail query.',
+                'jobId':requested_job_id,
+                'mediaKind':'video',
+                'preview':{
+                    'findingCount':0,
+                    'findings':[],
+                    'googleDriveUrl':'https://drive.google.com/file/d/kissterra-creative/view',
+                    'summary':'Loaded from the direct detail query.',
+                },
+            },
+        })
+        monkeypatch.setattr(
+            'app.main.list_client_reviews',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('detail route rebuilt the full review list')),
+        )
+        fast_detail=await client.get(f'/api/client/kissterra/reviews/{job_id}', headers=headers)
 
     assert unauthorized.status_code == 401
     assert session.status_code == 200
@@ -3006,6 +3039,12 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert reviews.json()['reviews'][0]['ai_status'] == 'yellow'
     assert reviews.json()['reviews'][0]['batch_created_at'] == batch.created_at
     assert reviews.json()['reviews'][0]['issue_summary'] == 'A Kissterra issue needs review.'
+    assert reviews.json()['reviews'][0]['preview'] == {
+        'finding_count':0,
+        'findings':[],
+        'google_drive_url':'https://drive.google.com/file/d/kissterra-creative/view',
+        'summary':'A Kissterra issue needs review.',
+    }
     assert detail.status_code == 200
     assert detail.json()['google_drive_url'] == 'https://drive.google.com/file/d/kissterra-creative/view'
     assert detail.json()['report_pdf_url'].endswith(f'/{job_id}/report.pdf')
@@ -3021,6 +3060,8 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert reset.status_code == 200
     assert reset.json() is None
     assert reset_reviews.json()['reviews'][0]['decision'] is None
+    assert fast_detail.status_code == 200
+    assert fast_detail.json()['report']['summary'] == 'Loaded from the direct detail query.'
 
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
