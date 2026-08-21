@@ -11,6 +11,7 @@ from .automation_storage import (
 from .storage import (
     get_status,
     job_dir,
+    list_client_feedback_examples,
     read_json,
     save_processing_metrics,
     set_report,
@@ -117,6 +118,7 @@ def build_review_evidence(
     visual_observations: dict | None,
     evidence_note: str,
     offer_profile: OfferProfile | None = None,
+    partner_feedback_precedents: list[dict] | None = None,
 ) -> dict:
     profile=offer_profile or built_in_acp_profile()
     return {
@@ -144,6 +146,7 @@ def build_review_evidence(
         'policy_text': policy_text,
         'policy_sources': policy_sources,
         'internal_overrides': build_internal_override_context(profile),
+        'partner_feedback_precedents': partner_feedback_precedents or [],
         'notes': meta.notes,
         'cost_saving_note': evidence_note,
     }
@@ -227,6 +230,7 @@ async def _review_offer(
     evidence_note:str,
 )->OfferComplianceResult:
     policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
+    partner_feedback_precedents=list_client_feedback_examples(profile.offer_id)
     evidence=build_review_evidence(
         media_kind,
         meta,
@@ -238,6 +242,7 @@ async def _review_offer(
         visual_observations,
         evidence_note,
         profile,
+        partner_feedback_precedents,
     )
     try:
         report=await review_with_openrouter(evidence, meta.model)
@@ -251,6 +256,10 @@ async def _review_offer(
     if build_internal_override_context(profile):
         report.policy_sources.append(
             f'{profile.display_name} current internal rules (version {profile.version})'
+        )
+    if partner_feedback_precedents:
+        report.policy_sources.append(
+            f'{profile.display_name} partner feedback precedents ({len(partner_feedback_precedents)})'
         )
     if evidence_note not in report.limitations:
         report.limitations.append(evidence_note)

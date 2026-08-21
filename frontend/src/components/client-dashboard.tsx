@@ -43,6 +43,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import {
   decideClientReview,
@@ -54,6 +55,7 @@ import {
   setClientCredentials,
   verifyClientCredentials,
   type ClientDecisionValue,
+  type ClientFeedbackReason,
   type ClientPortalSummary,
   type ClientReviewDetail,
   type ClientReviewItem,
@@ -77,6 +79,11 @@ type ReviewGroup = {
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'disapproved';
 type BatchFilter = 'all' | 'unchecked' | 'checked';
+type DecisionInput = {
+  decision: ClientDecisionValue;
+  feedbackNote?: string;
+  feedbackReason?: ClientFeedbackReason;
+};
 
 type ClientAuthValue = {
   logout: () => void;
@@ -316,11 +323,15 @@ function ClientDashboard() {
   }, [allGroups, expandedGroups, queryClient, selectedPortal]);
 
   const decisionMutation = useMutation({
-    mutationFn: ({ clientId, jobId, decision }: {
+    mutationFn: ({ clientId, jobId, decision, feedbackNote, feedbackReason }: {
       clientId: string;
       jobId: string;
-      decision: ClientDecisionValue;
-    }) => decideClientReview(clientId, jobId, decision),
+    } & DecisionInput) => decideClientReview(
+      clientId,
+      jobId,
+      decision,
+      feedbackReason ? { note: feedbackNote, reason: feedbackReason } : undefined
+    ),
     onSuccess: (decision, variables) => {
       updateReviewDecision(queryClient, variables.clientId, variables.jobId, decision);
       queryClient.setQueryData<ClientReviewDetail>(
@@ -432,6 +443,9 @@ function ClientDashboard() {
                 const flagged = group.reviews.filter((review) => review.ai_status !== 'green').length;
                 const clean = group.reviews.length - flagged;
                 const pending = group.reviews.filter((review) => !review.decision).map((review) => review.job_id);
+                const recommendedPending = group.reviews
+                  .filter((review) => !review.decision && aiDecision(review) === 'approved')
+                  .map((review) => review.job_id);
                 return (
                   <Card key={group.id} className="overflow-hidden py-0">
                     <button type="button" className="flex w-full flex-col gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/35 sm:flex-row sm:items-center" aria-expanded={isExpanded} onClick={() => setExpandedGroups((current) => toggleSetValue(current, group.id))}>
@@ -449,9 +463,9 @@ function ClientDashboard() {
                     {isExpanded ? (
                       <CardContent className="border-t bg-muted/15 p-4">
                         <div className="mb-4 flex justify-end">
-                          <Button type="button" size="sm" variant="outline" disabled={!pending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: pending })}>
+                          <Button type="button" size="sm" variant="outline" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
                             {bulkMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
-                            Approve all pending ({pending.length})
+                            Approve recommendations ({recommendedPending.length})
                           </Button>
                         </div>
                         <div className="grid items-start gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -462,7 +476,7 @@ function ClientDashboard() {
                               isExpanded={expandedCreatives.has(review.job_id)}
                               isSaving={decisionMutation.isPending && decisionMutation.variables?.jobId === review.job_id}
                               review={review}
-                              onDecide={(decision) => decisionMutation.mutate({ clientId: selectedPortal.client_id, decision, jobId: review.job_id })}
+                              onDecide={(input) => decisionMutation.mutate({ clientId: selectedPortal.client_id, jobId: review.job_id, ...input })}
                               onPrefetch={() => prefetchCreative(review)}
                               onToggle={() => {
                                 prefetchCreative(review);
@@ -569,11 +583,23 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
   clientId: string;
   isExpanded: boolean;
   isSaving: boolean;
-  onDecide: (decision: ClientDecisionValue) => void;
+  onDecide: (input: DecisionInput) => void;
   onPrefetch: () => void;
   onToggle: () => void;
   review: ClientReviewItem;
 }) {
+  const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
+
+  function chooseDecision(decision: ClientDecisionValue) {
+    if (decision !== 'pending' && decision !== aiDecision(review)) {
+      setDraftDecision(decision);
+      if (!isExpanded) onToggle();
+      return;
+    }
+    setDraftDecision(null);
+    onDecide({ decision });
+  }
+
   return (
     <article className={cn('self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors', review.ai_status !== 'green' && 'border-yellow-600/45', isExpanded && 'ring-1 ring-ring/30')} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
       <div className="flex items-center gap-2 p-3">
@@ -591,13 +617,25 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
           value={review.decision?.decision ?? 'pending'}
           disabled={isSaving}
           onClick={(event) => event.stopPropagation()}
-          onChange={(event) => onDecide(event.currentTarget.value as ClientDecisionValue)}
+          onChange={(event) => chooseDecision(event.currentTarget.value as ClientDecisionValue)}
         >
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
           <option value="disapproved">Disapproved</option>
         </select>
       </div>
+      {draftDecision ? (
+        <FeedbackForm
+          decision={draftDecision}
+          isSaving={isSaving}
+          review={review}
+          onCancel={() => setDraftDecision(null)}
+          onSubmit={(feedbackReason, feedbackNote) => {
+            onDecide({ decision: draftDecision, feedbackNote, feedbackReason });
+            setDraftDecision(null);
+          }}
+        />
+      ) : null}
       {isExpanded ? <InlineCreativeDetails clientId={clientId} review={review} /> : null}
     </article>
   );
@@ -609,8 +647,9 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
     <div className="grid gap-4 border-t bg-muted/10 p-3">
       <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-64 w-full rounded-lg" clientId={clientId} jobId={review.job_id} />
       <div className="grid gap-2">
-        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge></div>
+        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge>{isCalibrationFeedback(review) ? <Badge variant="secondary">Calibrates future reviews</Badge> : null}</div>
         <p className="text-sm leading-6 text-muted-foreground">{preview.summary}</p>
+        {review.decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5"><span className="font-semibold">Client feedback:</span> {review.decision.feedback_note}</p> : null}
       </div>
       <div className="grid gap-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flags</p>
@@ -641,7 +680,12 @@ function ClientReviewDetail() {
     staleTime: 60_000,
   });
   const decisionMutation = useMutation({
-    mutationFn: (decision: ClientDecisionValue) => decideClientReview(clientId, jobId, decision),
+    mutationFn: ({ decision, feedbackNote, feedbackReason }: DecisionInput) => decideClientReview(
+      clientId,
+      jobId,
+      decision,
+      feedbackReason ? { note: feedbackNote, reason: feedbackReason } : undefined
+    ),
     onSuccess: (decision) => {
       queryClient.setQueryData<ClientReviewDetail>(['client', clientId, 'review', jobId], (current) => current ? { ...current, review: { ...current.review, decision } } : current);
       updateReviewDecision(queryClient, clientId, jobId, decision);
@@ -670,7 +714,7 @@ function ClientReviewDetail() {
       <div className="grid gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link to="/client" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to batches</Link>
-          <DecisionControl review={review} isSaving={decisionMutation.isPending} onDecide={(decision) => decisionMutation.mutate(decision)} />
+          <DecisionControl review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} />
         </div>
 
         <Card>
@@ -723,13 +767,102 @@ function FindingCard({ clientId, finding, frame, index, jobId }: { clientId: str
   );
 }
 
-function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; onDecide: (decision: ClientDecisionValue) => void; review: ClientReviewItem }) {
+function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
+  decision: Exclude<ClientDecisionValue, 'pending'>;
+  isSaving: boolean;
+  onCancel: () => void;
+  onSubmit: (reason: ClientFeedbackReason, note: string) => void;
+  review: ClientReviewItem;
+}) {
+  const [reason, setReason] = useState<ClientFeedbackReason | ''>('');
+  const [note, setNote] = useState('');
+  const options = feedbackReasonOptions(decision);
+  const canCalibrate = reason ? isCalibrationReason(reason) : false;
+  const noteRequired = canCalibrate;
+  const canSubmit = Boolean(reason) && (!noteRequired || note.trim().length >= 3);
+
+  useEffect(() => {
+    setReason('');
+    setNote('');
+  }, [decision]);
+
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      <Button type="button" size="xs" variant={review.decision?.decision === 'approved' ? 'default' : 'outline'} disabled={isSaving} onClick={() => onDecide('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
-      <Button type="button" size="xs" variant={review.decision?.decision === 'disapproved' ? 'destructive' : 'outline'} disabled={isSaving} onClick={() => onDecide('disapproved')}><X /> Disapprove</Button>
-      {review.decision ? <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => onDecide('pending')}>Reset to pending</Button> : null}
-      {isClientOverride(review) ? <Badge variant="secondary">Override</Badge> : null}
+    <form
+      className="grid w-full max-w-xl gap-3 border-t bg-muted/20 p-3 text-left"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!reason || !canSubmit) return;
+        onSubmit(reason, note.trim());
+      }}
+    >
+      <div className="grid gap-1">
+        <p className="text-sm font-semibold">Why does your decision differ?</p>
+        <p className="text-xs leading-5 text-muted-foreground">Reusable policy feedback can calibrate future {review.ai_status === 'red' ? 'flags' : 'reviews'} for this partner. One-off and business decisions stay excluded.</p>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor={`feedback-reason-${review.job_id}`}>Reason</Label>
+        <select
+          id={`feedback-reason-${review.job_id}`}
+          className="h-9 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          value={reason}
+          onChange={(event) => setReason(event.currentTarget.value as ClientFeedbackReason | '')}
+        >
+          <option value="">Choose a reason</option>
+          {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'What should Vibe Check learn?' : 'Optional note'}</Label>
+        <Textarea
+          id={`feedback-note-${review.job_id}`}
+          maxLength={1000}
+          placeholder={noteRequired ? 'Describe the rule or distinction to apply next time.' : 'Add context for the Vibe Check team.'}
+          value={note}
+          onChange={(event) => setNote(event.currentTarget.value)}
+        />
+      </div>
+      {canCalibrate ? <p className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300"><ShieldCheck className="size-3.5" />This will become a guarded precedent for future reviews.</p> : null}
+      <div className="flex justify-end gap-2">
+        <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={onCancel}>Cancel</Button>
+        <Button type="submit" size="xs" disabled={isSaving || !canSubmit}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Save decision</Button>
+      </div>
+    </form>
+  );
+}
+
+function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; onDecide: (input: DecisionInput) => void; review: ClientReviewItem }) {
+  const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
+
+  function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
+    if (decision !== aiDecision(review)) {
+      setDraftDecision(decision);
+      return;
+    }
+    setDraftDecision(null);
+    onDecide({ decision });
+  }
+
+  return (
+    <div className="grid justify-items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        <Button type="button" size="xs" variant={review.decision?.decision === 'approved' ? 'default' : 'outline'} disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
+        <Button type="button" size="xs" variant={review.decision?.decision === 'disapproved' ? 'destructive' : 'outline'} disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X /> Disapprove</Button>
+        {review.decision ? <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => onDecide({ decision: 'pending' })}>Reset to pending</Button> : null}
+        {isClientOverride(review) ? <Badge variant="secondary">Override</Badge> : null}
+        {isCalibrationFeedback(review) ? <Badge variant="outline">Learning signal</Badge> : null}
+      </div>
+      {draftDecision ? (
+        <FeedbackForm
+          decision={draftDecision}
+          isSaving={isSaving}
+          review={review}
+          onCancel={() => setDraftDecision(null)}
+          onSubmit={(feedbackReason, feedbackNote) => {
+            onDecide({ decision: draftDecision, feedbackNote, feedbackReason });
+            setDraftDecision(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -832,10 +965,38 @@ function decisionStatus(review: ClientReviewItem): StatusFilter {
   return review.decision?.decision ?? 'pending';
 }
 
+function aiDecision(review: ClientReviewItem): Exclude<ClientDecisionValue, 'pending'> {
+  return review.ai_status === 'red' ? 'disapproved' : 'approved';
+}
+
 function isClientOverride(review: ClientReviewItem) {
   if (!review.decision) return false;
-  const aiDecision: Exclude<ClientDecisionValue, 'pending'> = review.ai_status === 'red' ? 'disapproved' : 'approved';
-  return review.decision.decision !== aiDecision;
+  return review.decision.decision !== aiDecision(review);
+}
+
+function isCalibrationReason(reason: ClientFeedbackReason) {
+  return reason === 'false_positive' || reason === 'missed_policy_issue' || reason === 'partner_preference';
+}
+
+function isCalibrationFeedback(review: ClientReviewItem) {
+  const reason = review.decision?.feedback_reason;
+  return Boolean(reason && isCalibrationReason(reason));
+}
+
+function feedbackReasonOptions(decision: Exclude<ClientDecisionValue, 'pending'>): { label: string; value: ClientFeedbackReason }[] {
+  if (decision === 'approved') {
+    return [
+      { label: 'Vibe Check was too strict', value: 'false_positive' },
+      { label: 'Partner preference to reuse', value: 'partner_preference' },
+      { label: 'One-off exception', value: 'one_off_exception' },
+      { label: 'Business decision, not policy', value: 'business_decision' },
+    ];
+  }
+  return [
+    { label: 'Vibe Check missed a policy issue', value: 'missed_policy_issue' },
+    { label: 'Partner preference to reuse', value: 'partner_preference' },
+    { label: 'Business decision, not policy', value: 'business_decision' },
+  ];
 }
 
 function toggleSetValue(current: Set<string>, value: string) {

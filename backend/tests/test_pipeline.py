@@ -547,6 +547,30 @@ def test_review_evidence_keeps_ad_copy_independent_from_audio_and_ocr():
     assert evidence['visual_observations']['observations'][0]['scene'] == 'Person holding paperwork.'
     assert 'platform caption/body' in evidence['source_definitions']['ad_copy']
     assert evidence['internal_overrides'] == []
+    assert evidence['partner_feedback_precedents'] == []
+
+
+def test_review_evidence_includes_offer_scoped_partner_feedback_precedents():
+    precedent={
+        'client_decision':'disapproved',
+        'feedback_reason':'missed_policy_issue',
+        'partner_note':'Price claims need the disclaimer in the same frame.',
+        'vibe_check_status':'green',
+    }
+    evidence=build_review_evidence(
+        'image',
+        ReviewRequestMeta(),
+        'Policy text.',
+        ['Saved rules'],
+        {'source':'not_applicable','chunks':[]},
+        [],
+        [],
+        {'source':'openrouter_vision','observations':[]},
+        'Evidence note.',
+        partner_feedback_precedents=[precedent],
+    )
+
+    assert evidence['partner_feedback_precedents'] == [precedent]
 
 def test_review_evidence_supports_copy_only_jobs():
     meta=ReviewRequestMeta(ad_copy='Standalone ad copy.', notes='Brand note.')
@@ -2502,10 +2526,23 @@ def test_red_guard_accepts_official_partnership_termination_without_internal_sev
 async def test_effective_policy_review_returns_green_with_valid_override(monkeypatch):
     profile=offer_with_cash_override()
     review_calls=[]
+    precedent={
+        'client_decision':'approved',
+        'feedback_reason':'false_positive',
+        'partner_note':'Incidental cash is acceptable.',
+        'vibe_check_status':'red',
+    }
+
+    monkeypatch.setattr(
+        review_jobs,
+        'list_client_feedback_examples',
+        lambda offer_id: [precedent] if offer_id == profile.offer_id else [],
+    )
 
     async def fake_effective_review(evidence, model):
         review_calls.append(evidence)
         assert evidence['internal_overrides'][0]['override_id'] == 'cash-imagery'
+        assert evidence['partner_feedback_precedents'] == [precedent]
         return ComplianceReport.model_validate({
             'overall_status':'green',
             'summary':'Ready under the current internal rule.',
@@ -2541,6 +2578,7 @@ async def test_effective_policy_review_returns_green_with_valid_override(monkeyp
     assert result.applied_overrides[0].override_id == 'cash-imagery'
     assert result.applied_overrides[0].title == 'Cash imagery exception'
     assert result.internal_disposition == 'accepted_with_override'
+    assert result.policy_sources[-1] == 'ACP partner feedback precedents (1)'
     outcomes=review_jobs._completed_offer_outcomes(
         ReviewRequestMeta(offer_outcomes=[OfferOutcome(
             offer_id='acp',
@@ -2979,6 +3017,22 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
             json={'decision':'approved'},
         )
         updated=await client.get('/api/client/kissterra/reviews', headers=headers)
+        missing_feedback=await client.put(
+            f'/api/client/kissterra/reviews/{job_id}/decision',
+            headers=headers,
+            json={'decision':'disapproved'},
+        )
+        learning_decision=await client.put(
+            f'/api/client/kissterra/reviews/{job_id}/decision',
+            headers=headers,
+            json={
+                'decision':'disapproved',
+                'feedback_reason':'missed_policy_issue',
+                'feedback_note':'The price disclaimer must appear in the same frame.',
+            },
+        )
+        learning_reviews=await client.get('/api/client/kissterra/reviews', headers=headers)
+        learning_examples=review_storage.list_client_feedback_examples('kissterra')
         reset=await client.put(
             f'/api/client/kissterra/reviews/{job_id}/decision',
             headers=headers,
@@ -3057,6 +3111,19 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert decision.status_code == 200
     assert decision.json()['decision'] == 'approved'
     assert updated.json()['reviews'][0]['decision']['decision'] == 'approved'
+    assert missing_feedback.status_code == 400
+    assert learning_decision.status_code == 200
+    assert learning_decision.json()['feedback_reason'] == 'missed_policy_issue'
+    assert learning_reviews.json()['reviews'][0]['decision']['feedback_note'] == 'The price disclaimer must appear in the same frame.'
+    assert learning_examples == [{
+        'client_decision':'disapproved',
+        'decided_at':learning_decision.json()['decided_at'],
+        'feedback_reason':'missed_policy_issue',
+        'partner_note':'The price disclaimer must appear in the same frame.',
+        'vibe_check_findings':[],
+        'vibe_check_status':'yellow',
+        'vibe_check_summary':'A Kissterra issue needs review.',
+    }]
     assert reset.status_code == 200
     assert reset.json() is None
     assert reset_reviews.json()['reviews'][0]['decision'] is None

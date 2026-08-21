@@ -686,6 +686,8 @@ def public_client_review(value:dict)->dict:
         'decision':({
             'decided_at':decision.get('decidedAt'),
             'decision':decision.get('decision'),
+            'feedback_note':decision.get('feedbackNote'),
+            'feedback_reason':decision.get('feedbackReason'),
         } if decision else None),
         'file_name':value.get('fileName'),
         'issue_summary':value.get('issueSummary'),
@@ -853,6 +855,8 @@ def decide_client_review(
             config['offer_id'],
             job_id,
             payload.decision,
+            payload.feedback_reason,
+            payload.feedback_note,
         )
     except FileNotFoundError:
         raise HTTPException(404, 'Client review not found') from None
@@ -861,6 +865,8 @@ def decide_client_review(
     return {
         'decided_at':value.get('decidedAt'),
         'decision':value.get('decision'),
+        'feedback_note':value.get('feedbackNote'),
+        'feedback_reason':value.get('feedbackReason'),
     }
 
 

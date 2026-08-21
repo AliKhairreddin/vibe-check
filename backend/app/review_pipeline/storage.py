@@ -53,6 +53,16 @@ LEGACY_RESULT_STATUSES = {
     'needs_review': 'yellow',
     'likely_violation': 'red',
 }
+CALIBRATION_FEEDBACK_REASONS = {
+    'false_positive',
+    'missed_policy_issue',
+    'partner_preference',
+}
+CLIENT_FEEDBACK_REASONS = {
+    *CALIBRATION_FEEDBACK_REASONS,
+    'one_off_exception',
+    'business_decision',
+}
 
 def _normalize_result_status(status:Any)->str|None:
     if status in RESULT_STATUSES:
@@ -907,25 +917,123 @@ def set_client_review_decision(
     offer_id:str,
     job_id:str,
     decision:str,
+    feedback_reason:str|None=None,
+    feedback_note:str='',
 )->dict[str, Any]:
     if decision not in {'approved','disapproved'}:
         raise ValueError('Decision must be approved or disapproved.')
-    remote=_convex_call('mutation', 'clientReviews:decide', {
+    feedback_note=feedback_note.strip()
+    if feedback_reason is not None and feedback_reason not in CLIENT_FEEDBACK_REASONS:
+        raise ValueError('Feedback reason is invalid.')
+    if len(feedback_note) > 1_000:
+        raise ValueError('Feedback note must be 1,000 characters or fewer.')
+    args={
         'clientId':client_id,
         'offerId':offer_id,
         'jobId':job_id,
         'decision':decision,
-    })
+    }
+    if feedback_reason is not None:
+        args['feedbackReason']=feedback_reason
+    if feedback_note:
+        args['feedbackNote']=feedback_note
+    remote=_convex_call('mutation', 'clientReviews:decide', args)
     if isinstance(remote, dict):
         return remote
     report=_report_offer_result(get_report(job_id), offer_id)
     if report is None:
         raise FileNotFoundError(job_id)
-    value={'decidedAt':now_ms(), 'decision':decision}
+    ai_status=_normalize_result_status(report.get('overall_status'))
+    if ai_status is None:
+        raise ValueError('Client review result is unavailable.')
+    expected_decision='disapproved' if ai_status == 'red' else 'approved'
+    is_override=decision != expected_decision
+    if is_override and feedback_reason is None:
+        raise ValueError('Tell us why your decision differs from Vibe Check.')
+    if (
+        is_override
+        and feedback_reason in CALIBRATION_FEEDBACK_REASONS
+        and len(feedback_note) < 3
+    ):
+        raise ValueError('Add a short note so Vibe Check can learn the policy distinction.')
+    findings=[]
+    for finding in report.get('findings', []):
+        if not isinstance(finding, dict):
+            continue
+        evidence=str(finding.get('evidence') or '').strip()
+        if evidence:
+            findings.append(evidence[:400])
+        if len(findings) == 3:
+            break
+    summary=str(report.get('summary') or '').strip() or (
+        'No policy issues were identified.' if ai_status == 'green'
+        else 'Critical issue' if ai_status == 'red'
+        else 'Needs review'
+    )
+    value={
+        'aiFindings':findings,
+        'aiStatus':ai_status,
+        'aiSummary':summary[:600],
+        'clientId':client_id,
+        'decidedAt':now_ms(),
+        'decision':decision,
+        'jobId':job_id,
+        'offerId':offer_id,
+    }
+    if is_override and feedback_reason is not None:
+        value['feedbackReason']=feedback_reason
+    if is_override and feedback_note:
+        value['feedbackNote']=feedback_note
     decisions=_read_local_client_decisions()
     decisions[f'{client_id}:{offer_id}:{job_id}']=value
     write_json(_client_decisions_path(), decisions)
     return value
+
+
+def list_client_feedback_examples(offer_id:str, limit:int=8)->list[dict[str, Any]]:
+    limit=max(1, min(int(limit), 12))
+    remote=_convex_call('query', 'clientReviews:listCalibrationExamples', {
+        'offerId':offer_id,
+        'limit':limit,
+    })
+    values=remote if isinstance(remote, list) else list(_read_local_client_decisions().values())
+    examples=[]
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        if remote is None and value.get('offerId') != offer_id:
+            continue
+        ai_status=_normalize_result_status(value.get('aiStatus'))
+        decision=value.get('decision')
+        reason=value.get('feedbackReason')
+        note=str(value.get('feedbackNote') or '').strip()
+        if (
+            ai_status is None
+            or decision not in {'approved','disapproved'}
+            or reason not in CALIBRATION_FEEDBACK_REASONS
+            or not note
+        ):
+            continue
+        expected_decision='disapproved' if ai_status == 'red' else 'approved'
+        if decision == expected_decision:
+            continue
+        raw_findings=value.get('aiFindings')
+        findings=[
+            str(finding)[:400]
+            for finding in raw_findings
+            if isinstance(finding, str) and finding.strip()
+        ][:3] if isinstance(raw_findings, list) else []
+        examples.append({
+            'client_decision':decision,
+            'decided_at':value.get('decidedAt'),
+            'feedback_reason':reason,
+            'partner_note':note[:1_000],
+            'vibe_check_findings':findings,
+            'vibe_check_status':ai_status,
+            'vibe_check_summary':str(value.get('aiSummary') or '')[:600],
+        })
+    examples.sort(key=lambda example:int(example.get('decided_at') or 0), reverse=True)
+    return examples[:limit]
 
 
 def clear_client_review_decision(

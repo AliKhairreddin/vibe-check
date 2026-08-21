@@ -191,10 +191,18 @@ export type ReviewEvidence = {
 };
 
 export type ClientDecisionValue = 'pending' | 'approved' | 'disapproved';
+export type ClientFeedbackReason =
+  | 'false_positive'
+  | 'missed_policy_issue'
+  | 'partner_preference'
+  | 'one_off_exception'
+  | 'business_decision';
 
 export type ClientReviewDecision = {
   decided_at: number;
   decision: ClientDecisionValue;
+  feedback_note: string | null;
+  feedback_reason: ClientFeedbackReason | null;
 };
 
 export type ClientReviewItem = {
@@ -1038,14 +1046,19 @@ export async function getClientReview(
 export async function decideClientReview(
   clientId: string,
   jobId: string,
-  decision: ClientDecisionValue
+  decision: ClientDecisionValue,
+  feedback?: { note?: string; reason?: ClientFeedbackReason }
 ): Promise<ClientReviewDecision | null> {
   return requestJson<ClientReviewDecision | null>(
     `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/decision`,
     {
       method: 'PUT',
       headers: clientHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({
+        decision,
+        ...(feedback?.note ? { feedback_note: feedback.note } : {}),
+        ...(feedback?.reason ? { feedback_reason: feedback.reason } : {}),
+      }),
     }
   );
 }

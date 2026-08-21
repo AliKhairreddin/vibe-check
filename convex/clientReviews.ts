@@ -3,6 +3,13 @@ import { v } from "convex/values";
 
 type ResultStatus = "green" | "yellow" | "red";
 
+const MAX_FEEDBACK_NOTE_LENGTH = 1000;
+const CALIBRATION_FEEDBACK_REASONS = new Set([
+  "false_positive",
+  "missed_policy_issue",
+  "partner_preference",
+]);
+
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
   if (!expected || secret !== expected) throw new Error("Unauthorized");
@@ -17,9 +24,27 @@ function normalizeResultStatus(value: unknown): ResultStatus | null {
 }
 
 const decisionValueValidator = v.union(v.literal("approved"), v.literal("disapproved"));
+const feedbackReasonValidator = v.union(
+  v.literal("false_positive"),
+  v.literal("missed_policy_issue"),
+  v.literal("partner_preference"),
+  v.literal("one_off_exception"),
+  v.literal("business_decision"),
+);
 const decisionValidator = v.object({
   decidedAt: v.number(),
   decision: decisionValueValidator,
+  feedbackNote: v.optional(v.string()),
+  feedbackReason: v.optional(feedbackReasonValidator),
+});
+const calibrationExampleValidator = v.object({
+  aiFindings: v.array(v.string()),
+  aiStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
+  aiSummary: v.string(),
+  decidedAt: v.number(),
+  decision: decisionValueValidator,
+  feedbackNote: v.string(),
+  feedbackReason: feedbackReasonValidator,
 });
 const previewValidator = v.object({
   findingCount: v.number(),
@@ -209,6 +234,8 @@ export const list = query({
         decision: decision ? {
           decidedAt: decision.decidedAt,
           decision: decision.decision,
+          ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
+          ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
         } : null,
         fileName,
         issueSummary: aiStatus === "green" ? null : preview.summary.slice(0, 300),
@@ -292,6 +319,8 @@ export const getDetail = query({
         decision: decision ? {
           decidedAt: decision.decidedAt,
           decision: decision.decision,
+          ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
+          ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
         } : null,
         fileName: review.fileName,
         issueSummary: issueSummary(report, aiStatus),
@@ -369,6 +398,8 @@ export const decide = mutation({
     offerId: v.string(),
     jobId: v.string(),
     decision: decisionValueValidator,
+    feedbackNote: v.optional(v.string()),
+    feedbackReason: v.optional(feedbackReasonValidator),
   },
   returns: decisionValidator,
   handler: async (ctx, args) => {
@@ -377,13 +408,49 @@ export const decide = mutation({
       .query("reviewOfferStats")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .take(100);
-    if (!stats.some((stat) =>
-      stat.offerId === args.offerId
-      && stat.deletedAt === undefined
-      && stat.status === "complete"
-    )) {
+    const stat = stats.find((candidate) =>
+      candidate.offerId === args.offerId
+      && candidate.deletedAt === undefined
+      && candidate.status === "complete"
+    );
+    if (!stat) {
       throw new Error("Client review is unavailable");
     }
+    const aiStatus = normalizeResultStatus(stat.resultStatus);
+    if (!aiStatus) {
+      throw new Error("Client review result is unavailable");
+    }
+    const expectedDecision = aiStatus === "red" ? "disapproved" : "approved";
+    const isOverride = expectedDecision !== args.decision;
+    const feedbackNote = args.feedbackNote?.trim() ?? "";
+    if (feedbackNote.length > MAX_FEEDBACK_NOTE_LENGTH) {
+      throw new Error(`Feedback note must be ${MAX_FEEDBACK_NOTE_LENGTH} characters or fewer`);
+    }
+    if (isOverride && !args.feedbackReason) {
+      throw new Error("Tell us why your decision differs from Vibe Check");
+    }
+    if (
+      isOverride
+      && args.feedbackReason
+      && CALIBRATION_FEEDBACK_REASONS.has(args.feedbackReason)
+      && feedbackNote.length < 3
+    ) {
+      throw new Error("Add a short note so Vibe Check can learn the policy distinction");
+    }
+    const [storedReport, review] = await Promise.all([
+      ctx.db
+        .query("reviewOfferReports")
+        .withIndex("by_job_id_offer_id", (q) =>
+          q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+        )
+        .unique(),
+      ctx.db
+        .query("reviews")
+        .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+        .unique(),
+    ]);
+    const report = storedReport?.report ?? offerReport(review?.report, args.offerId);
+    const preview = reportPreview(report, aiStatus);
     const existing = await ctx.db
       .query("clientReviewDecisions")
       .withIndex("by_client_id_and_offer_id_and_job_id", (q) =>
@@ -396,18 +463,68 @@ export const decide = mutation({
     const now = Date.now();
     const value = {
       clientId: args.clientId,
+      aiFindings: preview.findings,
+      aiStatus,
+      aiSummary: preview.summary,
       decidedAt: now,
       decision: args.decision,
       jobId: args.jobId,
       offerId: args.offerId,
       updatedAt: now,
+      ...(isOverride && feedbackNote ? { feedbackNote } : {}),
+      ...(isOverride && args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
     };
     if (existing) {
-      await ctx.db.patch(existing._id, value);
+      await ctx.db.replace(existing._id, { ...value, createdAt: existing.createdAt });
     } else {
       await ctx.db.insert("clientReviewDecisions", { ...value, createdAt: now });
     }
-    return { decidedAt: now, decision: args.decision };
+    return {
+      decidedAt: now,
+      decision: args.decision,
+      ...(isOverride && feedbackNote ? { feedbackNote } : {}),
+      ...(isOverride && args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
+    };
+  },
+});
+
+export const listCalibrationExamples = query({
+  args: {
+    secret: v.string(),
+    offerId: v.string(),
+    limit: v.number(),
+  },
+  returns: v.array(calibrationExampleValidator),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const limit = Math.max(1, Math.min(Math.floor(args.limit), 12));
+    const decisions = await ctx.db
+      .query("clientReviewDecisions")
+      .withIndex("by_offer_id_and_decided_at", (q) => q.eq("offerId", args.offerId))
+      .order("desc")
+      .take(100);
+    return decisions.flatMap((decision) => {
+      if (
+        !decision.aiStatus
+        || !decision.aiSummary
+        || !decision.feedbackReason
+        || !decision.feedbackNote
+        || !CALIBRATION_FEEDBACK_REASONS.has(decision.feedbackReason)
+      ) {
+        return [];
+      }
+      const expectedDecision = decision.aiStatus === "red" ? "disapproved" : "approved";
+      if (decision.decision === expectedDecision) return [];
+      return [{
+        aiFindings: decision.aiFindings ?? [],
+        aiStatus: decision.aiStatus,
+        aiSummary: decision.aiSummary,
+        decidedAt: decision.decidedAt,
+        decision: decision.decision,
+        feedbackNote: decision.feedbackNote,
+        feedbackReason: decision.feedbackReason,
+      }];
+    }).slice(0, limit);
   },
 });
 

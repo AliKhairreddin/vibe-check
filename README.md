@@ -165,7 +165,12 @@ stores the credentials in browser session storage after server verification,
 and persists client approve/disapprove decisions separately from the automated
 verdict. The client admin account can switch between Kissterra, ACP, Lead
 Economy, and Smart Financial. Each client account is enforced server-side to its
-own offer. The former `/kissterra` routes redirect into this shared portal.
+own offer. When a client overrides Vibe Check, the portal captures a structured
+reason and note. Reusable policy disagreements become same-offer historical
+precedents for future reviews; one-off exceptions and non-policy business choices
+remain auditable but are excluded from calibration. Existing automated verdicts
+are never rewritten. The former `/kissterra` routes redirect into this shared
+portal.
 
 ## API Overview
 

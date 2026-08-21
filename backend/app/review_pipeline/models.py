@@ -555,6 +555,14 @@ class ReviewBatch(BaseModel):
 
 class ClientReviewDecisionInput(BaseModel):
     decision: Literal['pending', 'approved', 'disapproved']
+    feedback_reason: Literal[
+        'false_positive',
+        'missed_policy_issue',
+        'partner_preference',
+        'one_off_exception',
+        'business_decision',
+    ] | None = None
+    feedback_note: str = Field(default='', max_length=1_000)
 
 
 class ReviewAutomationInput(BaseModel):
