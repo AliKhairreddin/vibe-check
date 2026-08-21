@@ -7,9 +7,8 @@ import httpx
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
@@ -1074,18 +1073,12 @@ def partner_api_index():
 
 @app.get('/api/v1/docs', include_in_schema=False)
 def partner_api_docs():
-    return get_swagger_ui_html(
-        openapi_url='/api/v1/openapi.json',
-        title='Vibe Check Partner API v1',
-    )
+    return RedirectResponse('/developers/api')
 
 
 @app.get('/api/v1/reference', include_in_schema=False)
 def partner_api_reference():
-    return get_swagger_ui_html(
-        openapi_url='/api/v1/openapi.json',
-        title='Vibe Check Partner API v1 · Interactive reference',
-    )
+    return RedirectResponse('/developers/reference')
 
 
 @app.get('/api/v1/openapi.json', include_in_schema=False)

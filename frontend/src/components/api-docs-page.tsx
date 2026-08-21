@@ -82,11 +82,12 @@ const endpoints: Array<{
 ];
 
 const referenceControls = [
-  ['Authorize', 'Enter the API key once so the interactive reference can add the Bearer header to requests.'],
-  ['Try it out', 'Unlock an endpoint’s fields so you can enter values or choose a creative file.'],
-  ['Execute', 'Send that request to the real API. For a scan, this can upload media and create a real review.'],
-  ['Clear', 'Remove the entered values and the displayed response from that endpoint. It does not delete server data.'],
-  ['Download', 'Save the OpenAPI definition or a response artifact when that control is available.'],
+  ['API key', 'Paste the token once. It stays only in this browser tab’s memory and is added as the Bearer header to live requests.'],
+  ['Open endpoint', 'Expand a clean request card to see its purpose, required permission, request fields, and cURL example.'],
+  ['Copy cURL', 'Copy an implementation-ready command. It always uses YOUR_API_KEY so the token you loaded is never copied accidentally.'],
+  ['Send request', 'Call the real production API using the values in that card. A scan can upload media and create a real review.'],
+  ['Clear', 'Reset that endpoint’s fields, chosen file, and displayed response. It does not delete server data.'],
+  ['Download response', 'Save an authenticated PDF, image frame, or other binary artifact returned by the endpoint.'],
 ];
 
 function CopyButton({ label, value }: { label: string; value: string }) {
@@ -161,7 +162,7 @@ export function ApiDocsPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button nativeButton={false} render={<a href={`${baseUrl}/reference`} target="_blank" rel="noreferrer" />}>
+            <Button nativeButton={false} render={<a href="/api/v1/reference" target="_blank" rel="noreferrer" />}>
               <Play /> Open interactive reference <ExternalLink />
             </Button>
             <Button nativeButton={false} variant="outline" render={<a href={`${baseUrl}/openapi.json`} target="_blank" rel="noreferrer" />}>
@@ -256,7 +257,7 @@ export function ApiDocsPage() {
           <p className="text-sm font-medium text-muted-foreground">Interactive reference</p>
           <h2 className="font-heading text-2xl font-semibold tracking-tight">What the buttons mean</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-            The reference is a testing console generated from the live OpenAPI definition. Treat Execute as a real production request.
+            The reference is a custom shadcn testing console for the production API. Treat Send request as a real production request.
           </p>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
@@ -277,7 +278,7 @@ export function ApiDocsPage() {
             <div className="flex items-center gap-2 font-heading text-lg font-semibold"><Code2 /> Ready to test?</div>
             <p className="mt-1 text-sm text-muted-foreground">Start with one known ad ID, scan it twice, then replace the file without changing its name.</p>
           </div>
-          <Button nativeButton={false} render={<a href={`${baseUrl}/reference`} target="_blank" rel="noreferrer" />}>
+          <Button nativeButton={false} render={<a href="/api/v1/reference" target="_blank" rel="noreferrer" />}>
             Open API reference <ExternalLink />
           </Button>
         </div>

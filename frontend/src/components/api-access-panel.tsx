@@ -50,6 +50,7 @@ import {
 import { cn } from '@/lib/utils';
 
 const PARTNERS_QUERY_KEY = ['api-partners'] as const;
+const PARTNER_REFERENCE_URL = 'https://vibe-check.thatcanadian.dev/api/v1/reference';
 const DEFAULT_SCOPES: ApiScope[] = [
   'reviews:create',
   'reviews:read',
@@ -704,7 +705,7 @@ export function ApiAccessPanel() {
                 buttonVariants({ size: 'lg' }),
                 'mt-2 h-auto w-full justify-between gap-4 whitespace-normal px-4 py-3 sm:w-fit'
               )}
-              href={`${baseUrl}/docs`}
+              href={PARTNER_REFERENCE_URL}
               target="_blank"
               rel="noreferrer"
             >

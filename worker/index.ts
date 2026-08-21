@@ -21,7 +21,19 @@ type OptionalSecrets = Env & {
 
 const BACKEND_SLOTS = ["primary-blue", "primary-green", "primary-v25"] as const;
 const BACKEND_SHARD_HEADER = "x-vibe-backend-shard";
+const CANONICAL_APP_ORIGIN = "https://vibe-check.thatcanadian.dev";
 const MAX_BACKEND_SHARDS = 50;
+
+function isPartnerDocumentationPath(pathname: string): boolean {
+  return pathname === "/api/v1/docs"
+    || pathname === "/api/v1/docs/"
+    || pathname === "/api/v1/reference"
+    || pathname === "/api/v1/reference/"
+    || pathname === "/developers/api"
+    || pathname === "/developers/api/"
+    || pathname === "/developers/reference"
+    || pathname === "/developers/reference/";
+}
 
 function backendSlot(env: Env): string {
   return env.BACKEND_SLOT || "primary-v25";
@@ -290,7 +302,14 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/v1/docs" || url.pathname === "/api/v1/docs/") {
+    if (isPartnerDocumentationPath(url.pathname) && url.hostname.endsWith(".workers.dev")) {
+      return Response.redirect(
+        new URL(`${url.pathname}${url.search}`, CANONICAL_APP_ORIGIN).toString(),
+        308,
+      );
+    }
+
+    if (isPartnerDocumentationPath(url.pathname) && url.pathname.startsWith("/api/")) {
       return env.ASSETS.fetch(request);
     }
 

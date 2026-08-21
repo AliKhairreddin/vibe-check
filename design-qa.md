@@ -1,47 +1,49 @@
-# Design QA: API documentation CTA
+# API Reference Design QA
 
-- Source visual truth: conversation attachment, user-provided Dia screenshot of `/settings` at 1315 × 768 px.
-- Implementation screenshots:
-  - `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/design-qa-api-docs-cta-desktop.png`
-  - `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/design-qa-api-docs-cta-mobile.png`
-- Viewports: desktop 1315 × 768 CSS px; mobile 390 × 844 CSS px.
-- Pixel density: source and implementation were inspected at their native captured dimensions; no density normalization was required.
-- State: light theme, admin settings unlocked, API access tab selected, integration details visible. Local API data was mocked for visual verification only.
+## Evidence
 
-## Full-view comparison evidence
-
-The source showed the documentation destination as a small underlined text link directly below the base URL. The implementation preserves the card, typography, spacing system, base URL, curl example, and surrounding runtime card while intentionally promoting that destination to a high-contrast primary action. At desktop width the action remains compact and left-aligned; at mobile width it fills the available card width without overflow.
-
-## Focused region comparison evidence
-
-A focused comparison was required because the reported issue was isolated to the link between the base URL and the curl example. The revised action adds a clear two-line hierarchy, an external-link icon, and a 78 px mobile tap target. Its label and supporting text remain readable at 390 px, and the curl block stays visually separate below it.
-
-## Required fidelity surfaces
-
-- Fonts and typography: existing Geist family, weights, line heights, and hierarchy are preserved. The CTA label is semibold and its supporting line uses the existing small-text scale.
-- Spacing and layout rhythm: existing card gaps and radii are preserved. The CTA uses the existing rounded control language and is responsive (`w-full` on narrow screens, content width at `sm` and above).
-- Colors and visual tokens: the CTA uses the existing `primary`, `primary-foreground`, `ring`, and hover tokens, so light/dark theme behavior stays aligned with the app.
-- Image quality and asset fidelity: no raster imagery is present or changed. The external-link cue uses the project’s existing icon library.
-- Copy and content: the destination is now labeled “Open interactive API docs,” with “Explore endpoints, schemas, and request examples.” explaining what users will find.
+- Source visual truth: the production shadcn developer guide at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1/docs`, captured in `design-qa-source.png`. The user-supplied Swagger screenshot establishes the route and the experience being replaced; it is intentionally not the visual style to reproduce.
+- Implementation: the local interactive reference at `http://127.0.0.1:5173/developers/reference`, captured in `design-qa-implementation.png`.
+- Combined comparison: `design-qa-comparison.jpg` (source on the left, implementation on the right).
+- Viewport: 1280 × 720 CSS px, light theme, device scale factor 1.
+- Captured pixels: source 1265 × 712; implementation 1265 × 712. Both were captured through the same in-app browser at the same viewport, so no density normalization was required.
+- State: guide at its initial top-of-page state; reference at its initial unauthorized state, with the live creative scan endpoint open by default below the fold.
 
 ## Findings
 
-No actionable P0, P1, or P2 issues remain.
+- No actionable P0, P1, or P2 differences.
+- Fonts and typography: both surfaces use the existing Geist project font, matching heading weights, compact control text, code typography, and muted explanatory copy. The reference uses a deliberately smaller hero than the guide to preserve room for the API-key control.
+- Spacing and layout rhythm: shell geometry, card radii, borders, shadows, gutters, button heights, and section spacing match the existing application. The denser two-column reference layout is an intentional functional adaptation for endpoint navigation.
+- Colors and visual tokens: the implementation uses the same project background, card, muted, border, primary, and semantic status tokens. Method colors are restrained and remain readable in light and dark themes.
+- Image and asset fidelity: neither source nor implementation requires raster imagery. Existing project icons are used consistently; there are no placeholder illustrations, custom SVG approximations, or low-quality assets.
+- Copy and content: labels are human-readable rather than generated operation names. The reference clearly explains production behavior, ownership, permissions, key handling, hashing, result artifacts, and destructive actions.
+- Responsiveness: the reference was inspected at 390 × 844 CSS px. The app shell switches to its mobile header, hero/actions stack, endpoint cards remain readable, file and text inputs use full width, and the document reported no horizontal overflow.
+- Accessibility and interactions: expandable endpoint headers expose `aria-expanded`; fields have labels; required fields are explicit; API-key visibility has an accessible label; disabled request controls explain why. Expand/collapse, API-key reveal/hide, optional-field expansion, cURL copy feedback, safe GET response rendering, and clear/reset behavior were exercised.
+- Browser console: no warnings or errors were reported for the rendered reference.
 
-## Interaction and accessibility checks
+## Full-view comparison evidence
 
-- Link exposes an accessible name containing both the action and supporting description.
-- Link retains `target="_blank"` and `rel="noreferrer"`; activation opened the expected `/api/v1/docs` URL in a new tab.
-- Visible hover and keyboard focus styles are defined with the app’s existing color and ring tokens.
-- Desktop and mobile layouts were browser-rendered and inspected.
-- Browser console errors: none.
+`design-qa-comparison.jpg` shows that the new reference inherits the same sidebar, content canvas, Geist hierarchy, monochrome shadcn controls, soft card borders, and restrained accent treatment as the developer guide. The reference intentionally replaces the guide’s three-step education cards with a sticky endpoint index and compact expandable request cards.
+
+## Focused region comparison evidence
+
+A separate crop was not necessary because the matched 1265 × 712 captures keep the hero, navigation, API-key card, group navigation, and first endpoint cards legible. The live creative request card was additionally inspected in the browser at the mobile breakpoint, including its required file/ad-ID controls and optional-field expansion.
 
 ## Comparison history
 
-- Pass 1: no actionable P0, P1, or P2 visual differences were found after the intentional affordance change; no remediation iteration was required.
+- Iteration 1: no P0/P1/P2 visual or responsive findings. No visual fixes were required after the matched comparison.
+
+## Implementation checklist
+
+- [x] Replace stock Swagger styling at the exact `/api/v1/reference` route.
+- [x] Preserve the existing Vibe Check shadcn design system.
+- [x] Group and explain all 19 partner API operations.
+- [x] Support in-memory authorization, request fields, files, cURL, live requests, responses, and binary downloads.
+- [x] Confirm desktop and mobile responsiveness with no horizontal overflow.
+- [x] Confirm browser console health and primary interactions.
 
 ## Follow-up polish
 
-None required for this scoped change.
+- No blocking polish remains. A future iteration could add language tabs for generated SDK examples without changing the current request workflow.
 
 final result: passed

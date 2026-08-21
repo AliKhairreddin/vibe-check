@@ -174,7 +174,7 @@ portal.
 
 ## API Overview
 
-The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1`. The dedicated Worker hostname avoids browser-only edge challenges on the application domain. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md), the deployed shadcn guide at `/api/v1/docs`, or the interactive reference at `/api/v1/reference`.
+The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1`. The dedicated Worker hostname avoids browser-only edge challenges on the application domain. Human-facing documentation uses the branded domain: the shadcn guide is at `https://vibe-check.thatcanadian.dev/api/v1/docs` and the interactive reference is at `https://vibe-check.thatcanadian.dev/api/v1/reference`. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) for the full integration flow.
 
 | Endpoint | Purpose |
 | --- | --- |

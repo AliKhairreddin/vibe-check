@@ -103,6 +103,7 @@ import { DriveBrowser } from '@/components/drive-browser';
 import { AdminAccessGate } from '@/components/admin-access-gate';
 import { ApiAccessPanel } from '@/components/api-access-panel';
 import { ApiDocsPage } from '@/components/api-docs-page';
+import { ApiReferencePage } from '@/components/api-reference-page';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
 import { LiveScansPage } from '@/components/live-scans-page';
@@ -285,7 +286,10 @@ function AppShell() {
 
 function AppContent() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const isWideLayout = pathname.startsWith('/batches/') || pathname === '/history';
+  const isWideLayout = pathname.startsWith('/batches/')
+    || pathname === '/history'
+    || pathname === '/api/v1/reference'
+    || pathname === '/developers/reference';
 
   return (
     <div
@@ -3383,6 +3387,16 @@ const developerApiDocsRoute = createRoute({
   path: '/developers/api',
   component: ApiDocsPage,
 });
+const apiReferenceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/api/v1/reference',
+  component: ApiReferencePage,
+});
+const developerApiReferenceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/developers/reference',
+  component: ApiReferencePage,
+});
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -3396,6 +3410,8 @@ const router = createRouter({
     automationsRoute,
     apiDocsRoute,
     developerApiDocsRoute,
+    apiReferenceRoute,
+    developerApiReferenceRoute,
     batchRoute,
     progressRoute,
     reportRoute,

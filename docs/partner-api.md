@@ -10,7 +10,13 @@ Production base URL:
 https://vibe-check.ali-kheireddin1.workers.dev/api/v1
 ```
 
-The shadcn developer guide is available at `/api/v1/docs`, the interactive request console is at `/api/v1/reference`, and the machine-readable schema is at `/api/v1/openapi.json`.
+Human-facing documentation uses the branded application domain:
+
+- Developer guide: `https://vibe-check.thatcanadian.dev/api/v1/docs`
+- Interactive request console: `https://vibe-check.thatcanadian.dev/api/v1/reference`
+- Machine-readable schema: `https://vibe-check.ali-kheireddin1.workers.dev/api/v1/openapi.json`
+
+The dedicated Worker hostname remains the server-to-server base because the application domain can apply browser-oriented Cloudflare challenges to non-browser clients.
 
 An administrator creates an account in **Settings → API access**, chooses offer access and limits, and issues one or more API keys. The full key is shown once. Store it only in the integrating service's secret manager and send it on every request:
 
