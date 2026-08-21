@@ -17,10 +17,10 @@
   },
   "devDependencies": {
     "@cloudflare/containers": "latest",
-    "@cloudflare/workers-types": "^4.20260702.1",
+    "@cloudflare/workers-types": "^5.20260821.1",
     "@types/node": "^26.1.0",
     "convex": "^1.42.1",
     "typescript": "5.9.3",
-    "wrangler": "^4.107.0"
+    "wrangler": "^4.125.0"
   }
 }

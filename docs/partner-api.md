@@ -10,7 +10,7 @@ Production base URL:
 https://vibe-check.ali-kheireddin1.workers.dev/api/v1
 ```
 
-Interactive V1-only API documentation is available at `/api/v1/docs`; its machine-readable schema is at `/api/v1/openapi.json`.
+The shadcn developer guide is available at `/api/v1/docs`, the interactive request console is at `/api/v1/reference`, and the machine-readable schema is at `/api/v1/openapi.json`.
 
 An administrator creates an account in **Settings → API access**, chooses offer access and limits, and issues one or more API keys. The full key is shown once. Store it only in the integrating service's secret manager and send it on every request:
 
@@ -27,9 +27,50 @@ Keys are hashed before storage and can be independently scoped, expired, and rev
 | `history:read` | Browse the account's review history |
 | `evidence:read` | Read transcripts, OCR, visual observations, thumbnails, and evidence frames |
 | `reports:download` | Download JSON and offer-specific PDF reports |
+| `scans:write` | Upload live ad media, calculate fingerprints, and create reviews when content changes |
+| `scans:read` | Read the account's current ad fingerprints and observation history |
 | `reviews:delete` | Permanently delete owned terminal reviews |
 
 The admin account can use **Unlimited monthly reviews** and **Unlimited queued submissions**. These remove per-account admission quotas; they do not remove file-size limits or the platform's bounded worker concurrency.
+
+## LemmonMaxx live-creative scans
+
+LemmonMaxx should download the media file that Meta is currently serving for an ad and send that file to `POST /scans/creative`. The stable `ad_id` must be Meta's ad ID or another immutable LemmonMaxx identifier—not the creative name.
+
+```bash
+curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/scans/creative' \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'X-Vibe-Ad-Id: 23851234567890123' \
+  -F 'creative=@current-ad-1.mp4' \
+  -F 'ad_id=23851234567890123' \
+  -F 'creative_name=Ad 1' \
+  -F 'campaign_id=23850000000000000' \
+  -F 'ad_set_id=23851111111111111' \
+  -F 'ad_copy=The primary text currently running on Meta' \
+  -F 'headline=The current headline' \
+  -F 'call_to_action=LEARN_MORE' \
+  -F 'destination_url=https://example.com/landing-page'
+```
+
+`X-Vibe-Ad-Id` must exactly match the `ad_id` form field. The edge uses it to spread different ads across the configured backend shards while keeping repeated scans of one ad on a stable shard.
+
+Vibe Check streams the upload to temporary storage while calculating SHA-256 directly from the exact media bytes. This hash step does not run OCR, transcription, vision, or an LLM. A second hash covers the ad copy, headline, description, call to action, destination URL, review options, custom context, applicable offer-policy versions, and calibration snapshot.
+
+The two hashes are combined and compared atomically with the last observation for the same API partner and `ad_id`:
+
+- HTTP `202` with `review_created: true` means the ad is new, its media changed, a review field or policy changed, or a failed review needs a retry. The normal Vibe Check pipeline is queued.
+- HTTP `200` with `review_created: false` and `change_status: unchanged` means the content is unchanged. The existing review is returned and no AI pipeline runs.
+- Every accepted request records a tenant-owned observation, including unchanged scans, so LemmonMaxx has an audit trail. Observation history follows the partner's configured retention window; the current state for each ad remains available.
+
+The response always includes `media_sha256`, `fields_sha256`, `content_fingerprint`, `observation_id`, `review_id`, `status_url`, and `result_url`. Possible `change_status` values are `new`, `unchanged`, `media_changed`, `fields_changed`, `media_and_fields_changed`, and `retry`.
+
+Read current and historical state with:
+
+- `GET /scans/ads?limit=50&cursor=...`
+- `GET /scans/ads/{ad_id}`
+- `GET /scans/ads/{ad_id}/observations?limit=50&cursor=...`
+
+All comparisons and history are isolated by API partner. A different partner cannot read, reuse, or infer another partner's ad or review. Exact-byte hashing is deliberately conservative: if Meta re-encodes an otherwise similar video, the bytes change and Vibe Check runs a new review rather than risking a missed replacement.
 
 ## Submit and read a review
 

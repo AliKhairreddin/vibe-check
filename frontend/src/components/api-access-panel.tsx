@@ -55,6 +55,8 @@ const DEFAULT_SCOPES: ApiScope[] = [
   'history:read',
   'evidence:read',
   'reports:download',
+  'scans:write',
+  'scans:read',
 ];
 const SCOPE_LABELS: Record<ApiScope, { label: string; description: string }> = {
   'reviews:create': { label: 'Create reviews', description: 'Upload creatives and submit ad copy.' },
@@ -62,6 +64,8 @@ const SCOPE_LABELS: Record<ApiScope, { label: string; description: string }> = {
   'history:read': { label: 'List history', description: 'Browse this partner’s previous reviews.' },
   'evidence:read': { label: 'Read evidence', description: 'Access transcripts, OCR, observations, and frames.' },
   'reports:download': { label: 'Download reports', description: 'Download report JSON and PDFs.' },
+  'scans:write': { label: 'Submit live scans', description: 'Hash observed ad media and queue reviews only when content changes.' },
+  'scans:read': { label: 'Read live scans', description: 'Read this partner’s current ad fingerprints and observation history.' },
   'reviews:delete': { label: 'Delete reviews', description: 'Permanently remove owned terminal reviews.' },
 };
 

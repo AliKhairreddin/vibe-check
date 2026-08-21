@@ -39,6 +39,8 @@ def api_principal(
             'reports:download',
             'reviews:create',
             'reviews:read',
+            'scans:read',
+            'scans:write',
         }),
         allowed_offer_ids=(),
         allow_custom_policy=True,
@@ -187,6 +189,7 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
     schema = response.json()
     assert schema['components']['securitySchemes']['BearerAuth']['scheme'] == 'bearer'
     assert '/api/v1/reviews' in schema['paths']
+    assert '/api/v1/scans/creative' in schema['paths']
     assert '/api/reviews' not in schema['paths']
     assert all(path.startswith('/api/v1') for path in schema['paths'])
 
@@ -308,3 +311,199 @@ async def test_api_key_scope_is_enforced(monkeypatch):
 
     assert response.status_code == 403
     assert 'history:read' in response.json()['detail']
+
+
+@pytest.mark.anyio
+async def test_live_scan_hashes_uploaded_bytes_and_review_fields(tmp_path, monkeypatch):
+    principal = api_principal()
+    profile = OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Use qualified, supportable claims.',
+        is_default=True,
+        version=3,
+    )
+    claims = []
+
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr('app.main.resolve_review_offer_snapshot', lambda: ([profile], []))
+
+    def fake_claim(_principal, **kwargs):
+        claims.append(kwargs)
+        return {
+            'change_status': 'new' if len(claims) == 1 else 'fields_changed',
+            'content_fingerprint': kwargs['content_fingerprint'],
+            'created': True,
+            'fields_sha256': kwargs['fields_sha256'],
+            'media_sha256': kwargs['media_sha256'],
+            'observation_id': kwargs['observation_id'],
+            'observed_at': 1_787_328_000_000 + len(claims),
+            'previous_content_fingerprint': None,
+            'review_id': kwargs['job_id'],
+        }
+
+    async def fake_enqueue(job_id, _media_path, _media_kind, meta, file_name, file_size=None):
+        return JobRecord(
+            job_id=job_id,
+            file_name=file_name,
+            file_size=file_size,
+            has_ad_copy=meta.has_ad_copy,
+            offer_ids=['acp'],
+            primary_offer_id='acp',
+        )
+
+    monkeypatch.setattr('app.main.claim_api_scan_review', fake_claim)
+    monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
+    media = b'the exact bytes currently served by Meta'
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        mismatched_route_key = await client.post(
+            '/api/v1/scans/creative',
+            headers={
+                'authorization': 'Bearer vc_live_test-key',
+                'x-vibe-ad-id': 'different-ad',
+            },
+            files={'creative': ('ad-one.mp4', media, 'video/mp4')},
+            data={'ad_id': '23851234567890123'},
+        )
+        first = await client.post(
+            '/api/v1/scans/creative',
+            headers={
+                'authorization': 'Bearer vc_live_test-key',
+                'x-vibe-ad-id': '23851234567890123',
+            },
+            files={'creative': ('ad-one.mp4', media, 'video/mp4')},
+            data={'ad_id': '23851234567890123', 'headline': 'First headline'},
+        )
+        changed_copy = await client.post(
+            '/api/v1/scans/creative',
+            headers={
+                'authorization': 'Bearer vc_live_test-key',
+                'x-vibe-ad-id': '23851234567890123',
+            },
+            files={'creative': ('ad-one.mp4', media, 'video/mp4')},
+            data={'ad_id': '23851234567890123', 'headline': 'Changed headline'},
+        )
+
+    expected_media_hash = hashlib.sha256(media).hexdigest()
+    assert mismatched_route_key.status_code == 400
+    assert 'must exactly match' in mismatched_route_key.json()['detail']
+    assert first.status_code == 202
+    assert changed_copy.status_code == 202
+    assert first.json()['media_sha256'] == expected_media_hash
+    assert claims[0]['media_sha256'] == claims[1]['media_sha256'] == expected_media_hash
+    assert claims[0]['fields_sha256'] != claims[1]['fields_sha256']
+    assert claims[0]['content_fingerprint'] != claims[1]['content_fingerprint']
+    assert claims[0]['external_ad_id'] == '23851234567890123'
+
+
+@pytest.mark.anyio
+async def test_unchanged_live_scan_reuses_owned_review_without_queueing(tmp_path, monkeypatch):
+    principal = api_principal()
+    profile = OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Use qualified, supportable claims.',
+        is_default=True,
+    )
+    queued = []
+    existing_review_id = '4' * 32
+
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr('app.main.resolve_review_offer_snapshot', lambda: ([profile], []))
+
+    def fake_claim(_principal, **kwargs):
+        return {
+            'change_status': 'unchanged',
+            'content_fingerprint': kwargs['content_fingerprint'],
+            'created': False,
+            'fields_sha256': kwargs['fields_sha256'],
+            'media_sha256': kwargs['media_sha256'],
+            'observation_id': kwargs['observation_id'],
+            'observed_at': 1_787_328_000_000,
+            'previous_content_fingerprint': kwargs['content_fingerprint'],
+            'review_id': existing_review_id,
+        }
+
+    async def fake_enqueue(*args, **kwargs):
+        queued.append((args, kwargs))
+        raise AssertionError('Unchanged scans must not enter the review pipeline')
+
+    monkeypatch.setattr('app.main.claim_api_scan_review', fake_claim)
+    monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
+    monkeypatch.setattr(
+        'app.main.get_api_review',
+        lambda _principal, _job_id: {
+            'review_id': existing_review_id,
+            'status': 'complete',
+            'report_ready': True,
+        },
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response = await client.post(
+            '/api/v1/scans/creative',
+            headers={
+                'authorization': 'Bearer vc_live_test-key',
+                'x-vibe-ad-id': '23851234567890123',
+            },
+            files={'creative': ('ad-one.mp4', b'unchanged-media', 'video/mp4')},
+            data={'ad_id': '23851234567890123', 'headline': 'Same headline'},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload['change_status'] == 'unchanged'
+    assert payload['changed'] is False
+    assert payload['review_created'] is False
+    assert payload['review_id'] == existing_review_id
+    assert payload['report_ready'] is True
+    assert queued == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.anyio
+async def test_scan_history_is_tenant_scoped(monkeypatch):
+    first = api_principal('partner_' + '1' * 32)
+    second = api_principal('partner_' + '2' * 32)
+
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr(
+        'app.main.authenticate_api_token',
+        lambda token: first if token == 'vc_live_first-token' else second,
+    )
+    monkeypatch.setattr(
+        'app.main.get_api_scan_ad',
+        lambda principal, _ad_id: ({
+            'ad_id': 'ad-1',
+            'current_review_id': '5' * 32,
+            'partner': principal.partner_id,
+        } if principal.partner_id == first.partner_id else None),
+    )
+    monkeypatch.setattr(
+        'app.main.get_api_review',
+        lambda principal, job_id: ({
+            'review_id': job_id,
+            'status': 'complete',
+            'report_ready': True,
+        } if principal.partner_id == first.partner_id else None),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        owned = await client.get(
+            '/api/v1/scans/ads/ad-1',
+            headers={'authorization': 'Bearer vc_live_first-token'},
+        )
+        hidden = await client.get(
+            '/api/v1/scans/ads/ad-1',
+            headers={'authorization': 'Bearer vc_live_second-token'},
+        )
+
+    assert owned.status_code == 200
+    assert hidden.status_code == 404

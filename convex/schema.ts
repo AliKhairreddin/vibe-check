@@ -386,6 +386,58 @@ export default defineSchema({
     .index("by_partner_id_and_idempotency_key", ["partnerId", "idempotencyKey"])
     .index("by_partner_id_and_status_and_created_at", ["partnerId", "status", "createdAt"])
     .index("by_status_and_updated_at", ["status", "updatedAt"]),
+  apiScanAds: defineTable({
+    accountId: v.optional(v.string()),
+    accountName: v.optional(v.string()),
+    adSetId: v.optional(v.string()),
+    adSetName: v.optional(v.string()),
+    apiKeyId: v.string(),
+    campaignId: v.optional(v.string()),
+    campaignName: v.optional(v.string()),
+    contentFingerprint: v.string(),
+    creativeName: v.optional(v.string()),
+    currentReviewId: v.string(),
+    externalAdId: v.string(),
+    fieldsSha256: v.string(),
+    firstObservedAt: v.number(),
+    lastChangedAt: v.number(),
+    lastObservedAt: v.number(),
+    mediaSha256: v.string(),
+    partnerId: v.string(),
+    scanCount: v.number(),
+  })
+    .index("by_partner_id_and_external_ad_id", ["partnerId", "externalAdId"])
+    .index("by_partner_id_and_last_observed_at", ["partnerId", "lastObservedAt"]),
+  apiScanObservations: defineTable({
+    apiKeyId: v.string(),
+    changeStatus: v.union(
+      v.literal("new"),
+      v.literal("unchanged"),
+      v.literal("media_changed"),
+      v.literal("fields_changed"),
+      v.literal("media_and_fields_changed"),
+      v.literal("retry")
+    ),
+    contentFingerprint: v.string(),
+    externalAdId: v.string(),
+    fieldsSha256: v.string(),
+    mediaSha256: v.string(),
+    observationId: v.string(),
+    observedAt: v.number(),
+    expiresAt: v.number(),
+    partnerId: v.string(),
+    previousContentFingerprint: v.optional(v.string()),
+    reviewCreated: v.boolean(),
+    reviewId: v.string(),
+  })
+    .index("by_observation_id", ["observationId"])
+    .index("by_expires_at", ["expiresAt"])
+    .index("by_partner_id_and_observed_at", ["partnerId", "observedAt"])
+    .index("by_partner_id_and_external_ad_id_and_observed_at", [
+      "partnerId",
+      "externalAdId",
+      "observedAt",
+    ]),
   apiMonthlyUsage: defineTable({
     createdAt: v.number(),
     monthKey: v.string(),

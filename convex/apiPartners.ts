@@ -10,6 +10,8 @@ const API_SCOPES = new Set([
   "reviews:create",
   "reviews:delete",
   "reviews:read",
+  "scans:read",
+  "scans:write",
 ]);
 const WEBHOOK_LEASE_MS = 2 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 5;
@@ -127,6 +129,43 @@ function publicReview(
     status: deleted ? "deleted" : review?.status ?? link.status,
     terminal_at: link.terminalAt ?? null,
     updated_at: Math.max(link.updatedAt, review?.updatedAt ?? 0),
+  };
+}
+
+function publicScanAd(scan: Doc<"apiScanAds">) {
+  return {
+    account_id: scan.accountId ?? null,
+    account_name: scan.accountName ?? null,
+    ad_id: scan.externalAdId,
+    ad_set_id: scan.adSetId ?? null,
+    ad_set_name: scan.adSetName ?? null,
+    campaign_id: scan.campaignId ?? null,
+    campaign_name: scan.campaignName ?? null,
+    content_fingerprint: scan.contentFingerprint,
+    creative_name: scan.creativeName ?? null,
+    current_review_id: scan.currentReviewId,
+    fields_sha256: scan.fieldsSha256,
+    first_observed_at: scan.firstObservedAt,
+    last_changed_at: scan.lastChangedAt,
+    last_observed_at: scan.lastObservedAt,
+    media_sha256: scan.mediaSha256,
+    scan_count: scan.scanCount,
+  };
+}
+
+function publicScanObservation(observation: Doc<"apiScanObservations">) {
+  return {
+    ad_id: observation.externalAdId,
+    change_status: observation.changeStatus,
+    content_fingerprint: observation.contentFingerprint,
+    fields_sha256: observation.fieldsSha256,
+    media_sha256: observation.mediaSha256,
+    observation_id: observation.observationId,
+    observed_at: observation.observedAt,
+    expires_at: observation.expiresAt,
+    previous_content_fingerprint: observation.previousContentFingerprint ?? null,
+    review_created: observation.reviewCreated,
+    review_id: observation.reviewId,
   };
 }
 
@@ -481,6 +520,297 @@ export const claimReview = mutation({
   },
 });
 
+export const claimScanReview = mutation({
+  args: {
+    accountId: v.optional(v.string()),
+    accountName: v.optional(v.string()),
+    adSetId: v.optional(v.string()),
+    adSetName: v.optional(v.string()),
+    apiKeyId: v.string(),
+    campaignId: v.optional(v.string()),
+    campaignName: v.optional(v.string()),
+    contentFingerprint: v.string(),
+    creativeName: v.optional(v.string()),
+    externalAdId: v.string(),
+    fieldsSha256: v.string(),
+    fileName: v.string(),
+    fileSize: v.number(),
+    jobId: v.string(),
+    mediaKind: v.string(),
+    mediaSha256: v.string(),
+    observationId: v.string(),
+    partnerId: v.string(),
+    secret: v.string(),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const partner = await ctx.db
+      .query("apiPartners")
+      .withIndex("by_partner_id", (q) => q.eq("partnerId", args.partnerId))
+      .unique();
+    const key = await ctx.db
+      .query("apiKeys")
+      .withIndex("by_key_id", (q) => q.eq("keyId", args.apiKeyId))
+      .unique();
+    if (!partner || partner.status !== "active" || !key || key.status !== "active") {
+      throw new Error("API credentials are no longer active");
+    }
+    if (key.partnerId !== partner.partnerId || !key.scopes.includes("scans:write")) {
+      throw new Error("API key is not permitted to submit creative scans");
+    }
+
+    const current = await ctx.db
+      .query("apiScanAds")
+      .withIndex("by_partner_id_and_external_ad_id", (q) =>
+        q.eq("partnerId", partner.partnerId).eq("externalAdId", args.externalAdId)
+      )
+      .unique();
+    const now = Date.now();
+    const previousContentFingerprint = current?.contentFingerprint;
+    let reusable = false;
+    if (current?.contentFingerprint === args.contentFingerprint) {
+      const [link, review] = await Promise.all([
+        ctx.db
+          .query("apiReviewLinks")
+          .withIndex("by_job_id", (q) => q.eq("jobId", current.currentReviewId))
+          .unique(),
+        ctx.db
+          .query("reviews")
+          .withIndex("by_job_id", (q) => q.eq("jobId", current.currentReviewId))
+          .unique(),
+      ]);
+      reusable = Boolean(
+        link
+        && link.partnerId === partner.partnerId
+        && (link.status === "active" || link.status === "complete")
+        && review?.deletedAt === undefined
+        && review?.status !== "failed"
+      );
+    }
+
+    if (current && reusable) {
+      await ctx.db.insert("apiScanObservations", {
+        apiKeyId: key.keyId,
+        changeStatus: "unchanged",
+        contentFingerprint: args.contentFingerprint,
+        externalAdId: args.externalAdId,
+        expiresAt: now + partner.retentionDays * 24 * 60 * 60 * 1000,
+        fieldsSha256: args.fieldsSha256,
+        mediaSha256: args.mediaSha256,
+        observationId: args.observationId,
+        observedAt: now,
+        partnerId: partner.partnerId,
+        previousContentFingerprint,
+        reviewCreated: false,
+        reviewId: current.currentReviewId,
+      });
+      await ctx.db.patch(current._id, {
+        accountId: args.accountId,
+        accountName: args.accountName,
+        adSetId: args.adSetId,
+        adSetName: args.adSetName,
+        apiKeyId: key.keyId,
+        campaignId: args.campaignId,
+        campaignName: args.campaignName,
+        creativeName: args.creativeName,
+        lastObservedAt: now,
+        scanCount: current.scanCount + 1,
+      });
+      return {
+        change_status: "unchanged",
+        content_fingerprint: args.contentFingerprint,
+        created: false,
+        fields_sha256: args.fieldsSha256,
+        media_sha256: args.mediaSha256,
+        observation_id: args.observationId,
+        observed_at: now,
+        previous_content_fingerprint: previousContentFingerprint ?? null,
+        review_id: current.currentReviewId,
+      };
+    }
+
+    if (!partner.unlimitedConcurrency) {
+      const active = await ctx.db
+        .query("apiReviewLinks")
+        .withIndex("by_partner_id_and_status_and_created_at", (q) =>
+          q.eq("partnerId", partner.partnerId).eq("status", "active")
+        )
+        .take(partner.concurrentReviewLimit);
+      if (active.length >= partner.concurrentReviewLimit) {
+        throw new Error("Concurrent review limit reached");
+      }
+    }
+    const monthKey = new Date(now).toISOString().slice(0, 7);
+    const usage = await ctx.db
+      .query("apiMonthlyUsage")
+      .withIndex("by_partner_id_and_month_key", (q) =>
+        q.eq("partnerId", partner.partnerId).eq("monthKey", monthKey)
+      )
+      .unique();
+    const reviewsCreated = usage?.reviewsCreated ?? 0;
+    if (!partner.unlimitedReviews && reviewsCreated >= partner.monthlyReviewLimit) {
+      throw new Error("Monthly review limit reached");
+    }
+    const existingJob = await ctx.db
+      .query("apiReviewLinks")
+      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+      .unique();
+    if (existingJob) throw new Error("Review ID already exists");
+
+    let changeStatus:
+      | "new"
+      | "media_changed"
+      | "fields_changed"
+      | "media_and_fields_changed"
+      | "retry";
+    if (!current) changeStatus = "new";
+    else if (current.contentFingerprint === args.contentFingerprint) changeStatus = "retry";
+    else if (current.mediaSha256 !== args.mediaSha256 && current.fieldsSha256 !== args.fieldsSha256) {
+      changeStatus = "media_and_fields_changed";
+    } else if (current.mediaSha256 !== args.mediaSha256) changeStatus = "media_changed";
+    else changeStatus = "fields_changed";
+
+    await ctx.db.insert("apiReviewLinks", {
+      apiKeyId: key.keyId,
+      createdAt: now,
+      externalId: args.externalAdId,
+      fileName: args.fileName,
+      fileSize: args.fileSize,
+      jobId: args.jobId,
+      mediaKind: args.mediaKind,
+      partnerId: partner.partnerId,
+      status: "active",
+      updatedAt: now,
+    });
+    if (usage) {
+      await ctx.db.patch(usage._id, { reviewsCreated: reviewsCreated + 1, updatedAt: now });
+    } else {
+      await ctx.db.insert("apiMonthlyUsage", {
+        createdAt: now,
+        monthKey,
+        partnerId: partner.partnerId,
+        reviewsCreated: 1,
+        updatedAt: now,
+      });
+    }
+    const scanValue = {
+      accountId: args.accountId,
+      accountName: args.accountName,
+      adSetId: args.adSetId,
+      adSetName: args.adSetName,
+      apiKeyId: key.keyId,
+      campaignId: args.campaignId,
+      campaignName: args.campaignName,
+      contentFingerprint: args.contentFingerprint,
+      creativeName: args.creativeName,
+      currentReviewId: args.jobId,
+      externalAdId: args.externalAdId,
+      fieldsSha256: args.fieldsSha256,
+      lastObservedAt: now,
+      mediaSha256: args.mediaSha256,
+      partnerId: partner.partnerId,
+    };
+    if (current) {
+      await ctx.db.patch(current._id, {
+        ...scanValue,
+        lastChangedAt: changeStatus === "retry" ? current.lastChangedAt : now,
+        scanCount: current.scanCount + 1,
+      });
+    } else {
+      await ctx.db.insert("apiScanAds", {
+        ...scanValue,
+        firstObservedAt: now,
+        lastChangedAt: now,
+        scanCount: 1,
+      });
+    }
+    await ctx.db.insert("apiScanObservations", {
+      apiKeyId: key.keyId,
+      changeStatus,
+      contentFingerprint: args.contentFingerprint,
+      externalAdId: args.externalAdId,
+      expiresAt: now + partner.retentionDays * 24 * 60 * 60 * 1000,
+      fieldsSha256: args.fieldsSha256,
+      mediaSha256: args.mediaSha256,
+      observationId: args.observationId,
+      observedAt: now,
+      partnerId: partner.partnerId,
+      previousContentFingerprint,
+      reviewCreated: true,
+      reviewId: args.jobId,
+    });
+    return {
+      change_status: changeStatus,
+      content_fingerprint: args.contentFingerprint,
+      created: true,
+      fields_sha256: args.fieldsSha256,
+      media_sha256: args.mediaSha256,
+      month_key: monthKey,
+      monthly_limit: partner.monthlyReviewLimit,
+      monthly_reviews_created: reviewsCreated + 1,
+      observation_id: args.observationId,
+      observed_at: now,
+      previous_content_fingerprint: previousContentFingerprint ?? null,
+      review_id: args.jobId,
+    };
+  },
+});
+
+export const getScanAd = query({
+  args: { externalAdId: v.string(), partnerId: v.string(), secret: v.string() },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const scan = await ctx.db
+      .query("apiScanAds")
+      .withIndex("by_partner_id_and_external_ad_id", (q) =>
+        q.eq("partnerId", args.partnerId).eq("externalAdId", args.externalAdId)
+      )
+      .unique();
+    return scan ? publicScanAd(scan) : null;
+  },
+});
+
+export const listScanAds = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    partnerId: v.string(),
+    secret: v.string(),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const result = await ctx.db
+      .query("apiScanAds")
+      .withIndex("by_partner_id_and_last_observed_at", (q) => q.eq("partnerId", args.partnerId))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return { ...result, page: result.page.map(publicScanAd) };
+  },
+});
+
+export const listScanObservations = query({
+  args: {
+    externalAdId: v.string(),
+    paginationOpts: paginationOptsValidator,
+    partnerId: v.string(),
+    secret: v.string(),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const result = await ctx.db
+      .query("apiScanObservations")
+      .withIndex("by_partner_id_and_external_ad_id_and_observed_at", (q) =>
+        q.eq("partnerId", args.partnerId).eq("externalAdId", args.externalAdId)
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return { ...result, page: result.page.map(publicScanObservation) };
+  },
+});
+
 export const getReview = query({
   args: { jobId: v.string(), partnerId: v.string(), secret: v.string() },
   returns: v.any(),
@@ -769,7 +1099,7 @@ export const tickState = query({
   returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const [pending, claimed, expiredEvidence] = await Promise.all([
+    const [pending, claimed, expiredEvidence, expiredScanObservations] = await Promise.all([
       ctx.db
         .query("apiWebhookDeliveries")
         .withIndex("by_status_and_next_attempt_at", (q) =>
@@ -786,9 +1116,13 @@ export const tickState = query({
         .query("apiEvidenceBundles")
         .withIndex("by_expires_at", (q) => q.lte("expiresAt", args.now))
         .take(1),
+      ctx.db
+        .query("apiScanObservations")
+        .withIndex("by_expires_at", (q) => q.lte("expiresAt", args.now))
+        .take(1),
     ]);
     return {
-      needs_evidence_cleanup: expiredEvidence.length > 0,
+      needs_evidence_cleanup: expiredEvidence.length > 0 || expiredScanObservations.length > 0,
       needs_webhook_delivery: pending.length > 0 || claimed.length > 0,
     };
   },
@@ -804,6 +1138,14 @@ export const pruneExpiredEvidence = mutation({
       .withIndex("by_expires_at", (q) => q.lte("expiresAt", args.now))
       .take(Math.max(1, Math.min(args.limit, 100)));
     for (const evidence of expired) await ctx.db.delete(evidence._id);
-    return { removed: expired.length };
+    const remaining = Math.max(0, Math.min(args.limit, 100) - expired.length);
+    const expiredScanObservations = remaining > 0
+      ? await ctx.db
+        .query("apiScanObservations")
+        .withIndex("by_expires_at", (q) => q.lte("expiresAt", args.now))
+        .take(remaining)
+      : [];
+    for (const observation of expiredScanObservations) await ctx.db.delete(observation._id);
+    return { removed: expired.length + expiredScanObservations.length };
   },
 });

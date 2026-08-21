@@ -322,6 +322,8 @@ export type ApiScope =
   | 'history:read'
   | 'evidence:read'
   | 'reports:download'
+  | 'scans:write'
+  | 'scans:read'
   | 'reviews:delete';
 
 export type ApiKeyRecord = {

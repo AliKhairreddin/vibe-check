@@ -27,6 +27,8 @@ API_SCOPES = (
     'history:read',
     'evidence:read',
     'reports:download',
+    'scans:write',
+    'scans:read',
     'reviews:delete',
 )
 DEFAULT_API_SCOPES = API_SCOPES[:-1]
@@ -296,6 +298,103 @@ def claim_api_review(
     if not isinstance(value, dict):
         raise RuntimeError('Partner API storage returned an invalid review claim.')
     return value
+
+
+def claim_api_scan_review(
+    principal: ApiPrincipal,
+    *,
+    observation_id: str,
+    job_id: str,
+    external_ad_id: str,
+    media_sha256: str,
+    fields_sha256: str,
+    content_fingerprint: str,
+    media_kind: str,
+    file_name: str,
+    file_size: int,
+    account_id: str = '',
+    account_name: str = '',
+    campaign_id: str = '',
+    campaign_name: str = '',
+    ad_set_id: str = '',
+    ad_set_name: str = '',
+    creative_name: str = '',
+) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        'apiKeyId': principal.api_key_id,
+        'contentFingerprint': content_fingerprint,
+        'externalAdId': external_ad_id,
+        'fieldsSha256': fields_sha256,
+        'fileName': file_name,
+        'fileSize': file_size,
+        'jobId': job_id,
+        'mediaKind': media_kind,
+        'mediaSha256': media_sha256,
+        'observationId': observation_id,
+        'partnerId': principal.partner_id,
+    }
+    optional_fields = {
+        'accountId': account_id,
+        'accountName': account_name,
+        'campaignId': campaign_id,
+        'campaignName': campaign_name,
+        'adSetId': ad_set_id,
+        'adSetName': ad_set_name,
+        'creativeName': creative_name,
+    }
+    args.update({key: value for key, value in optional_fields.items() if value})
+    value = _convex_call('mutation', 'apiPartners:claimScanReview', args)
+    if not isinstance(value, dict):
+        raise RuntimeError('Partner API storage returned an invalid scan claim.')
+    return value
+
+
+def get_api_scan_ad(principal: ApiPrincipal, external_ad_id: str) -> dict[str, Any] | None:
+    value = _convex_call('query', 'apiPartners:getScanAd', {
+        'externalAdId': external_ad_id,
+        'partnerId': principal.partner_id,
+    })
+    return value if isinstance(value, dict) else None
+
+
+def list_api_scan_ads(
+    principal: ApiPrincipal,
+    *,
+    limit: int,
+    cursor: str | None,
+) -> dict[str, Any]:
+    value = _convex_call('query', 'apiPartners:listScanAds', {
+        'paginationOpts': {'cursor': cursor, 'numItems': max(1, min(limit, 100))},
+        'partnerId': principal.partner_id,
+    })
+    if not isinstance(value, dict):
+        raise RuntimeError('Partner API storage returned an invalid scanned-ad page.')
+    return {
+        'data': value.get('page', []),
+        'has_more': not bool(value.get('isDone')),
+        'next_cursor': None if value.get('isDone') else value.get('continueCursor'),
+    }
+
+
+def list_api_scan_observations(
+    principal: ApiPrincipal,
+    *,
+    external_ad_id: str,
+    limit: int,
+    cursor: str | None,
+) -> dict[str, Any]:
+    value = _convex_call('query', 'apiPartners:listScanObservations', {
+        'externalAdId': external_ad_id,
+        'paginationOpts': {'cursor': cursor, 'numItems': max(1, min(limit, 100))},
+        'partnerId': principal.partner_id,
+    })
+    if not isinstance(value, dict):
+        raise RuntimeError('Partner API storage returned an invalid scan-observation page.')
+    return {
+        'data': value.get('page', []),
+        'has_more': not bool(value.get('isDone')),
+        'next_cursor': None if value.get('isDone') else value.get('continueCursor'),
+    }
 
 
 def get_api_review(principal: ApiPrincipal, job_id: str) -> dict[str, Any] | None:

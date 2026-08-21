@@ -89,7 +89,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 176 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, webhook signing, browser API routing, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 180 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, tenant-scoped fingerprint scans, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, webhook signing, browser API routing, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -174,11 +174,14 @@ portal.
 
 ## API Overview
 
-The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1`. The dedicated Worker hostname avoids browser-only edge challenges on the application domain. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) or the deployed V1-only Swagger page at `/api/v1/docs`.
+The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1`. The dedicated Worker hostname avoids browser-only edge challenges on the application domain. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md), the deployed shadcn guide at `/api/v1/docs`, or the interactive reference at `/api/v1/reference`.
 
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/v1/reviews` | Authenticated partner creative or copy-only submission |
+| `POST /api/v1/scans/creative` | Hash currently served ad media and review it only when media, copy, or policy changed |
+| `GET /api/v1/scans/ads/{ad_id}` | Read tenant-owned current fingerprint and linked review state |
+| `GET /api/v1/scans/ads/{ad_id}/observations` | Browse the tenant-owned scan audit trail |
 | `POST /api/v1/uploads` | Start an authenticated resumable creative upload |
 | `GET /api/v1/reviews/{job_id}/result` | Read an owned structured report and artifact links |
 | `GET /api/v1/reviews/{job_id}/evidence` | Read owned transcript, OCR, visual observations, and protected frames |

@@ -3,7 +3,7 @@
   "name": "vibe-check",
   "main": "worker/index.ts",
   "workers_dev": true,
-  "compatibility_date": "2026-07-09",
+  "compatibility_date": "2026-08-21",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./frontend/dist",

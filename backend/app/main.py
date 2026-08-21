@@ -1,10 +1,10 @@
 from __future__ import annotations
-import asyncio, json, logging, os, re, secrets, shutil, uuid
+import asyncio, hashlib, json, logging, os, re, secrets, shutil, uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 import httpx
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -131,14 +131,18 @@ from .review_pipeline.partner_api import (
     PartnerApiUnavailable,
     authenticate_api_token,
     claim_api_review,
+    claim_api_scan_review,
     create_api_partner,
     deliver_pending_api_webhooks,
     finalize_api_review,
     get_api_evidence,
     get_api_review,
+    get_api_scan_ad,
     issue_api_key,
     list_api_partners,
     list_api_reviews,
+    list_api_scan_ads,
+    list_api_scan_observations,
     mark_api_review_deleted,
     prune_expired_api_evidence,
     reconcile_terminal_api_reviews,
@@ -906,6 +910,111 @@ def validate_partner_review_text(
             raise HTTPException(413, f'{name} must be {limit:,} characters or fewer.')
 
 
+def normalize_scan_text(value:str)->str:
+    return re.sub(r'\s+', ' ', value).strip()
+
+
+def validate_scan_field(name:str, value:str, *, maximum:int, required:bool=False)->str:
+    normalized=value.strip()
+    if required and not normalized:
+        raise HTTPException(400, f'{name} is required.')
+    if len(normalized) > maximum:
+        raise HTTPException(413, f'{name} must be {maximum:,} characters or fewer.')
+    if any(ord(character) < 32 for character in normalized):
+        raise HTTPException(400, f'{name} cannot contain control characters.')
+    return normalized
+
+
+def scan_ad_copy_context(
+    *,
+    ad_copy:str,
+    headline:str,
+    description:str,
+    call_to_action:str,
+    destination_url:str,
+)->str:
+    fields=[
+        ('Primary text',ad_copy),
+        ('Headline',headline),
+        ('Description',description),
+        ('Call to action',call_to_action),
+        ('Destination URL',destination_url),
+    ]
+    populated=[(label,value.strip()) for label,value in fields if value.strip()]
+    if len(populated) == 1 and populated[0][0] == 'Primary text':
+        return populated[0][1]
+    return '\n\n'.join(f'{label}:\n{value}' for label,value in populated)
+
+
+def scan_review_fingerprints(
+    *,
+    media_sha256:str,
+    meta:ReviewRequestMeta,
+    ad_copy:str,
+    headline:str,
+    description:str,
+    call_to_action:str,
+    destination_url:str,
+)->tuple[str,str]:
+    fields_payload={
+        'schema_version':1,
+        'platform_fields':{
+            'ad_copy':normalize_scan_text(ad_copy),
+            'call_to_action':normalize_scan_text(call_to_action),
+            'description':normalize_scan_text(description),
+            'destination_url':destination_url.strip(),
+            'headline':normalize_scan_text(headline),
+        },
+        'review_context':{
+            'frame_interval_seconds':meta.frame_interval_seconds,
+            'manual_transcript':normalize_scan_text(meta.manual_transcript),
+            'notes':normalize_scan_text(meta.notes),
+            'policy_text':normalize_scan_text(meta.policy_text),
+            'scene_detection':meta.scene_detection,
+        },
+        'offer_profiles':[
+            profile.model_dump(mode='json')
+            for profile in sorted(meta.offer_profiles,key=lambda value:value.offer_id)
+        ],
+        'offer_outcomes':[
+            outcome.model_dump(mode='json')
+            for outcome in sorted(meta.offer_outcomes,key=lambda value:value.offer_id)
+        ],
+    }
+    canonical=json.dumps(
+        fields_payload,
+        ensure_ascii=False,
+        separators=(',',':'),
+        sort_keys=True,
+    ).encode('utf-8')
+    fields_sha256=hashlib.sha256(canonical).hexdigest()
+    content_fingerprint=hashlib.sha256(
+        f'v1:{media_sha256}:{fields_sha256}'.encode('ascii')
+    ).hexdigest()
+    return fields_sha256,content_fingerprint
+
+
+def scan_submission_response(claim:dict, review:dict)->dict:
+    review_id=str(claim['review_id'])
+    return {
+        'ad_id':claim.get('external_ad_id'),
+        'change_status':claim.get('change_status'),
+        'changed':claim.get('change_status') != 'unchanged',
+        'content_fingerprint':claim.get('content_fingerprint'),
+        'fields_sha256':claim.get('fields_sha256'),
+        'media_sha256':claim.get('media_sha256'),
+        'observation_id':claim.get('observation_id'),
+        'observed_at':claim.get('observed_at'),
+        'previous_content_fingerprint':claim.get('previous_content_fingerprint'),
+        'report_ready':bool(review.get('report_ready')),
+        'result_url':f'/api/v1/reviews/{review_id}/result',
+        'review_created':bool(claim.get('created')),
+        'review_id':review_id,
+        'status':review.get('status','queued'),
+        'status_url':f'/api/v1/reviews/{review_id}',
+    }
+
+
 def api_submission_response(record:JobRecord, external_id:str)->dict:
     return {
         'created_at':record.created_at,
@@ -957,6 +1066,7 @@ def partner_api_index():
         'authentication':'Authorization: Bearer <api-key>',
         'base_url':partner_api_base_url(),
         'documentation_url':'/api/v1/docs',
+        'interactive_reference_url':'/api/v1/reference',
         'openapi_url':'/api/v1/openapi.json',
         'max_platform_upload_mb':int(os.getenv('MAX_UPLOAD_MB','400')),
     }
@@ -970,6 +1080,14 @@ def partner_api_docs():
     )
 
 
+@app.get('/api/v1/reference', include_in_schema=False)
+def partner_api_reference():
+    return get_swagger_ui_html(
+        openapi_url='/api/v1/openapi.json',
+        title='Vibe Check Partner API v1 · Interactive reference',
+    )
+
+
 @app.get('/api/v1/openapi.json', include_in_schema=False)
 def partner_api_openapi():
     routes=[
@@ -977,14 +1095,15 @@ def partner_api_openapi():
         for route in app.routes
         if isinstance(route,APIRoute)
         and route.path.startswith('/api/v1')
-        and route.path not in {'/api/v1/docs','/api/v1/openapi.json'}
+        and route.path not in {'/api/v1/docs','/api/v1/reference','/api/v1/openapi.json'}
     ]
     schema=get_openapi(
         title='Vibe Check Partner API',
         version='1.0.0',
         description=(
-            'Server-to-server API for submitting creative reviews and retrieving '
-            'owned status, reports, transcripts, OCR, visual observations, and evidence.'
+            'Server-to-server API for fingerprinting live ad media, reviewing changed '
+            'creatives, and retrieving owned status, reports, transcripts, OCR, visual '
+            'observations, and evidence.'
         ),
         routes=routes,
     )
@@ -1151,6 +1270,203 @@ async def partner_create_review(
         shutil.rmtree(jd,ignore_errors=True)
         if claimed:
             raise HTTPException(503,'The review could not be queued. Retry with the same Idempotency-Key.') from None
+        raise partner_storage_error(exc) from None
+
+
+@app.post('/api/v1/scans/creative', status_code=202)
+async def partner_scan_creative(
+    request:Request,
+    response:Response,
+    x_vibe_ad_id:str=Header(...,alias='X-Vibe-Ad-Id'),
+    creative:UploadFile=File(...),
+    ad_id:str=Form(...),
+    account_id:str=Form(''),
+    account_name:str=Form(''),
+    campaign_id:str=Form(''),
+    campaign_name:str=Form(''),
+    ad_set_id:str=Form(''),
+    ad_set_name:str=Form(''),
+    creative_name:str=Form(''),
+    ad_copy:str=Form(''),
+    headline:str=Form(''),
+    description:str=Form(''),
+    call_to_action:str=Form(''),
+    destination_url:str=Form(''),
+    policy_text:str=Form(''),
+    notes:str=Form(''),
+    manual_transcript:str=Form(''),
+    frame_interval_seconds:float=Form(1.0),
+    scene_detection:bool=Form(False),
+):
+    principal=await require_api_principal(request,'scans:write')
+    ad_id=validate_scan_field('ad_id',ad_id,maximum=200,required=True)
+    routed_ad_id=validate_scan_field('X-Vibe-Ad-Id',x_vibe_ad_id,maximum=200,required=True)
+    if not secrets.compare_digest(routed_ad_id,ad_id):
+        raise HTTPException(400,'X-Vibe-Ad-Id must exactly match the ad_id form field.')
+    account_id=validate_scan_field('account_id',account_id,maximum=200)
+    account_name=validate_scan_field('account_name',account_name,maximum=300)
+    campaign_id=validate_scan_field('campaign_id',campaign_id,maximum=200)
+    campaign_name=validate_scan_field('campaign_name',campaign_name,maximum=500)
+    ad_set_id=validate_scan_field('ad_set_id',ad_set_id,maximum=200)
+    ad_set_name=validate_scan_field('ad_set_name',ad_set_name,maximum=500)
+    creative_name=validate_scan_field('creative_name',creative_name,maximum=500)
+    headline=validate_scan_field('headline',headline,maximum=5_000)
+    description=validate_scan_field('description',description,maximum=10_000)
+    call_to_action=validate_scan_field('call_to_action',call_to_action,maximum=500)
+    destination_url=validate_scan_field('destination_url',destination_url,maximum=4_000)
+    structured_ad_copy=scan_ad_copy_context(
+        ad_copy=ad_copy,
+        headline=headline,
+        description=description,
+        call_to_action=call_to_action,
+        destination_url=destination_url,
+    )
+    validate_partner_review_text(structured_ad_copy,policy_text,notes,manual_transcript)
+    meta=partner_review_meta(
+        principal,
+        ad_copy=structured_ad_copy,
+        policy_text=policy_text,
+        notes=notes,
+        manual_transcript=manual_transcript,
+        frame_interval_seconds=frame_interval_seconds,
+        scene_detection=scene_detection,
+        external_id=ad_id,
+    )
+    file_name=Path(creative.filename or 'creative').name or 'creative'
+    try:
+        media_kind=detect_media_kind(file_name,creative.content_type)
+    except ValueError as exc:
+        raise HTTPException(415,str(exc)) from None
+    max_bytes=min(principal.max_upload_mb,int(os.getenv('MAX_UPLOAD_MB','400')))*1024*1024
+    job_id=uuid.uuid4().hex
+    observation_id=f'obs_{uuid.uuid4().hex}'
+    jd=job_dir(job_id)
+    media_path=jd/file_name
+    media_hash=hashlib.sha256()
+    size=0
+    claimed=False
+    try:
+        with media_path.open('wb') as output:
+            while chunk:=await creative.read(1024*1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413,f'Max upload for this API partner is {max_bytes // (1024*1024)} MB.')
+                media_hash.update(chunk)
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(400,'The creative file is empty.')
+        media_sha256=media_hash.hexdigest()
+        fields_sha256,content_fingerprint=scan_review_fingerprints(
+            media_sha256=media_sha256,
+            meta=meta,
+            ad_copy=ad_copy,
+            headline=headline,
+            description=description,
+            call_to_action=call_to_action,
+            destination_url=destination_url,
+        )
+        claim=await asyncio.to_thread(
+            claim_api_scan_review,
+            principal,
+            observation_id=observation_id,
+            job_id=job_id,
+            external_ad_id=ad_id,
+            media_sha256=media_sha256,
+            fields_sha256=fields_sha256,
+            content_fingerprint=content_fingerprint,
+            media_kind=media_kind,
+            file_name=file_name,
+            file_size=size,
+            account_id=account_id,
+            account_name=account_name,
+            campaign_id=campaign_id,
+            campaign_name=campaign_name,
+            ad_set_id=ad_set_id,
+            ad_set_name=ad_set_name,
+            creative_name=creative_name,
+        )
+        claim['external_ad_id']=ad_id
+        if not claim.get('created'):
+            shutil.rmtree(jd,ignore_errors=True)
+            review=await owned_api_review(principal,str(claim['review_id']))
+            response.status_code=200
+            return scan_submission_response(claim,review)
+        claimed=True
+        (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+        record=await enqueue_job(job_id,media_path,media_kind,meta,file_name,file_size=size)
+        return scan_submission_response(claim,api_submission_response(record,ad_id))
+    except HTTPException:
+        shutil.rmtree(jd,ignore_errors=True)
+        raise
+    except Exception as exc:
+        if claimed:
+            await fail_claimed_api_review(
+                job_id,
+                file_name=file_name,
+                file_size=size or None,
+                has_ad_copy=meta.has_ad_copy,
+                has_creative=True,
+                message=f'Scan submission failed: {type(exc).__name__}',
+            )
+        shutil.rmtree(jd,ignore_errors=True)
+        if claimed:
+            raise HTTPException(503,'The changed creative could not be queued. Scan it again to retry.') from None
+        raise partner_storage_error(exc) from None
+
+
+@app.get('/api/v1/scans/ads')
+async def partner_scan_ads(request:Request,limit:int=50,cursor:str|None=None):
+    principal=await require_api_principal(request,'scans:read')
+    try:
+        return await asyncio.to_thread(
+            list_api_scan_ads,
+            principal,
+            limit=limit,
+            cursor=cursor,
+        )
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+@app.get('/api/v1/scans/ads/{ad_id}')
+async def partner_scan_ad(ad_id:str,request:Request):
+    principal=await require_api_principal(request,'scans:read')
+    ad_id=validate_scan_field('ad_id',ad_id,maximum=200,required=True)
+    try:
+        scan=await asyncio.to_thread(get_api_scan_ad,principal,ad_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    if scan is None:
+        raise HTTPException(404,'Scanned ad not found.')
+    review=await owned_api_review(principal,str(scan['current_review_id']))
+    return {
+        **scan,
+        'review':{
+            **review,
+            'result_url':f'/api/v1/reviews/{scan["current_review_id"]}/result',
+            'status_url':f'/api/v1/reviews/{scan["current_review_id"]}',
+        },
+    }
+
+
+@app.get('/api/v1/scans/ads/{ad_id}/observations')
+async def partner_scan_observations(
+    ad_id:str,
+    request:Request,
+    limit:int=50,
+    cursor:str|None=None,
+):
+    principal=await require_api_principal(request,'scans:read')
+    ad_id=validate_scan_field('ad_id',ad_id,maximum=200,required=True)
+    try:
+        return await asyncio.to_thread(
+            list_api_scan_observations,
+            principal,
+            external_ad_id=ad_id,
+            limit=limit,
+            cursor=cursor,
+        )
+    except Exception as exc:
         raise partner_storage_error(exc) from None
 
 

@@ -27,6 +27,7 @@ import {
   CalendarClock,
   ChevronDown,
   CheckCircle2,
+  Code2,
   Download,
   ExternalLink,
   FileImage,
@@ -101,6 +102,7 @@ import { DashboardPage } from '@/components/dashboard';
 import { DriveBrowser } from '@/components/drive-browser';
 import { AdminAccessGate } from '@/components/admin-access-gate';
 import { ApiAccessPanel } from '@/components/api-access-panel';
+import { ApiDocsPage } from '@/components/api-docs-page';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
 import { LiveScansPage } from '@/components/live-scans-page';
@@ -371,6 +373,7 @@ function AppSidebar({
               <ShellLink to="/history" label="History" icon={<History />} />
               <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
               <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
+              <ShellLink to="/developers/api" label="API docs" icon={<Code2 />} />
               <ShellLink to="/settings" label="Settings" icon={<Settings />} />
             </SidebarMenu>
           </SidebarGroupContent>
@@ -418,7 +421,7 @@ function ShellLink({
 }: {
   icon: React.ReactNode;
   label: string;
-  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/settings';
+  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/developers/api' | '/settings';
 }) {
   const { setOpenMobile } = useSidebar();
 
@@ -3370,6 +3373,16 @@ const automationsRoute = createRoute({
   path: '/automations',
   component: AutomationsRoutePage,
 });
+const apiDocsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/api/v1/docs',
+  component: ApiDocsPage,
+});
+const developerApiDocsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/developers/api',
+  component: ApiDocsPage,
+});
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -3381,6 +3394,8 @@ const router = createRouter({
     historyRoute,
     liveScansRoute,
     automationsRoute,
+    apiDocsRoute,
+    developerApiDocsRoute,
     batchRoute,
     progressRoute,
     reportRoute,

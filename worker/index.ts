@@ -56,6 +56,10 @@ function requestShardKey(request: Request): string {
   if (url.pathname.startsWith("/api/v1/")) {
     const authorization = request.headers.get("authorization")?.trim();
     if (authorization?.toLowerCase().startsWith("bearer ")) {
+      if (url.pathname === "/api/v1/scans/creative") {
+        const adId = request.headers.get("x-vibe-ad-id")?.trim();
+        if (adId) return `scan:${authorization.slice(7, 207)}:${adId.slice(0, 200)}`;
+      }
       // Stable per API key so a resumable upload stays on one container shard.
       return authorization.slice(7, 207);
     }
@@ -285,6 +289,10 @@ export class ReviewBackend extends Container<Env> {
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/v1/docs" || url.pathname === "/api/v1/docs/") {
+      return env.ASSETS.fetch(request);
+    }
 
     if (url.pathname.startsWith("/api/")) {
       const backend = env.REVIEW_BACKEND.getByName(
