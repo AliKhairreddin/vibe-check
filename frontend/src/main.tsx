@@ -24,8 +24,10 @@ import {
 } from '@tanstack/react-router';
 import {
   AlertCircle,
+  BookOpen,
   CalendarClock,
   ChevronDown,
+  Check,
   CheckCircle2,
   Code2,
   Download,
@@ -288,8 +290,7 @@ function AppContent() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isWideLayout = pathname.startsWith('/batches/')
     || pathname === '/history'
-    || pathname === '/api/v1/reference'
-    || pathname === '/developers/reference';
+    || pathname === '/developers/api';
 
   return (
     <div
@@ -2784,59 +2785,104 @@ function BatchPage() {
   );
 }
 
-type AdminSettingsSection = 'api' | 'policies';
+type SettingsView = 'api' | 'policies' | 'runtime';
 
-function AdminSettingsWorkspace() {
-  const [section, setSection] = useState<AdminSettingsSection>('api');
+const settingsViews: Array<{
+  description: string;
+  icon: typeof Code2;
+  label: string;
+  value: SettingsView;
+}> = [
+  {
+    value: 'api',
+    label: 'API access',
+    description: 'Partners, keys, scopes, webhooks, and documentation',
+    icon: Code2,
+  },
+  {
+    value: 'policies',
+    label: 'Policies & offers',
+    description: 'Official guidelines, internal rules, and offer access',
+    icon: SlidersHorizontal,
+  },
+  {
+    value: 'runtime',
+    label: 'Review runtime',
+    description: 'Model selection and browser review defaults',
+    icon: Laptop,
+  },
+];
+
+function isSettingsView(value: unknown): value is SettingsView {
+  return value === 'api' || value === 'policies' || value === 'runtime';
+}
+
+function SettingsViewMenu({
+  onChange,
+  view,
+}: {
+  onChange: (view: SettingsView) => void;
+  view: SettingsView;
+}) {
+  const selected = settingsViews.find((option) => option.value === view) ?? settingsViews[0];
+  const SelectedIcon = selected.icon;
 
   return (
-    <div className="grid gap-4">
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle className="text-base">Admin sections</CardTitle>
-          <CardDescription>Choose the area you want to configure.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-2 sm:grid-cols-2" role="tablist" aria-label="Admin settings sections">
-          <Button
-            type="button"
-            role="tab"
-            aria-selected={section === 'api'}
-            variant={section === 'api' ? 'default' : 'outline'}
-            className="h-auto justify-start px-4 py-3 text-left"
-            onClick={() => setSection('api')}
-          >
-            <span className="grid gap-0.5">
-              <span>API access</span>
-              <span className={cn('text-xs font-normal', section === 'api' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
-                Partners, unlimited plans, keys, scopes, and webhooks
-              </span>
+    <div className="grid min-w-0 gap-1.5 sm:min-w-80">
+      <Label>Settings view</Label>
+      <Menu.Root>
+        <Menu.Trigger
+          className={cn(
+            buttonVariants({ variant: 'outline' }),
+            'h-auto w-full justify-between gap-4 px-3 py-2.5'
+          )}
+          aria-label={`Settings view: ${selected.label}`}
+        >
+          <span className="flex min-w-0 items-center gap-2.5 text-left">
+            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-secondary">
+              <SelectedIcon className="size-4" />
             </span>
-          </Button>
-          <Button
-            type="button"
-            role="tab"
-            aria-selected={section === 'policies'}
-            variant={section === 'policies' ? 'default' : 'outline'}
-            className="h-auto justify-start px-4 py-3 text-left"
-            onClick={() => setSection('policies')}
-          >
-            <span className="grid gap-0.5">
-              <span>Policies &amp; offers</span>
-              <span className={cn('text-xs font-normal', section === 'policies' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
-                Official guidelines, internal rules, and offer access
-              </span>
+            <span className="grid min-w-0 gap-0.5">
+              <span className="truncate font-medium">{selected.label}</span>
+              <span className="truncate text-xs font-normal text-muted-foreground">{selected.description}</span>
             </span>
-          </Button>
-        </CardContent>
-      </Card>
-      <div role="tabpanel">
-        {section === 'api' ? <ApiAccessPanel /> : <OfferSettingsPanel />}
-      </div>
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={6} align="start" className="z-50 outline-none">
+            <Menu.Popup className="w-[min(24rem,calc(100vw-2rem))] rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none">
+              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Choose a settings page</div>
+              {settingsViews.map((option) => {
+                const Icon = option.icon;
+                const active = option.value === view;
+                return (
+                  <Menu.Item
+                    key={option.value}
+                    closeOnClick
+                    className="flex cursor-default items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                    onClick={() => onChange(option.value)}
+                  >
+                    <span className={cn('grid size-8 shrink-0 place-items-center rounded-md', active ? 'bg-primary text-primary-foreground' : 'bg-secondary')}>
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="font-medium">{option.label}</span>
+                      <span className="text-xs leading-4 text-muted-foreground">{option.description}</span>
+                    </span>
+                    <Check className={cn('size-4 shrink-0 text-primary', active ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
+                  </Menu.Item>
+                );
+              })}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
     </div>
   );
 }
 
-function SettingsPage() {
+function RuntimeSettingsPanel() {
   const [model, setModel] = useState(loadOpenRouterModel);
   const [saved, setSaved] = useState(false);
 
@@ -2849,17 +2895,7 @@ function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-4">
-      <section className="grid gap-1">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Manage API integrations, offer-specific policies, and review runtime defaults.
-        </p>
-      </section>
-      <AdminAccessGate>
-        <AdminSettingsWorkspace />
-      </AdminAccessGate>
-      <Card>
+    <Card>
         <CardHeader>
           <CardTitle className="text-xl">Runtime configuration</CardTitle>
           <CardDescription>Model selection for reviews started from this browser.</CardDescription>
@@ -2901,6 +2937,128 @@ function SettingsPage() {
           </Alert>
         </CardContent>
       </Card>
+  );
+}
+
+function SettingsPage() {
+  const { view } = settingsRoute.useSearch();
+  const navigate = settingsRoute.useNavigate();
+
+  function changeView(nextView: SettingsView) {
+    void navigate({
+      to: '/settings',
+      search: { view: nextView },
+    });
+  }
+
+  return (
+    <div className="mx-auto grid max-w-6xl gap-4">
+      <section className="grid gap-1">
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
+        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          Manage API integrations, offer-specific policies, and review runtime defaults.
+        </p>
+      </section>
+      <Card size="sm">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <SettingsViewMenu view={view} onChange={changeView} />
+          <p className="max-w-lg text-xs leading-5 text-muted-foreground sm:text-right">
+            Each view has its own URL, so you can bookmark it or send a direct link to the right settings page.
+          </p>
+        </CardContent>
+      </Card>
+      {view === 'runtime' ? (
+        <RuntimeSettingsPanel />
+      ) : (
+        <AdminAccessGate>
+          {view === 'api' ? <ApiAccessPanel /> : <OfferSettingsPanel />}
+        </AdminAccessGate>
+      )}
+    </div>
+  );
+}
+
+type ApiDocsView = 'guide' | 'reference';
+
+function isApiDocsView(value: unknown): value is ApiDocsView {
+  return value === 'guide' || value === 'reference';
+}
+
+function ApiHubPage() {
+  const { view } = developerApiDocsRoute.useSearch();
+  const navigate = developerApiDocsRoute.useNavigate();
+
+  useEffect(() => {
+    document.title = view === 'guide'
+      ? 'Vibe Check Partner API · Developer guide'
+      : 'Vibe Check Partner API · Interactive reference';
+  }, [view]);
+
+  function changeView(nextView: ApiDocsView) {
+    void navigate({
+      to: '/developers/api',
+      search: { view: nextView },
+    });
+  }
+
+  return (
+    <div className="grid gap-6">
+      <Card className="overflow-hidden" size="sm">
+        <CardContent className="grid gap-4 bg-card sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <div className="grid gap-1">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Code2 className="size-4" /> API documentation
+            </div>
+            <h1 className="font-heading text-2xl font-semibold tracking-tight">Build and test from one place</h1>
+            <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+              Start with the integration guide, then switch to the interactive reference when you are ready to inspect or call an endpoint.
+            </p>
+          </div>
+          <Button nativeButton={false} variant="outline" render={<a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" />}>
+            <FileJson /> OpenAPI JSON <ExternalLink />
+          </Button>
+        </CardContent>
+        <Separator />
+        <CardContent className="pt-3">
+          <div className="grid gap-2 sm:grid-cols-2" role="tablist" aria-label="API documentation view">
+            <Button
+              type="button"
+              role="tab"
+              aria-selected={view === 'guide'}
+              variant={view === 'guide' ? 'default' : 'ghost'}
+              className="h-auto justify-start gap-3 px-4 py-3 text-left"
+              onClick={() => changeView('guide')}
+            >
+              <BookOpen className="size-4 shrink-0" />
+              <span className="grid gap-0.5">
+                <span>Guide</span>
+                <span className={cn('text-xs font-normal', view === 'guide' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                  Concepts, workflow, and quick start
+                </span>
+              </span>
+            </Button>
+            <Button
+              type="button"
+              role="tab"
+              aria-selected={view === 'reference'}
+              variant={view === 'reference' ? 'default' : 'ghost'}
+              className="h-auto justify-start gap-3 px-4 py-3 text-left"
+              onClick={() => changeView('reference')}
+            >
+              <Code2 className="size-4 shrink-0" />
+              <span className="grid gap-0.5">
+                <span>Interactive reference</span>
+                <span className={cn('text-xs font-normal', view === 'reference' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                  Endpoints, schemas, and live requests
+                </span>
+              </span>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <div role="tabpanel">
+        {view === 'guide' ? <ApiDocsPage embedded /> : <ApiReferencePage embedded />}
+      </div>
     </div>
   );
 }
@@ -3370,6 +3528,9 @@ const batchRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
+  validateSearch: (search: Record<string, unknown>) => ({
+    view: isSettingsView(search.view) ? search.view : 'api' as SettingsView,
+  }),
   component: SettingsPage,
 });
 const automationsRoute = createRoute({
@@ -3380,22 +3541,31 @@ const automationsRoute = createRoute({
 const apiDocsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/api/v1/docs',
-  component: ApiDocsPage,
+  beforeLoad: () => {
+    throw redirect({ to: '/developers/api', search: { view: 'guide' } });
+  },
 });
 const developerApiDocsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/developers/api',
-  component: ApiDocsPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    view: isApiDocsView(search.view) ? search.view : 'guide' as ApiDocsView,
+  }),
+  component: ApiHubPage,
 });
 const apiReferenceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/api/v1/reference',
-  component: ApiReferencePage,
+  beforeLoad: () => {
+    throw redirect({ to: '/developers/api', search: { view: 'reference' } });
+  },
 });
 const developerApiReferenceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/developers/reference',
-  component: ApiReferencePage,
+  beforeLoad: () => {
+    throw redirect({ to: '/developers/api', search: { view: 'reference' } });
+  },
 });
 const router = createRouter({
   routeTree: rootRoute.addChildren([

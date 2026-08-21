@@ -1,49 +1,68 @@
-# API Reference Design QA
+# Unified API and Settings Design QA
 
 ## Evidence
 
-- Source visual truth: the production shadcn developer guide at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1/docs`, captured in `design-qa-source.png`. The user-supplied Swagger screenshot establishes the route and the experience being replaced; it is intentionally not the visual style to reproduce.
-- Implementation: the local interactive reference at `http://127.0.0.1:5173/developers/reference`, captured in `design-qa-implementation.png`.
-- Combined comparison: `design-qa-comparison.jpg` (source on the left, implementation on the right).
-- Viewport: 1280 × 720 CSS px, light theme, device scale factor 1.
-- Captured pixels: source 1265 × 712; implementation 1265 × 712. Both were captured through the same in-app browser at the same viewport, so no density normalization was required.
-- State: guide at its initial top-of-page state; reference at its initial unauthorized state, with the live creative scan endpoint open by default below the fold.
+- Source visual truth: `/Users/alikheireddine/.codex/generated_images/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/exec-a219b0db-0ac0-4152-8a55-3961813a0b75.png` (the user-selected option 3 mockup).
+- Desktop implementation: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/04-option-3-implementation-settings.png`.
+- API hub implementation: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/05-api-hub-reference.png`.
+- Narrow implementation: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/06-settings-narrow.png`.
+- Combined comparison input: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/07-option-3-comparison.png` (source above, implementation below).
+- Desktop viewport: 1313 × 768 CSS px in Dia, light theme, browser density 1.
+- Narrow viewport: 730 × 860 CSS px in Dia, light theme, browser density 1.
+- Source pixels: 1487 × 1058. The comparison copy was proportionally normalized to 1313 × 934; no crop or density-changing distortion was applied.
+- Implementation pixels: 1313 × 768 desktop and 730 × 860 narrow; neither implementation capture was rescaled.
+- State: source shows the Settings selector open with representative unlocked API data. The local implementation screenshot shows the same API-access view before admin unlock because the production admin credential is intentionally session-bound. The menu was opened and all three choices were verified separately through Dia's accessibility state; the screenshot API cannot capture a native open menu surface.
 
 ## Findings
 
 - No actionable P0, P1, or P2 differences.
-- Fonts and typography: both surfaces use the existing Geist project font, matching heading weights, compact control text, code typography, and muted explanatory copy. The reference uses a deliberately smaller hero than the guide to preserve room for the API-key control.
-- Spacing and layout rhythm: shell geometry, card radii, borders, shadows, gutters, button heights, and section spacing match the existing application. The denser two-column reference layout is an intentional functional adaptation for endpoint navigation.
-- Colors and visual tokens: the implementation uses the same project background, card, muted, border, primary, and semantic status tokens. Method colors are restrained and remain readable in light and dark themes.
-- Image and asset fidelity: neither source nor implementation requires raster imagery. Existing project icons are used consistently; there are no placeholder illustrations, custom SVG approximations, or low-quality assets.
-- Copy and content: labels are human-readable rather than generated operation names. The reference clearly explains production behavior, ownership, permissions, key handling, hashing, result artifacts, and destructive actions.
-- Responsiveness: the reference was inspected at 390 × 844 CSS px. The app shell switches to its mobile header, hero/actions stack, endpoint cards remain readable, file and text inputs use full width, and the document reported no horizontal overflow.
-- Accessibility and interactions: expandable endpoint headers expose `aria-expanded`; fields have labels; required fields are explicit; API-key visibility has an accessible label; disabled request controls explain why. Expand/collapse, API-key reveal/hide, optional-field expansion, cURL copy feedback, safe GET response rendering, and clear/reset behavior were exercised.
-- Browser console: no warnings or errors were reported for the rendered reference.
+- Fonts and typography: the implementation preserves the project's Geist family, heading weights, compact labels, muted supporting copy, truncation, and line-height hierarchy. The selector's primary and secondary labels remain legible at both tested widths.
+- Spacing and layout rhythm: the selected direction's title, settings-view control, direct-link hint, bordered regions, compact radii, and restrained elevation are present. The implementation keeps the existing application shell and auth gate instead of replacing production behavior with mock data.
+- Colors and visual tokens: background, card, border, muted, primary, and focus-ring colors all come from the existing shadcn tokens. Contrast remains clear in the selected, unselected, disabled, and focused states.
+- Image quality and asset fidelity: this settings direction does not require product imagery. Existing Lucide icons are used consistently; no placeholder imagery, custom SVG approximations, emoji, or CSS-drawn assets were introduced.
+- Copy and content: the three settings destinations are explicit—API access, Policies & offers, and Review runtime—and each description explains what belongs there. The API hub names the two formerly separate surfaces as Guide and Interactive reference and explains when to use each.
+- Responsiveness: at 730 × 860, the desktop sidebar correctly becomes the existing mobile header, the view control fills the available width, the helper wraps without clipping, and the admin form stacks. No horizontal overflow or hidden persistent controls were visible.
+- Accessibility and interactions: the selector exposes a popup-button label, supports keyboard navigation, and changes the URL to the selected view. Guide and Interactive reference expose tab roles and selected state. The API-key console continues to keep credentials in tab memory and no live production request was sent during QA.
 
 ## Full-view comparison evidence
 
-`design-qa-comparison.jpg` shows that the new reference inherits the same sidebar, content canvas, Geist hierarchy, monochrome shadcn controls, soft card borders, and restrained accent treatment as the developer guide. The reference intentionally replaces the guide’s three-step education cards with a sticky endpoint index and compact expandable request cards.
+The combined comparison shows the same overall hierarchy as option 3: one Settings heading, one compact view selector near the top, an explicit bookmark/deep-link affordance, and API content isolated from the other settings categories. The source's unlocked mock data and the implementation's locked admin gate are different authentication states, so the comparison intentionally does not claim pixel precision for the content below the selector.
 
 ## Focused region comparison evidence
 
-A separate crop was not necessary because the matched 1265 × 712 captures keep the hero, navigation, API-key card, group navigation, and first endpoint cards legible. The live creative request card was additionally inspected in the browser at the mobile breakpoint, including its required file/ad-ID controls and optional-field expansion.
+The selector/header region is legible at the comparison's 1313-pixel width, so a separate enlarged crop was not necessary. That region was checked for label hierarchy, trigger size, icon alignment, border radius, helper placement, and selection affordance. The open-menu structure was additionally verified in Dia: it contains exactly API access, Policies & offers, and Review runtime, with the active view identified and keyboard selection working.
 
 ## Comparison history
 
-- Iteration 1: no P0/P1/P2 visual or responsive findings. No visual fixes were required after the matched comparison.
+- Iteration 1: no P0/P1/P2 visual findings. The source-to-implementation comparison identified only the expected local-auth state mismatch, so no visual correction was required.
+
+## Primary interactions tested
+
+- Opened the Settings view menu by mouse and keyboard.
+- Selected Review runtime with the keyboard and verified `/settings?view=runtime`.
+- Repeated the menu interaction at the narrow breakpoint.
+- Opened the API documentation hub at `/developers/api?view=guide`.
+- Switched to Interactive reference and verified `/developers/api?view=reference` plus the selected tab state.
+- Verified legacy documentation redirects in backend tests and canonical Worker redirect logic.
+- Confirmed a clean frontend production build, Worker typecheck, and all 181 backend tests.
+
+## Residual test gaps
+
+- The local Dia origin did not share the production admin session, so the existing partner-management panel was not visually captured in its unlocked state. Its controls were not structurally rewritten; the new documentation card uses the same existing button, card, icon, and typography primitives.
+- Dia's computer-use surface does not expose browser console output. No error UI appeared during interaction testing, and TypeScript/build verification completed successfully.
 
 ## Implementation checklist
 
-- [x] Replace stock Swagger styling at the exact `/api/v1/reference` route.
-- [x] Preserve the existing Vibe Check shadcn design system.
-- [x] Group and explain all 19 partner API operations.
-- [x] Support in-memory authorization, request fields, files, cURL, live requests, responses, and binary downloads.
-- [x] Confirm desktop and mobile responsiveness with no horizontal overflow.
-- [x] Confirm browser console health and primary interactions.
+- [x] Create one canonical API documentation hub.
+- [x] Add URL-backed Guide and Interactive reference tabs.
+- [x] Redirect legacy documentation routes to the matching hub view.
+- [x] Add URL-backed Settings views for API access, Policies & offers, and Review runtime.
+- [x] Replace the subtle documentation link with distinct Guide and Interactive reference actions.
+- [x] Update API discovery metadata and written documentation to advertise the canonical hub.
+- [x] Verify desktop, narrow, keyboard, typecheck, build, and backend behavior.
 
 ## Follow-up polish
 
-- No blocking polish remains. A future iteration could add language tabs for generated SDK examples without changing the current request workflow.
+- No blocking visual polish remains. A future iteration could add a compact partner overview above the detailed account form after observing real admin usage.
 
 final result: passed

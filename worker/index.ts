@@ -24,15 +24,19 @@ const BACKEND_SHARD_HEADER = "x-vibe-backend-shard";
 const CANONICAL_APP_ORIGIN = "https://vibe-check.thatcanadian.dev";
 const MAX_BACKEND_SHARDS = 50;
 
-function isPartnerDocumentationPath(pathname: string): boolean {
-  return pathname === "/api/v1/docs"
-    || pathname === "/api/v1/docs/"
-    || pathname === "/api/v1/reference"
+function legacyPartnerDocumentationView(pathname: string): "guide" | "reference" | null {
+  if (pathname === "/api/v1/docs" || pathname === "/api/v1/docs/") return "guide";
+  if (
+    pathname === "/api/v1/reference"
     || pathname === "/api/v1/reference/"
-    || pathname === "/developers/api"
-    || pathname === "/developers/api/"
     || pathname === "/developers/reference"
-    || pathname === "/developers/reference/";
+    || pathname === "/developers/reference/"
+  ) return "reference";
+  return null;
+}
+
+function isPartnerDocumentationHub(pathname: string): boolean {
+  return pathname === "/developers/api" || pathname === "/developers/api/";
 }
 
 function backendSlot(env: Env): string {
@@ -301,16 +305,19 @@ export class ReviewBackend extends Container<Env> {
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+    const legacyDocumentationView = legacyPartnerDocumentationView(url.pathname);
 
-    if (isPartnerDocumentationPath(url.pathname) && url.hostname.endsWith(".workers.dev")) {
+    if (legacyDocumentationView) {
+      const destination = new URL("/developers/api", CANONICAL_APP_ORIGIN);
+      destination.searchParams.set("view", legacyDocumentationView);
+      return Response.redirect(destination.toString(), 308);
+    }
+
+    if (isPartnerDocumentationHub(url.pathname) && url.hostname.endsWith(".workers.dev")) {
       return Response.redirect(
         new URL(`${url.pathname}${url.search}`, CANONICAL_APP_ORIGIN).toString(),
         308,
       );
-    }
-
-    if (isPartnerDocumentationPath(url.pathname) && url.pathname.startsWith("/api/")) {
-      return env.ASSETS.fetch(request);
     }
 
     if (url.pathname.startsWith("/api/")) {

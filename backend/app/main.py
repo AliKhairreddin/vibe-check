@@ -1064,8 +1064,8 @@ def partner_api_index():
         'version':'v1',
         'authentication':'Authorization: Bearer <api-key>',
         'base_url':partner_api_base_url(),
-        'documentation_url':'/api/v1/docs',
-        'interactive_reference_url':'/api/v1/reference',
+        'documentation_url':'/developers/api?view=guide',
+        'interactive_reference_url':'/developers/api?view=reference',
         'openapi_url':'/api/v1/openapi.json',
         'max_platform_upload_mb':int(os.getenv('MAX_UPLOAD_MB','400')),
     }
@@ -1073,12 +1073,12 @@ def partner_api_index():
 
 @app.get('/api/v1/docs', include_in_schema=False)
 def partner_api_docs():
-    return RedirectResponse('/developers/api')
+    return RedirectResponse('/developers/api?view=guide')
 
 
 @app.get('/api/v1/reference', include_in_schema=False)
 def partner_api_reference():
-    return RedirectResponse('/developers/reference')
+    return RedirectResponse('/developers/api?view=reference')
 
 
 @app.get('/api/v1/openapi.json', include_in_schema=False)

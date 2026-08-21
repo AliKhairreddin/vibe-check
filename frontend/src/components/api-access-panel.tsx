@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
+  BookOpen,
   Check,
   Clipboard,
   Code2,
-  ExternalLink,
   Infinity as InfinityIcon,
   KeyRound,
   LoaderCircle,
@@ -50,7 +50,7 @@ import {
 import { cn } from '@/lib/utils';
 
 const PARTNERS_QUERY_KEY = ['api-partners'] as const;
-const PARTNER_REFERENCE_URL = 'https://vibe-check.thatcanadian.dev/api/v1/reference';
+const PARTNER_DOCS_URL = '/developers/api';
 const DEFAULT_SCOPES: ApiScope[] = [
   'reviews:create',
   'reviews:read',
@@ -693,30 +693,43 @@ export function ApiAccessPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Code2 className="size-4" /> Integration details</CardTitle>
-          <CardDescription>The permanent key belongs on the caller’s server, never inside browser code.</CardDescription>
+          <CardTitle className="flex items-center gap-2"><Code2 className="size-4" /> API documentation</CardTitle>
+          <CardDescription>
+            One destination for the integration guide, endpoint reference, and live request console.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <div className="grid gap-1">
             <Label>Base URL</Label>
             <code className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{baseUrl}</code>
-            <a
-              className={cn(
-                buttonVariants({ size: 'lg' }),
-                'mt-2 h-auto w-full justify-between gap-4 whitespace-normal px-4 py-3 sm:w-fit'
-              )}
-              href={PARTNER_REFERENCE_URL}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span className="grid gap-0.5 text-left">
-                <span className="text-sm font-semibold">Open interactive API docs</span>
-                <span className="text-xs font-normal text-primary-foreground/75">
-                  Explore endpoints, schemas, and request examples.
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <a
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'lg' }),
+                  'h-auto justify-start gap-3 whitespace-normal px-4 py-3 text-left'
+                )}
+                href={`${PARTNER_DOCS_URL}?view=guide`}
+              >
+                <BookOpen className="size-4 shrink-0" aria-hidden="true" />
+                <span className="grid gap-0.5">
+                  <span className="text-sm font-semibold">Developer guide</span>
+                  <span className="text-xs font-normal text-muted-foreground">Workflow, concepts, and quick start</span>
                 </span>
-              </span>
-              <ExternalLink className="size-4 shrink-0" aria-hidden="true" />
-            </a>
+              </a>
+              <a
+                className={cn(
+                  buttonVariants({ size: 'lg' }),
+                  'h-auto justify-start gap-3 whitespace-normal px-4 py-3 text-left'
+                )}
+                href={`${PARTNER_DOCS_URL}?view=reference`}
+              >
+                <Code2 className="size-4 shrink-0" aria-hidden="true" />
+                <span className="grid gap-0.5">
+                  <span className="text-sm font-semibold">Interactive reference</span>
+                  <span className="text-xs font-normal text-primary-foreground/75">Endpoints, schemas, and live requests</span>
+                </span>
+              </a>
+            </div>
           </div>
           <div className="grid gap-1">
             <Label>Submit a review</Label>

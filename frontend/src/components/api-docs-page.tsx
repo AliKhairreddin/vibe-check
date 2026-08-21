@@ -5,7 +5,6 @@ import {
   Check,
   Clipboard,
   Code2,
-  ExternalLink,
   FileJson,
   Fingerprint,
   KeyRound,
@@ -127,7 +126,7 @@ function MethodBadge({ method }: { method: Method }) {
   );
 }
 
-export function ApiDocsPage() {
+export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
   const baseUrl = API_BASE_URL;
   const scanExample = `curl -X POST '${baseUrl}/scans/creative' \\
   -H 'Authorization: Bearer YOUR_API_KEY' \\
@@ -143,7 +142,7 @@ export function ApiDocsPage() {
   -F 'destination_url=https://example.com/landing-page'`;
 
   return (
-    <div className="grid gap-8 pb-16">
+    <div className={embedded ? 'grid gap-6 pb-16' : 'grid gap-8 pb-16'}>
       <section className="relative overflow-hidden rounded-3xl border bg-card px-6 py-10 shadow-sm sm:px-10">
         <div className="pointer-events-none absolute -right-24 -top-32 size-80 rounded-full bg-chart-2/10 blur-3xl" />
         <div className="relative grid max-w-4xl gap-5">
@@ -162,8 +161,8 @@ export function ApiDocsPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button nativeButton={false} render={<a href="/api/v1/reference" target="_blank" rel="noreferrer" />}>
-              <Play /> Open interactive reference <ExternalLink />
+            <Button nativeButton={false} render={<a href="/developers/api?view=reference" />}>
+              <Play /> Open interactive reference <ArrowRight />
             </Button>
             <Button nativeButton={false} variant="outline" render={<a href={`${baseUrl}/openapi.json`} target="_blank" rel="noreferrer" />}>
               <FileJson /> OpenAPI JSON
@@ -278,8 +277,8 @@ export function ApiDocsPage() {
             <div className="flex items-center gap-2 font-heading text-lg font-semibold"><Code2 /> Ready to test?</div>
             <p className="mt-1 text-sm text-muted-foreground">Start with one known ad ID, scan it twice, then replace the file without changing its name.</p>
           </div>
-          <Button nativeButton={false} render={<a href="/api/v1/reference" target="_blank" rel="noreferrer" />}>
-            Open API reference <ExternalLink />
+          <Button nativeButton={false} render={<a href="/developers/api?view=reference" />}>
+            Open API reference <ArrowRight />
           </Button>
         </div>
       </section>

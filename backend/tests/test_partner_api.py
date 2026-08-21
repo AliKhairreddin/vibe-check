@@ -195,6 +195,22 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
 
 
 @pytest.mark.anyio
+async def test_partner_api_discovery_uses_one_documentation_hub(monkeypatch):
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        index_response = await client.get('/api/v1')
+        guide_response = await client.get('/api/v1/docs')
+        reference_response = await client.get('/api/v1/reference')
+
+    assert index_response.status_code == 200
+    assert index_response.json()['documentation_url'] == '/developers/api?view=guide'
+    assert index_response.json()['interactive_reference_url'] == '/developers/api?view=reference'
+    assert guide_response.headers['location'] == '/developers/api?view=guide'
+    assert reference_response.headers['location'] == '/developers/api?view=reference'
+
+
+@pytest.mark.anyio
 async def test_partner_copy_review_is_authenticated_claimed_and_queued(tmp_path, monkeypatch):
     principal = api_principal()
     captured = {}

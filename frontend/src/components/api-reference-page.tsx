@@ -882,7 +882,7 @@ function normalizedKey(value: string) {
   return value.trim().replace(/^Bearer\s+/i, '');
 }
 
-export function ApiReferencePage() {
+export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [openEndpoints, setOpenEndpoints] = useState(() => new Set(['scan-creative']));
@@ -1086,7 +1086,7 @@ export function ApiReferencePage() {
   }
 
   return (
-    <div className="grid gap-6 pb-16">
+    <div className={embedded ? 'grid gap-5 pb-16' : 'grid gap-6 pb-16'}>
       <section className="relative overflow-hidden rounded-3xl border bg-card px-6 py-8 shadow-sm sm:px-8">
         <div className="pointer-events-none absolute -right-28 -top-40 size-96 rounded-full bg-chart-2/10 blur-3xl" />
         <div className="relative grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-end">
@@ -1105,7 +1105,7 @@ export function ApiReferencePage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button nativeButton={false} variant="outline" render={<a href="/developers/api" />}>
+              <Button nativeButton={false} variant="outline" render={<a href="/developers/api?view=guide" />}>
                 <BookOpen /> Developer guide
               </Button>
               <Button nativeButton={false} variant="outline" render={<a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" />}>

@@ -10,10 +10,10 @@ Production base URL:
 https://vibe-check.ali-kheireddin1.workers.dev/api/v1
 ```
 
-Human-facing documentation uses the branded application domain:
+Human-facing documentation uses one hub on the branded application domain:
 
-- Developer guide: `https://vibe-check.thatcanadian.dev/api/v1/docs`
-- Interactive request console: `https://vibe-check.thatcanadian.dev/api/v1/reference`
+- Developer guide: `https://vibe-check.thatcanadian.dev/developers/api?view=guide`
+- Interactive request console: `https://vibe-check.thatcanadian.dev/developers/api?view=reference`
 - Machine-readable schema: `https://vibe-check.ali-kheireddin1.workers.dev/api/v1/openapi.json`
 
 The dedicated Worker hostname remains the server-to-server base because the application domain can apply browser-oriented Cloudflare challenges to non-browser clients.
