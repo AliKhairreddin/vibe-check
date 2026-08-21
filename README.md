@@ -169,7 +169,7 @@ own offer. The former `/kissterra` routes redirect into this shared portal.
 
 ## API Overview
 
-The server-to-server Partner API is rooted at `/api/v1`. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) or the deployed V1-only Swagger page at `/api/v1/docs`.
+The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1`. The dedicated Worker hostname avoids browser-only edge challenges on the application domain. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) or the deployed V1-only Swagger page at `/api/v1/docs`.
 
 | Endpoint | Purpose |
 | --- | --- |

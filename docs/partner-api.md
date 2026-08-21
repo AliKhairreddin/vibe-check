@@ -7,7 +7,7 @@ The Partner API lets another server submit video, image, or copy-only creatives 
 Production base URL:
 
 ```text
-https://vibe-check.thatcanadian.dev/api/v1
+https://vibe-check.ali-kheireddin1.workers.dev/api/v1
 ```
 
 Interactive V1-only API documentation is available at `/api/v1/docs`; its machine-readable schema is at `/api/v1/openapi.json`.
@@ -36,7 +36,7 @@ The admin account can use **Unlimited monthly reviews** and **Unlimited queued s
 Send an `Idempotency-Key` on every submission. Reusing the same value for the same account returns the first review instead of creating another one.
 
 ```bash
-curl -X POST 'https://vibe-check.thatcanadian.dev/api/v1/reviews' \
+curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/reviews' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Idempotency-Key: creative-2026-08-21-v1' \
   -F 'creative=@creative.mp4' \

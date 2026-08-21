@@ -294,9 +294,12 @@ export function ApiAccessPanel() {
     );
   }
 
-  const baseUrl = typeof window === 'undefined'
-    ? partnersQuery.data?.base_url ?? '/api/v1'
-    : `${window.location.origin}${partnersQuery.data?.base_url ?? '/api/v1'}`;
+  const configuredBaseUrl = partnersQuery.data?.base_url ?? '/api/v1';
+  const baseUrl = /^https:\/\//.test(configuredBaseUrl)
+    ? configuredBaseUrl
+    : typeof window === 'undefined'
+      ? configuredBaseUrl
+      : `${window.location.origin}${configuredBaseUrl}`;
 
   return (
     <div className="grid gap-4">

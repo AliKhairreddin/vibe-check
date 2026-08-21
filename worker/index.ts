@@ -169,6 +169,7 @@ export class ReviewBackend extends Container<Env> {
       ACP_CLIENT_PASSWORD: optionalSecrets.ACP_CLIENT_PASSWORD ?? "",
       ACP_CLIENT_USERNAME: optionalSecrets.ACP_CLIENT_USERNAME ?? "acp",
       ADMIN_PASSWORD: optionalSecrets.ADMIN_PASSWORD ?? "",
+      API_PUBLIC_URL: env.API_PUBLIC_URL,
       APP_PASSWORD: optionalSecrets.APP_PASSWORD ?? "",
       APP_ALLOWED_HOSTS: env.APP_ALLOWED_HOSTS,
       APP_PUBLIC_URL: optionalSecrets.APP_PUBLIC_URL ?? "",

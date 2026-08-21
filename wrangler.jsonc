@@ -2,6 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "vibe-check",
   "main": "worker/index.ts",
+  "workers_dev": true,
   "compatibility_date": "2026-07-09",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
@@ -51,7 +52,8 @@
     ]
   },
   "vars": {
-    "APP_ALLOWED_HOSTS": "vibe-check.thatcanadian.dev",
+    "API_PUBLIC_URL": "https://vibe-check.ali-kheireddin1.workers.dev",
+    "APP_ALLOWED_HOSTS": "vibe-check.thatcanadian.dev,vibe-check.ali-kheireddin1.workers.dev",
     "APP_PUBLIC_URL": "https://vibe-check.thatcanadian.dev",
     "BACKEND_SLOT": "primary-v25",
     "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",

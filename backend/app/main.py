@@ -503,6 +503,11 @@ def partner_storage_error(error:Exception)->HTTPException:
     return HTTPException(409, message)
 
 
+def partner_api_base_url()->str:
+    public_origin=os.getenv('API_PUBLIC_URL','').strip().rstrip('/')
+    return f'{public_origin}/api/v1' if public_origin else '/api/v1'
+
+
 async def owned_api_review(principal:ApiPrincipal, job_id:str)->dict:
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review not found.')
@@ -608,7 +613,7 @@ def api_partner_list(request:Request):
     except Exception as exc:
         raise partner_storage_error(exc) from None
     return {
-        'base_url':'/api/v1',
+        'base_url':partner_api_base_url(),
         'available_scopes':list(API_SCOPES),
         'partners':partners,
     }
@@ -944,6 +949,7 @@ def partner_api_index():
         'name':'Vibe Check Partner API',
         'version':'v1',
         'authentication':'Authorization: Bearer <api-key>',
+        'base_url':partner_api_base_url(),
         'documentation_url':'/api/v1/docs',
         'openapi_url':'/api/v1/openapi.json',
         'max_platform_upload_mb':int(os.getenv('MAX_UPLOAD_MB','400')),
