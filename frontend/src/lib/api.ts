@@ -308,6 +308,85 @@ export type DeletedReview = {
   deleted_at: number;
 };
 
+export type ApiScope =
+  | 'reviews:create'
+  | 'reviews:read'
+  | 'history:read'
+  | 'evidence:read'
+  | 'reports:download'
+  | 'reviews:delete';
+
+export type ApiKeyRecord = {
+  created_at: number;
+  expires_at: number | null;
+  key_id: string;
+  last_used_at: number | null;
+  name: string;
+  prefix: string;
+  revoked_at: number | null;
+  scopes: ApiScope[];
+  status: 'active' | 'revoked';
+};
+
+export type ApiPartner = {
+  active_reviews: number;
+  allowed_offer_ids: string[];
+  allow_custom_policy: boolean;
+  concurrent_review_limit: number;
+  created_at: number;
+  description: string;
+  keys: ApiKeyRecord[];
+  max_upload_mb: number;
+  month_key: string;
+  monthly_review_limit: number;
+  monthly_reviews_created: number;
+  name: string;
+  partner_id: string;
+  retention_days: number;
+  status: 'active' | 'suspended';
+  unlimited_concurrency: boolean;
+  unlimited_reviews: boolean;
+  updated_at: number;
+  webhook_configured: boolean;
+  webhook_url: string | null;
+};
+
+export type ApiPartnerInput = Pick<
+  ApiPartner,
+  | 'allowed_offer_ids'
+  | 'allow_custom_policy'
+  | 'concurrent_review_limit'
+  | 'description'
+  | 'max_upload_mb'
+  | 'monthly_review_limit'
+  | 'name'
+  | 'retention_days'
+  | 'status'
+  | 'unlimited_concurrency'
+  | 'unlimited_reviews'
+  | 'webhook_url'
+>;
+
+export type ApiPartnerList = {
+  available_scopes: ApiScope[];
+  base_url: string;
+  partners: ApiPartner[];
+};
+
+export type ApiKeyInput = {
+  expires_at: number | null;
+  name: string;
+  scopes: ApiScope[];
+};
+
+export type IssuedApiKey = ApiKeyRecord & { token: string };
+
+export type IssuedWebhookSecret = {
+  partner_id: string;
+  webhook_configured: boolean;
+  webhook_signing_secret: string;
+};
+
 export type ReviewAutomation = {
   automation_id: string;
   name: string;
@@ -713,6 +792,61 @@ export async function verifyAdminPassword(password: string): Promise<void> {
   await requestJson<{ authorized: boolean }>('/api/admin/check', {
     headers: adminHeaders(undefined, password),
   });
+}
+
+export async function listApiPartners(): Promise<ApiPartnerList> {
+  return requestJson<ApiPartnerList>('/api/admin/api/partners', {
+    headers: adminHeaders(),
+  });
+}
+
+export async function createApiPartner(input: ApiPartnerInput): Promise<ApiPartner> {
+  return requestJson<ApiPartner>('/api/admin/api/partners', {
+    method: 'POST',
+    headers: adminHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function saveApiPartner(
+  partnerId: string,
+  input: ApiPartnerInput
+): Promise<ApiPartner> {
+  return requestJson<ApiPartner>(`/api/admin/api/partners/${encodeURIComponent(partnerId)}`, {
+    method: 'PUT',
+    headers: adminHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify(input),
+  });
+}
+
+export async function issueApiKey(
+  partnerId: string,
+  input: ApiKeyInput
+): Promise<IssuedApiKey> {
+  return requestJson<IssuedApiKey>(
+    `/api/admin/api/partners/${encodeURIComponent(partnerId)}/keys`,
+    {
+      method: 'POST',
+      headers: adminHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function revokeApiKey(partnerId: string, keyId: string): Promise<void> {
+  await requestJson<unknown>(
+    `/api/admin/api/partners/${encodeURIComponent(partnerId)}/keys/${encodeURIComponent(keyId)}`,
+    { method: 'DELETE', headers: adminHeaders() }
+  );
+}
+
+export async function rotateApiWebhookSecret(
+  partnerId: string
+): Promise<IssuedWebhookSecret> {
+  return requestJson<IssuedWebhookSecret>(
+    `/api/admin/api/partners/${encodeURIComponent(partnerId)}/webhook-secret`,
+    { method: 'POST', headers: adminHeaders() }
+  );
 }
 
 export async function listOfferCatalog(): Promise<OfferCatalogItem[]> {

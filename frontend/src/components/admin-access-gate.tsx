@@ -64,6 +64,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
       setIsUnlocked(true);
       await queryClient.invalidateQueries({ queryKey: ['offer-profiles'] });
       await queryClient.invalidateQueries({ queryKey: ['automations'] });
+      await queryClient.invalidateQueries({ queryKey: ['api-partners'] });
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -78,6 +79,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
     setError('');
     queryClient.removeQueries({ queryKey: ['offer-profiles'] });
     queryClient.removeQueries({ queryKey: ['automations'] });
+    queryClient.removeQueries({ queryKey: ['api-partners'] });
   }
 
   return (
@@ -89,7 +91,7 @@ export function AdminAccessGate({ children }: { children: ReactNode }) {
             Admin access
           </CardTitle>
           <CardDescription>
-            Required to manage official guidelines, review automations, internal rules, and review history.
+            Required to manage policies, review automations, API access, and integration credentials.
           </CardDescription>
           {isUnlocked ? (
             <CardAction className="flex items-center gap-2">

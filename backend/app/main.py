@@ -7,7 +7,10 @@ import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
     BatchFailure,
@@ -66,6 +69,7 @@ from .review_pipeline.storage import (
     now_ms,
     resolve_active_offer_profiles,
     resolve_review_offer_snapshot,
+    set_status,
     set_review_source,
     set_client_review_decision,
     upsert_offer_profile,
@@ -119,6 +123,29 @@ from .review_pipeline.automations import (
     run_due_review_automations,
     run_review_automation,
 )
+from .review_pipeline.partner_api import (
+    API_SCOPES,
+    ApiKeyInput,
+    ApiPartnerInput,
+    ApiPrincipal,
+    PartnerApiUnavailable,
+    authenticate_api_token,
+    claim_api_review,
+    create_api_partner,
+    deliver_pending_api_webhooks,
+    finalize_api_review,
+    get_api_evidence,
+    get_api_review,
+    issue_api_key,
+    list_api_partners,
+    list_api_reviews,
+    mark_api_review_deleted,
+    prune_expired_api_evidence,
+    reconcile_terminal_api_reviews,
+    revoke_api_key,
+    rotate_webhook_secret,
+    save_api_partner,
+)
 
 COPY_LABEL_MAX_LENGTH = 72
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
@@ -129,6 +156,8 @@ BATCH_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 JOB_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 OBSERVATION_DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
+PARTNER_ID_PATTERN = re.compile(r'^partner_[0-9a-f]{32}$')
+API_KEY_ID_PATTERN = re.compile(r'^key_[0-9a-f]{32}$')
 MAX_BATCH_ITEMS = 100
 ADMIN_PASSWORD_HEADER = 'x-admin-password'
 CLIENT_USERNAME_HEADER = 'x-client-username'
@@ -178,6 +207,17 @@ async def deliver_batch_notifications_in_background()->None:
         await asyncio.to_thread(deliver_pending_batch_notifications, limit=1)
     except Exception:
         logger.exception('Could not deliver a pending batch notification.')
+
+
+async def maintain_partner_api_in_background()->None:
+    try:
+        await asyncio.to_thread(reconcile_terminal_api_reviews, 100)
+        await deliver_pending_api_webhooks(limit=5)
+        await asyncio.to_thread(prune_expired_api_evidence, 100)
+    except PartnerApiUnavailable:
+        return
+    except Exception:
+        logger.exception('Could not complete partner API webhook or retention maintenance.')
 
 
 def start_background_task(coroutine)->None:
@@ -317,10 +357,17 @@ async def lifespan(app: FastAPI):
         logger.exception('Could not reconcile interrupted automation jobs at startup.')
     await start_job_workers()
     start_background_task(deliver_batch_notifications_in_background())
+    start_background_task(maintain_partner_api_in_background())
     yield
     await stop_job_workers()
 
-app=FastAPI(title='Ad Compliance Creative Reviewer', lifespan=lifespan)
+app=FastAPI(
+    title='Ad Compliance Creative Reviewer',
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=lifespan,
+)
 allowed_hosts=[h.strip() for h in os.getenv('APP_ALLOWED_HOSTS','*').split(',') if h.strip()]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
@@ -329,14 +376,20 @@ app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], all
 async def optional_password_gate(request: Request, call_next):
     password = os.getenv('APP_PASSWORD')
     is_client_portal = request.url.path.startswith('/api/client/')
+    is_partner_api = request.url.path.startswith('/api/v1')
     if (
         password
         and request.url.path.startswith('/api')
         and not is_client_portal
+        and not is_partner_api
         and request.headers.get('x-app-password') != password
     ):
         return JSONResponse({'detail':'Invalid or missing x-app-password'}, status_code=401)
-    return await call_next(request)
+    response=await call_next(request)
+    if is_partner_api:
+        response.headers['x-request-id']=request.headers.get('x-request-id') or uuid.uuid4().hex
+        response.headers['cache-control']='no-store'
+    return response
 
 
 def require_admin(request:Request)->None:
@@ -349,6 +402,117 @@ def require_admin(request:Request)->None:
     provided=request.headers.get(ADMIN_PASSWORD_HEADER,'')
     if not provided or not secrets.compare_digest(provided, expected):
         raise HTTPException(401, 'Invalid or missing admin password.')
+
+
+async def require_api_principal(request:Request, scope:str)->ApiPrincipal:
+    authorization=request.headers.get('authorization','').strip()
+    scheme,separator,token=authorization.partition(' ')
+    if not separator or scheme.casefold() != 'bearer' or not token.strip():
+        raise HTTPException(
+            401,
+            'Provide the API key as Authorization: Bearer <key>.',
+            headers={'WWW-Authenticate':'Bearer'},
+        )
+    try:
+        principal=await asyncio.to_thread(authenticate_api_token, token.strip())
+    except PartnerApiUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
+    except Exception:
+        logger.exception('Partner API authentication failed unexpectedly.')
+        raise HTTPException(503, 'Partner API authentication is temporarily unavailable.') from None
+    if principal is None:
+        raise HTTPException(
+            401,
+            'The API key is invalid, expired, revoked, or suspended.',
+            headers={'WWW-Authenticate':'Bearer'},
+        )
+    try:
+        principal.require_scope(scope)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    return principal
+
+
+def partner_review_meta(
+    principal:ApiPrincipal,
+    *,
+    ad_copy:str,
+    policy_text:str,
+    notes:str,
+    manual_transcript:str,
+    frame_interval_seconds:float,
+    scene_detection:bool,
+    external_id:str,
+)->ReviewRequestMeta:
+    if policy_text.strip() and not principal.allow_custom_policy:
+        raise HTTPException(403, 'This partner is not permitted to submit custom policy supplements.')
+    if not 0.25 <= frame_interval_seconds <= 30:
+        raise HTTPException(400, 'frame_interval_seconds must be between 0.25 and 30.')
+    profiles,outcomes=resolve_review_offer_snapshot()
+    if principal.allowed_offer_ids:
+        allowed=set(principal.allowed_offer_ids)
+        profiles=[profile for profile in profiles if profile.offer_id in allowed]
+        outcomes=[outcome for outcome in outcomes if outcome.offer_id in allowed]
+    if not profiles:
+        raise HTTPException(
+            409,
+            'No enabled offer with saved guidelines is available to this API partner.',
+        )
+    return ReviewRequestMeta(
+        ad_copy=ad_copy.strip(),
+        policy_text=policy_text.strip(),
+        notes=notes.strip(),
+        manual_transcript=manual_transcript.strip(),
+        frame_interval_seconds=frame_interval_seconds,
+        scene_detection=scene_detection,
+        offer_profiles=profiles,
+        offer_outcomes=outcomes,
+        api_partner_id=principal.partner_id,
+        api_key_id=principal.api_key_id,
+        api_external_id=external_id,
+    )
+
+
+def validate_external_id(value:str)->str:
+    normalized=value.strip()
+    if len(normalized) > 200:
+        raise HTTPException(400, 'external_id must be 200 characters or fewer.')
+    return normalized
+
+
+def api_idempotency_key(request:Request)->str:
+    value=request.headers.get('idempotency-key','').strip()
+    if len(value) > 200:
+        raise HTTPException(400, 'Idempotency-Key must be 200 characters or fewer.')
+    if value and any(ord(character) < 33 or ord(character) > 126 for character in value):
+        raise HTTPException(400, 'Idempotency-Key must contain visible ASCII characters only.')
+    return value
+
+
+def partner_storage_error(error:Exception)->HTTPException:
+    message=str(error).strip() or 'Partner API request failed.'
+    lowered=message.casefold()
+    if 'not found' in lowered:
+        return HTTPException(404, message)
+    if 'limit reached' in lowered:
+        return HTTPException(429, message, headers={'Retry-After':'60'})
+    if 'no longer active' in lowered or 'not permitted' in lowered:
+        return HTTPException(403, message)
+    if isinstance(error, PartnerApiUnavailable):
+        return HTTPException(503, message)
+    return HTTPException(409, message)
+
+
+async def owned_api_review(principal:ApiPrincipal, job_id:str)->dict:
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Review not found.')
+    try:
+        value=await asyncio.to_thread(get_api_review, principal, job_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    if value is None:
+        raise HTTPException(404, 'Review not found.')
+    return value
 
 
 def client_portal(client_id:str)->dict[str, str]:
@@ -434,6 +598,75 @@ def require_automation_secret(request:Request)->None:
 def admin_check(request:Request):
     require_admin(request)
     return {'authorized':True}
+
+
+@app.get('/api/admin/api/partners')
+def api_partner_list(request:Request):
+    require_admin(request)
+    try:
+        partners=list_api_partners()
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    return {
+        'base_url':'/api/v1',
+        'available_scopes':list(API_SCOPES),
+        'partners':partners,
+    }
+
+
+@app.post('/api/admin/api/partners', status_code=201)
+def api_partner_create(payload:ApiPartnerInput, request:Request):
+    require_admin(request)
+    try:
+        return create_api_partner(payload)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+@app.put('/api/admin/api/partners/{partner_id}')
+def api_partner_save(partner_id:str, payload:ApiPartnerInput, request:Request):
+    require_admin(request)
+    if not PARTNER_ID_PATTERN.fullmatch(partner_id):
+        raise HTTPException(404, 'API partner not found.')
+    try:
+        return save_api_partner(partner_id, payload)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+@app.post('/api/admin/api/partners/{partner_id}/keys', status_code=201)
+def api_key_issue(partner_id:str, payload:ApiKeyInput, request:Request):
+    require_admin(request)
+    if not PARTNER_ID_PATTERN.fullmatch(partner_id):
+        raise HTTPException(404, 'API partner not found.')
+    if payload.expires_at is not None and payload.expires_at <= now_ms():
+        raise HTTPException(400, 'API key expiration must be in the future.')
+    try:
+        return issue_api_key(partner_id, payload)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+@app.delete('/api/admin/api/partners/{partner_id}/keys/{key_id}')
+def api_key_revoke(partner_id:str, key_id:str, request:Request):
+    require_admin(request)
+    if not PARTNER_ID_PATTERN.fullmatch(partner_id) or not API_KEY_ID_PATTERN.fullmatch(key_id):
+        raise HTTPException(404, 'API key not found.')
+    try:
+        return revoke_api_key(partner_id, key_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+@app.post('/api/admin/api/partners/{partner_id}/webhook-secret')
+def api_webhook_secret_rotate(partner_id:str, request:Request):
+    require_admin(request)
+    if not PARTNER_ID_PATTERN.fullmatch(partner_id):
+        raise HTTPException(404, 'API partner not found.')
+    try:
+        return rotate_webhook_secret(partner_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
 
 
 def public_client_review(value:dict)->dict:
@@ -645,6 +878,581 @@ def client_review_frame(client_id:str, job_id:str, filename:str, request:Request
     return evidence_frame_response(job_id, filename)
 
 
+def validate_partner_review_text(
+    ad_copy:str,
+    policy_text:str,
+    notes:str,
+    manual_transcript:str,
+)->None:
+    limits={
+        'ad_copy':(ad_copy,20_000),
+        'policy_text':(policy_text,100_000),
+        'notes':(notes,10_000),
+        'manual_transcript':(manual_transcript,100_000),
+    }
+    for name,(value,limit) in limits.items():
+        if len(value) > limit:
+            raise HTTPException(413, f'{name} must be {limit:,} characters or fewer.')
+
+
+def api_submission_response(record:JobRecord, external_id:str)->dict:
+    return {
+        'created_at':record.created_at,
+        'external_id':external_id or None,
+        'file_name':record.file_name,
+        'file_size':record.file_size,
+        'message':record.message,
+        'offer_ids':record.offer_ids,
+        'progress':record.progress,
+        'report_ready':record.report_ready,
+        'result_url':f'/api/v1/reviews/{record.job_id}/result',
+        'review_id':record.job_id,
+        'status':record.status.value,
+        'status_url':f'/api/v1/reviews/{record.job_id}',
+    }
+
+
+async def fail_claimed_api_review(
+    job_id:str,
+    *,
+    file_name:str,
+    file_size:int|None,
+    has_ad_copy:bool,
+    has_creative:bool,
+    message:str,
+)->None:
+    try:
+        await asyncio.to_thread(
+            set_status,
+            job_id,
+            JobStatus.failed,
+            100,
+            message,
+            file_name,
+            file_size,
+            has_ad_copy,
+            has_creative,
+        )
+        await asyncio.to_thread(finalize_api_review, job_id, 'failed')
+    except Exception:
+        logger.exception('Could not finalize failed partner API submission %s.', job_id)
+
+
+@app.get('/api/v1')
+def partner_api_index():
+    return {
+        'name':'Vibe Check Partner API',
+        'version':'v1',
+        'authentication':'Authorization: Bearer <api-key>',
+        'documentation_url':'/api/v1/docs',
+        'openapi_url':'/api/v1/openapi.json',
+        'max_platform_upload_mb':int(os.getenv('MAX_UPLOAD_MB','400')),
+    }
+
+
+@app.get('/api/v1/docs', include_in_schema=False)
+def partner_api_docs():
+    return get_swagger_ui_html(
+        openapi_url='/api/v1/openapi.json',
+        title='Vibe Check Partner API v1',
+    )
+
+
+@app.get('/api/v1/openapi.json', include_in_schema=False)
+def partner_api_openapi():
+    routes=[
+        route
+        for route in app.routes
+        if isinstance(route,APIRoute)
+        and route.path.startswith('/api/v1')
+        and route.path not in {'/api/v1/docs','/api/v1/openapi.json'}
+    ]
+    schema=get_openapi(
+        title='Vibe Check Partner API',
+        version='1.0.0',
+        description=(
+            'Server-to-server API for submitting creative reviews and retrieving '
+            'owned status, reports, transcripts, OCR, visual observations, and evidence.'
+        ),
+        routes=routes,
+    )
+    components=schema.setdefault('components',{})
+    security_schemes=components.setdefault('securitySchemes',{})
+    security_schemes['BearerAuth']={
+        'type':'http',
+        'scheme':'bearer',
+        'bearerFormat':'Vibe Check API key',
+    }
+    for path,item in schema.get('paths',{}).items():
+        if path == '/api/v1':
+            continue
+        for operation in item.values():
+            if isinstance(operation,dict):
+                operation['security']=[{'BearerAuth':[]}]
+    return JSONResponse(schema)
+
+
+@app.get('/api/v1/me')
+async def partner_api_me(request:Request):
+    principal=await require_api_principal(request, 'reviews:read')
+    return {
+        'partner':{
+            'partner_id':principal.partner_id,
+            'name':principal.partner_name,
+            'allowed_offer_ids':list(principal.allowed_offer_ids),
+            'allow_custom_policy':principal.allow_custom_policy,
+            'concurrent_review_limit':principal.concurrent_review_limit,
+            'max_upload_mb':principal.max_upload_mb,
+            'monthly_review_limit':principal.monthly_review_limit,
+            'monthly_reviews_created':principal.monthly_reviews_created,
+            'retention_days':principal.retention_days,
+            'unlimited_concurrency':principal.unlimited_concurrency,
+            'unlimited_reviews':principal.unlimited_reviews,
+            'webhook_configured':principal.webhook_configured,
+        },
+        'api_key':{
+            'key_id':principal.api_key_id,
+            'name':principal.api_key_name,
+            'prefix':principal.api_key_prefix,
+            'scopes':sorted(principal.scopes),
+        },
+    }
+
+
+@app.post('/api/v1/reviews', status_code=202)
+async def partner_create_review(
+    request:Request,
+    creative:UploadFile|None=File(None),
+    video:UploadFile|None=File(None),
+    ad_copy:str=Form(''),
+    policy_text:str=Form(''),
+    notes:str=Form(''),
+    manual_transcript:str=Form(''),
+    external_id:str=Form(''),
+    frame_interval_seconds:float=Form(1.0),
+    scene_detection:bool=Form(False),
+):
+    principal=await require_api_principal(request, 'reviews:create')
+    external_id=validate_external_id(external_id)
+    idempotency_key=api_idempotency_key(request)
+    validate_partner_review_text(ad_copy,policy_text,notes,manual_transcript)
+    meta=partner_review_meta(
+        principal,
+        ad_copy=ad_copy,
+        policy_text=policy_text,
+        notes=notes,
+        manual_transcript=manual_transcript,
+        frame_interval_seconds=frame_interval_seconds,
+        scene_detection=scene_detection,
+        external_id=external_id,
+    )
+    upload=creative or video
+    if upload is None:
+        if not meta.has_ad_copy:
+            raise HTTPException(400, 'Submit a creative file or non-empty ad_copy.')
+        job_id=uuid.uuid4().hex
+        file_name=copy_review_file_name(meta.ad_copy)
+        file_size=len(meta.ad_copy.encode('utf-8'))
+        try:
+            claim=await asyncio.to_thread(
+                claim_api_review,
+                principal,
+                job_id=job_id,
+                external_id=external_id,
+                idempotency_key=idempotency_key,
+                media_kind='copy_only',
+                file_name=file_name,
+                file_size=file_size,
+            )
+        except Exception as exc:
+            raise partner_storage_error(exc) from None
+        if not claim.get('created'):
+            return await owned_api_review(principal, str(claim['review_id']))
+        jd=job_dir(job_id)
+        try:
+            (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+            record=await enqueue_job(job_id,None,'copy_only',meta,file_name,file_size=file_size)
+        except Exception as exc:
+            await fail_claimed_api_review(
+                job_id,
+                file_name=file_name,
+                file_size=file_size,
+                has_ad_copy=True,
+                has_creative=False,
+                message=f'Submission failed: {type(exc).__name__}',
+            )
+            raise HTTPException(503, 'The review could not be queued. Retry with the same Idempotency-Key.') from None
+        return api_submission_response(record,external_id)
+
+    file_name=Path(upload.filename or 'upload').name or 'upload'
+    try:
+        media_kind=detect_media_kind(file_name,upload.content_type)
+    except ValueError as exc:
+        raise HTTPException(415,str(exc)) from None
+    max_bytes=min(
+        principal.max_upload_mb,
+        int(os.getenv('MAX_UPLOAD_MB','400')),
+    )*1024*1024
+    job_id=uuid.uuid4().hex
+    jd=job_dir(job_id)
+    media_path=jd/file_name
+    size=0
+    try:
+        with media_path.open('wb') as output:
+            while chunk:=await upload.read(1024*1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413,f'Max upload for this API partner is {max_bytes // (1024*1024)} MB.')
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(400,'The creative file is empty.')
+        claim=await asyncio.to_thread(
+            claim_api_review,
+            principal,
+            job_id=job_id,
+            external_id=external_id,
+            idempotency_key=idempotency_key,
+            media_kind=media_kind,
+            file_name=file_name,
+            file_size=size,
+        )
+        if not claim.get('created'):
+            shutil.rmtree(jd,ignore_errors=True)
+            return await owned_api_review(principal,str(claim['review_id']))
+        (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+        record=await enqueue_job(job_id,media_path,media_kind,meta,file_name,file_size=size)
+        return api_submission_response(record,external_id)
+    except HTTPException:
+        shutil.rmtree(jd,ignore_errors=True)
+        raise
+    except Exception as exc:
+        claimed='claim' in locals() and bool(claim.get('created'))
+        if claimed:
+            await fail_claimed_api_review(
+                job_id,
+                file_name=file_name,
+                file_size=size or None,
+                has_ad_copy=meta.has_ad_copy,
+                has_creative=True,
+                message=f'Submission failed: {type(exc).__name__}',
+            )
+        shutil.rmtree(jd,ignore_errors=True)
+        if claimed:
+            raise HTTPException(503,'The review could not be queued. Retry with the same Idempotency-Key.') from None
+        raise partner_storage_error(exc) from None
+
+
+@app.post('/api/v1/uploads', status_code=201)
+async def partner_start_upload(request:Request):
+    principal=await require_api_principal(request,'reviews:create')
+    try:
+        payload=await request.json()
+    except (ValueError,UnicodeDecodeError):
+        raise HTTPException(400,'Invalid upload metadata.') from None
+    if not isinstance(payload,dict):
+        raise HTTPException(400,'Invalid upload metadata.')
+    file_name=Path(str(payload.get('file_name','upload'))).name or 'upload'
+    content_type=str(payload.get('content_type',''))
+    try:
+        size=int(payload.get('size',0))
+    except (TypeError,ValueError):
+        raise HTTPException(400,'Invalid upload size.') from None
+    max_bytes=min(principal.max_upload_mb,int(os.getenv('MAX_UPLOAD_MB','400')))*1024*1024
+    if size <= 0:
+        raise HTTPException(400,'The creative file is empty.')
+    if size > max_bytes:
+        raise HTTPException(413,f'Max upload for this API partner is {max_bytes // (1024*1024)} MB.')
+    try:
+        media_kind=detect_media_kind(file_name,content_type)
+    except ValueError as exc:
+        raise HTTPException(415,str(exc)) from None
+    upload_id=uuid.uuid4().hex
+    upload_dir=job_dir(upload_id)
+    (upload_dir/UPLOAD_CHUNKS_DIR).mkdir(parents=True,exist_ok=True)
+    chunk_count=(size+UPLOAD_CHUNK_SIZE-1)//UPLOAD_CHUNK_SIZE
+    metadata={
+        'api_partner_id':principal.partner_id,
+        'api_key_id':principal.api_key_id,
+        'created_at':now_ms(),
+        'expires_at':now_ms()+3600*1000,
+        'file_name':file_name,
+        'media_kind':media_kind,
+        'size':size,
+        'chunk_size':UPLOAD_CHUNK_SIZE,
+        'chunk_count':chunk_count,
+    }
+    (upload_dir/UPLOAD_METADATA_FILE).write_text(json.dumps(metadata),encoding='utf-8')
+    return {
+        'upload_id':upload_id,
+        'chunk_size':UPLOAD_CHUNK_SIZE,
+        'chunk_count':chunk_count,
+        'expires_in_seconds':3600,
+    }
+
+
+async def owned_api_upload(request:Request,upload_id:str)->tuple[ApiPrincipal,Path,dict]:
+    principal=await require_api_principal(request,'reviews:create')
+    upload_dir,metadata=read_upload_metadata(upload_id)
+    if metadata.get('api_partner_id') != principal.partner_id:
+        raise HTTPException(404,'Upload not found.')
+    if int(metadata.get('expires_at',0)) <= now_ms():
+        shutil.rmtree(upload_dir,ignore_errors=True)
+        raise HTTPException(410,'Upload expired. Start a new upload.')
+    return principal,upload_dir,metadata
+
+
+@app.put('/api/v1/uploads/{upload_id}/chunks/{chunk_index}')
+async def partner_upload_chunk(upload_id:str,chunk_index:int,request:Request):
+    _,upload_dir,metadata=await owned_api_upload(request,upload_id)
+    chunk_count=int(metadata['chunk_count'])
+    if chunk_index < 0 or chunk_index >= chunk_count:
+        raise HTTPException(400,'Invalid upload chunk.')
+    expected_size=min(
+        int(metadata['chunk_size']),
+        int(metadata['size'])-chunk_index*int(metadata['chunk_size']),
+    )
+    chunks_dir=upload_dir/UPLOAD_CHUNKS_DIR
+    chunk_path=chunks_dir/f'{chunk_index:06d}.part'
+    if chunk_path.exists() and chunk_path.stat().st_size == expected_size:
+        return {'received':expected_size}
+    temporary=chunks_dir/f'.{chunk_index:06d}.{uuid.uuid4().hex}.tmp'
+    received=0
+    try:
+        with temporary.open('wb') as output:
+            async for data in request.stream():
+                received += len(data)
+                if received > expected_size:
+                    raise HTTPException(413,'Upload chunk is larger than expected.')
+                output.write(data)
+        if received != expected_size:
+            raise HTTPException(400,'Upload chunk is incomplete; retry it.')
+        temporary.replace(chunk_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {'received':received}
+
+
+@app.post('/api/v1/uploads/{upload_id}/complete', status_code=202)
+async def partner_complete_upload(
+    upload_id:str,
+    request:Request,
+    ad_copy:str=Form(''),
+    policy_text:str=Form(''),
+    notes:str=Form(''),
+    manual_transcript:str=Form(''),
+    external_id:str=Form(''),
+    frame_interval_seconds:float=Form(1.0),
+    scene_detection:bool=Form(False),
+):
+    principal,upload_dir,metadata=await owned_api_upload(request,upload_id)
+    external_id=validate_external_id(external_id)
+    idempotency_key=api_idempotency_key(request)
+    validate_partner_review_text(ad_copy,policy_text,notes,manual_transcript)
+    if metadata.get('completed') or (upload_dir/'status.json').exists():
+        return await owned_api_review(principal,upload_id)
+    meta=partner_review_meta(
+        principal,
+        ad_copy=ad_copy,
+        policy_text=policy_text,
+        notes=notes,
+        manual_transcript=manual_transcript,
+        frame_interval_seconds=frame_interval_seconds,
+        scene_detection=scene_detection,
+        external_id=external_id,
+    )
+    chunks_dir=upload_dir/UPLOAD_CHUNKS_DIR
+    chunk_paths=[chunks_dir/f'{index:06d}.part' for index in range(int(metadata['chunk_count']))]
+    if any(not path.exists() for path in chunk_paths):
+        raise HTTPException(409,'Upload is incomplete; retry the missing chunks.')
+    if sum(path.stat().st_size for path in chunk_paths) != int(metadata['size']):
+        raise HTTPException(409,'Upload size does not match; restart this upload.')
+    media_path=upload_dir/str(metadata['file_name'])
+    claimed=False
+    try:
+        with media_path.open('wb') as output:
+            for chunk_path in chunk_paths:
+                with chunk_path.open('rb') as chunk:
+                    shutil.copyfileobj(chunk,output)
+        claim=await asyncio.to_thread(
+            claim_api_review,
+            principal,
+            job_id=upload_id,
+            external_id=external_id,
+            idempotency_key=idempotency_key,
+            media_kind=str(metadata['media_kind']),
+            file_name=str(metadata['file_name']),
+            file_size=int(metadata['size']),
+        )
+        if not claim.get('created'):
+            shutil.rmtree(upload_dir,ignore_errors=True)
+            return await owned_api_review(principal,str(claim['review_id']))
+        claimed=True
+        (upload_dir/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+        record=await enqueue_job(
+            upload_id,
+            media_path,
+            str(metadata['media_kind']),
+            meta,
+            str(metadata['file_name']),
+            file_size=int(metadata['size']),
+        )
+        metadata['completed']=True
+        (upload_dir/UPLOAD_METADATA_FILE).write_text(json.dumps(metadata),encoding='utf-8')
+        shutil.rmtree(chunks_dir,ignore_errors=True)
+        return api_submission_response(record,external_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        media_path.unlink(missing_ok=True)
+        if claimed:
+            await fail_claimed_api_review(
+                upload_id,
+                file_name=str(metadata['file_name']),
+                file_size=int(metadata['size']),
+                has_ad_copy=meta.has_ad_copy,
+                has_creative=True,
+                message=f'Submission failed: {type(exc).__name__}',
+            )
+            raise HTTPException(503,'The review could not be queued. Retry with the same Idempotency-Key.') from None
+        raise partner_storage_error(exc) from None
+
+
+@app.get('/api/v1/reviews')
+async def partner_review_history(request:Request,limit:int=50,cursor:str|None=None):
+    principal=await require_api_principal(request,'history:read')
+    try:
+        return await asyncio.to_thread(
+            list_api_reviews,
+            principal,
+            limit=limit,
+            cursor=cursor,
+        )
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+@app.get('/api/v1/reviews/{job_id}')
+async def partner_review_status(job_id:str,request:Request):
+    principal=await require_api_principal(request,'reviews:read')
+    return await owned_api_review(principal,job_id)
+
+
+@app.get('/api/v1/reviews/{job_id}/result')
+async def partner_review_result(job_id:str,request:Request):
+    principal=await require_api_principal(request,'reviews:read')
+    review=await owned_api_review(principal,job_id)
+    if review.get('status') == 'failed':
+        raise HTTPException(409,'Review processing failed; inspect the status response for details.')
+    if not review.get('report_ready'):
+        raise HTTPException(409,'Review result is not ready yet.',headers={'Retry-After':'5'})
+    report=await asyncio.to_thread(get_stored_report,job_id)
+    if report is None:
+        raise HTTPException(404,'Review result not found.')
+    return {
+        'review':review,
+        'report':report,
+        'artifacts':{
+            'evidence_url':f'/api/v1/reviews/{job_id}/evidence',
+            'json_url':f'/api/v1/reviews/{job_id}/report.json',
+            'pdf_url':f'/api/v1/reviews/{job_id}/report.pdf',
+        },
+    }
+
+
+@app.get('/api/v1/reviews/{job_id}/evidence')
+async def partner_review_evidence(job_id:str,request:Request):
+    principal=await require_api_principal(request,'evidence:read')
+    await owned_api_review(principal,job_id)
+    try:
+        evidence=await asyncio.to_thread(get_api_evidence,principal,job_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    if evidence is None:
+        raise HTTPException(404,'Review evidence not found.')
+    if evidence.get('expired'):
+        raise HTTPException(410,'Review evidence has expired under this partner’s retention policy.')
+    bundle=evidence.get('bundle')
+    if bundle is None:
+        raise HTTPException(409,'Review evidence is not ready yet.',headers={'Retry-After':'5'})
+    frames=[{
+        'filename':frame.get('filename'),
+        'timestamp':frame.get('timestamp'),
+        'url':f'/api/v1/reviews/{job_id}/frames/{frame.get("filename")}',
+    } for frame in list_review_evidence_frames(job_id) if frame.get('filename')]
+    return {**evidence,'bundle':bundle,'evidence_frames':frames}
+
+
+@app.get('/api/v1/reviews/{job_id}/report.json')
+async def partner_report_json(job_id:str,request:Request):
+    principal=await require_api_principal(request,'reports:download')
+    review=await owned_api_review(principal,job_id)
+    if not review.get('report_ready'):
+        raise HTTPException(409,'Review result is not ready yet.',headers={'Retry-After':'5'})
+    report=await asyncio.to_thread(get_stored_report,job_id)
+    if report is None:
+        raise HTTPException(404,'Review result not found.')
+    return JSONResponse(
+        report,
+        headers={'content-disposition':f'attachment; filename="{job_id}-report.json"'},
+    )
+
+
+@app.get('/api/v1/reviews/{job_id}/report.pdf')
+async def partner_report_pdf(job_id:str,request:Request,offer_id:str|None=None):
+    principal=await require_api_principal(request,'reports:download')
+    review=await owned_api_review(principal,job_id)
+    if not review.get('report_ready'):
+        raise HTTPException(409,'Review result is not ready yet.',headers={'Retry-After':'5'})
+    normalized=(offer_id or review.get('primary_offer_id') or '').strip().lower()
+    if not OFFER_ID_PATTERN.fullmatch(normalized) or normalized not in review.get('offer_ids',[]):
+        raise HTTPException(404,'Offer report not found.')
+    try:
+        artifact=await asyncio.to_thread(ensure_review_pdf,job_id,normalized)
+        return pdf_artifact_response(artifact)
+    except (FileNotFoundError,ValueError):
+        raise HTTPException(404,'Offer report not found.') from None
+
+
+@app.get('/api/v1/reviews/{job_id}/thumbnail')
+async def partner_review_thumbnail(job_id:str,request:Request):
+    principal=await require_api_principal(request,'evidence:read')
+    await owned_api_review(principal,job_id)
+    frames=list_review_evidence_frames(job_id)
+    if not frames:
+        raise HTTPException(404,'Creative thumbnail not found.')
+    return evidence_frame_response(job_id,str(frames[0].get('filename') or ''))
+
+
+@app.get('/api/v1/reviews/{job_id}/frames/{filename}')
+async def partner_review_frame(job_id:str,filename:str,request:Request):
+    principal=await require_api_principal(request,'evidence:read')
+    await owned_api_review(principal,job_id)
+    return evidence_frame_response(job_id,filename)
+
+
+@app.delete('/api/v1/reviews/{job_id}')
+async def partner_delete_review(job_id:str,request:Request):
+    principal=await require_api_principal(request,'reviews:delete')
+    review=await owned_api_review(principal,job_id)
+    if review.get('status') not in {'complete','failed'}:
+        raise HTTPException(409,'Only completed or failed reviews can be deleted.')
+    try:
+        deleted=await asyncio.to_thread(delete_review,job_id)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from None
+    except FileNotFoundError:
+        # The durable review may already be soft-deleted from an interrupted
+        # prior request. The ownership record still authorizes this cleanup.
+        deleted={'job_id':job_id,'deleted_at':now_ms()}
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    try:
+        await asyncio.to_thread(mark_api_review_deleted,principal,job_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    return deleted
+
+
 @app.get('/api/health')
 def health_check():
     return {'status':'ok', 'queue':queue_state()}
@@ -660,6 +1468,7 @@ async def tick_review_automations(request:Request):
     await asyncio.to_thread(recover_interrupted_automation_jobs)
     results=await run_due_review_automations()
     start_background_task(deliver_batch_notifications_in_background())
+    start_background_task(maintain_partner_api_in_background())
     return {'runs':[result.model_dump(mode='json') for result in results]}
 
 

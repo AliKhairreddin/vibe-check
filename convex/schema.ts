@@ -309,6 +309,109 @@ export default defineSchema({
   })
     .index("by_kind_key", ["kind", "key"])
     .index("by_job_id", ["jobId"]),
+  apiPartners: defineTable({
+    allowedOfferIds: v.array(v.string()),
+    allowCustomPolicy: v.boolean(),
+    concurrentReviewLimit: v.number(),
+    createdAt: v.number(),
+    description: v.string(),
+    maxUploadMb: v.number(),
+    monthlyReviewLimit: v.number(),
+    name: v.string(),
+    partnerId: v.string(),
+    retentionDays: v.number(),
+    status: v.union(v.literal("active"), v.literal("suspended")),
+    unlimitedConcurrency: v.boolean(),
+    unlimitedReviews: v.boolean(),
+    updatedAt: v.number(),
+    webhookSigningSecret: v.optional(v.string()),
+    webhookUrl: v.optional(v.string()),
+  })
+    .index("by_partner_id", ["partnerId"])
+    .index("by_status", ["status"]),
+  apiKeys: defineTable({
+    createdAt: v.number(),
+    expiresAt: v.optional(v.number()),
+    keyId: v.string(),
+    lastUsedAt: v.optional(v.number()),
+    name: v.string(),
+    partnerId: v.string(),
+    prefix: v.string(),
+    revokedAt: v.optional(v.number()),
+    scopes: v.array(v.string()),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    tokenHash: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_key_id", ["keyId"])
+    .index("by_partner_id", ["partnerId"])
+    .index("by_token_hash", ["tokenHash"]),
+  apiReviewLinks: defineTable({
+    apiKeyId: v.string(),
+    createdAt: v.number(),
+    externalId: v.optional(v.string()),
+    fileName: v.string(),
+    fileSize: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
+    jobId: v.string(),
+    mediaKind: v.string(),
+    partnerId: v.string(),
+    status: v.union(
+      v.literal("active"),
+      v.literal("complete"),
+      v.literal("failed"),
+      v.literal("deleted")
+    ),
+    terminalAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_job_id", ["jobId"])
+    .index("by_partner_id_and_created_at", ["partnerId", "createdAt"])
+    .index("by_partner_id_and_idempotency_key", ["partnerId", "idempotencyKey"])
+    .index("by_partner_id_and_status_and_created_at", ["partnerId", "status", "createdAt"])
+    .index("by_status_and_updated_at", ["status", "updatedAt"]),
+  apiMonthlyUsage: defineTable({
+    createdAt: v.number(),
+    monthKey: v.string(),
+    partnerId: v.string(),
+    reviewsCreated: v.number(),
+    updatedAt: v.number(),
+  }).index("by_partner_id_and_month_key", ["partnerId", "monthKey"]),
+  apiEvidenceBundles: defineTable({
+    bundle: v.any(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    jobId: v.string(),
+    partnerId: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_job_id", ["jobId"])
+    .index("by_expires_at", ["expiresAt"]),
+  apiWebhookDeliveries: defineTable({
+    attempts: v.number(),
+    createdAt: v.number(),
+    deliveryId: v.string(),
+    eventType: v.string(),
+    jobId: v.string(),
+    lastError: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    nextAttemptAt: v.number(),
+    partnerId: v.string(),
+    payload: v.any(),
+    responseStatus: v.optional(v.number()),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("claimed"),
+      v.literal("delivered"),
+      v.literal("failed")
+    ),
+    updatedAt: v.number(),
+  })
+    .index("by_delivery_id", ["deliveryId"])
+    .index("by_job_id", ["jobId"])
+    .index("by_partner_id_and_created_at", ["partnerId", "createdAt"])
+    .index("by_status_and_next_attempt_at", ["status", "nextAttemptAt"])
+    .index("by_status_and_lease_expires_at", ["status", "leaseExpiresAt"]),
   offerProfiles: defineTable({
     createdAt: v.number(),
     displayName: v.string(),

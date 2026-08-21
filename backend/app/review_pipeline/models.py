@@ -297,6 +297,9 @@ class ReviewRequestMeta(BaseModel):
     automation_run_id: str | None = None
     automation_file_id: str | None = None
     automation_file_modified_time: str = ''
+    api_partner_id: str | None = None
+    api_key_id: str | None = None
+    api_external_id: str = ''
     live_scan_kind: Literal['creative','copy'] | None = None
     live_scan_key: str = ''
     live_scan_creative_name: str = ''

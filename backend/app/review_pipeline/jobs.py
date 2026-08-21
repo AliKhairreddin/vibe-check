@@ -33,6 +33,7 @@ from .ocr import run_ocr
 from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 from .timing import ProcessingTimer
+from .partner_api import persist_api_evidence
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 
@@ -347,6 +348,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             queued_at_ms=None
     timer=ProcessingTimer(job_id, media_kind, queued_at_ms)
     transcript_task:asyncio.Task[dict]|None=None
+    media_metadata:dict={}
     completed=False
     error_type=''
     try:
@@ -440,6 +442,29 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         report_json=report.model_dump(mode='json')
         with timer.stage('persist_report'):
             set_report(job_id, report_json, meta.automation_run_id)
+        if meta.api_partner_id:
+            api_evidence={
+                'schema_version':1,
+                'review_id':job_id,
+                'media_type':media_kind,
+                'media_metadata':media_metadata,
+                'submitted_ad_copy':meta.ad_copy,
+                'submitted_notes':meta.notes,
+                'submitted_policy_supplement':meta.policy_text,
+                'audio_transcript':transcript,
+                'onscreen_text_ocr':ocr[:200],
+                'visual_frame_references':frames[:200],
+                'visual_observations':visual_observations,
+                'limitations':[evidence_note],
+            }
+            with timer.stage('persist_api_evidence'):
+                await anyio.to_thread.run_sync(
+                    lambda: persist_api_evidence(
+                        job_id=job_id,
+                        partner_id=meta.api_partner_id or '',
+                        bundle=api_evidence,
+                    )
+                )
         artifact_results=await asyncio.gather(
             _persist_evidence_with_timing(
                 timer,
@@ -510,7 +535,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     )
                 except Exception:
                     logger.exception('Batch completion notification failed for job %s', job_id)
-            else:
+            elif not meta.api_partner_id:
                 await asyncio.to_thread(
                     send_review_message,
                     rec,

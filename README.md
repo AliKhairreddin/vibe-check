@@ -38,6 +38,7 @@ The system is intentionally hybrid:
 - Saves disabled-by-default Drive review automations with timezone, weekday, time, subfolder, and filename-glob controls.
 - Accepts automatic live-ad observations from the bundled Chrome extension, deduplicates media by normalized creative name, and reviews each unique primary text separately as copy-only evidence.
 - Shows accounts observed by media buyers today on a dedicated Live Scans page and sends completed live creative/copy findings to Telegram.
+- Exposes a versioned, account-isolated Partner API with scoped keys, resumable uploads, signed completion webhooks, durable expanded evidence, retention controls, and optional unlimited internal usage.
 
 ## Architecture
 
@@ -88,7 +89,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 143 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 175 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, and webhook signing, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -168,8 +169,15 @@ own offer. The former `/kissterra` routes redirect into this shared portal.
 
 ## API Overview
 
+The server-to-server Partner API is rooted at `/api/v1`. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) or the deployed V1-only Swagger page at `/api/v1/docs`.
+
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /api/v1/reviews` | Authenticated partner creative or copy-only submission |
+| `POST /api/v1/uploads` | Start an authenticated resumable creative upload |
+| `GET /api/v1/reviews/{job_id}/result` | Read an owned structured report and artifact links |
+| `GET /api/v1/reviews/{job_id}/evidence` | Read owned transcript, OCR, visual observations, and protected frames |
+| `GET /api/v1/reviews` | Browse cursor-paginated partner-owned history |
 | `POST /api/reviews` | Create a creative or copy-only review |
 | `POST /api/batches` | Register a durable multi-item batch |
 | `GET /api/batches/{batch_id}` | Read aggregate and item progress |

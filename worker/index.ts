@@ -52,6 +52,14 @@ function backendName(env: Env, shardKey = "default"): string {
 function requestShardKey(request: Request): string {
   const supplied = request.headers.get(BACKEND_SHARD_HEADER)?.trim();
   if (supplied) return supplied.slice(0, 200);
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/api/v1/")) {
+    const authorization = request.headers.get("authorization")?.trim();
+    if (authorization?.toLowerCase().startsWith("bearer ")) {
+      // Stable per API key so a resumable upload stays on one container shard.
+      return authorization.slice(7, 207);
+    }
+  }
   return "default";
 }
 
@@ -123,6 +131,7 @@ async function hasDueAutomations(env: Env): Promise<boolean> {
   const state = payload.value as {
     automations?: AutomationSchedule[];
     needs_maintenance?: boolean;
+    needs_api_maintenance?: boolean;
     needs_notification?: boolean;
     needs_recovery?: boolean;
     needs_review_recovery?: boolean;
@@ -130,6 +139,7 @@ async function hasDueAutomations(env: Env): Promise<boolean> {
   if (!state || typeof state !== "object") return false;
   if (
     state.needs_maintenance
+    || state.needs_api_maintenance
     || state.needs_recovery
     || state.needs_review_recovery
     || state.needs_notification

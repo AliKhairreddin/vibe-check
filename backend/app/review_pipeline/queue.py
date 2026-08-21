@@ -29,6 +29,7 @@ from .automation_storage import (
     record_review_automation_job_result,
     release_review_automation_claim,
 )
+from .partner_api import deliver_pending_api_webhooks, finalize_api_review
 
 logger = logging.getLogger(__name__)
 
@@ -635,6 +636,21 @@ async def _process_queue(worker_index: int) -> None:
         finally:
             await _release_automation_heartbeat(job.job_id)
             if terminal:
+                if job.meta.api_partner_id:
+                    try:
+                        terminal_record = await asyncio.to_thread(get_status, job.job_id)
+                        if terminal_record.status in {JobStatus.complete, JobStatus.failed}:
+                            await asyncio.to_thread(
+                                finalize_api_review,
+                                job.job_id,
+                                terminal_record.status.value,
+                            )
+                            await deliver_pending_api_webhooks(limit=1)
+                    except Exception:
+                        logger.exception(
+                            'Could not finalize partner API lifecycle for job %s.',
+                            job.job_id,
+                        )
                 _queue_diagnostics['terminal_count'] = int(
                     _queue_diagnostics['terminal_count']
                 ) + 1

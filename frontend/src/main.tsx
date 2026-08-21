@@ -100,6 +100,7 @@ import { cn } from '@/lib/utils';
 import { DashboardPage } from '@/components/dashboard';
 import { DriveBrowser } from '@/components/drive-browser';
 import { AdminAccessGate } from '@/components/admin-access-gate';
+import { ApiAccessPanel } from '@/components/api-access-panel';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
 import { LiveScansPage } from '@/components/live-scans-page';
@@ -2776,6 +2777,58 @@ function BatchPage() {
   );
 }
 
+type AdminSettingsSection = 'api' | 'policies';
+
+function AdminSettingsWorkspace() {
+  const [section, setSection] = useState<AdminSettingsSection>('api');
+
+  return (
+    <div className="grid gap-4">
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="text-base">Admin sections</CardTitle>
+          <CardDescription>Choose the area you want to configure.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-2 sm:grid-cols-2" role="tablist" aria-label="Admin settings sections">
+          <Button
+            type="button"
+            role="tab"
+            aria-selected={section === 'api'}
+            variant={section === 'api' ? 'default' : 'outline'}
+            className="h-auto justify-start px-4 py-3 text-left"
+            onClick={() => setSection('api')}
+          >
+            <span className="grid gap-0.5">
+              <span>API access</span>
+              <span className={cn('text-xs font-normal', section === 'api' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                Partners, unlimited plans, keys, scopes, and webhooks
+              </span>
+            </span>
+          </Button>
+          <Button
+            type="button"
+            role="tab"
+            aria-selected={section === 'policies'}
+            variant={section === 'policies' ? 'default' : 'outline'}
+            className="h-auto justify-start px-4 py-3 text-left"
+            onClick={() => setSection('policies')}
+          >
+            <span className="grid gap-0.5">
+              <span>Policies &amp; offers</span>
+              <span className={cn('text-xs font-normal', section === 'policies' ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
+                Official guidelines, internal rules, and offer access
+              </span>
+            </span>
+          </Button>
+        </CardContent>
+      </Card>
+      <div role="tabpanel">
+        {section === 'api' ? <ApiAccessPanel /> : <OfferSettingsPanel />}
+      </div>
+    </div>
+  );
+}
+
 function SettingsPage() {
   const [model, setModel] = useState(loadOpenRouterModel);
   const [saved, setSaved] = useState(false);
@@ -2793,11 +2846,11 @@ function SettingsPage() {
       <section className="grid gap-1">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Manage offer-specific official guidelines, current internal rules, and review runtime defaults.
+          Manage API integrations, offer-specific policies, and review runtime defaults.
         </p>
       </section>
       <AdminAccessGate>
-        <OfferSettingsPanel />
+        <AdminSettingsWorkspace />
       </AdminAccessGate>
       <Card>
         <CardHeader>

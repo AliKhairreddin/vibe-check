@@ -78,6 +78,7 @@ export const list = query({
 
 export const tickState = query({
   args: { secret: v.string(), now: v.number() },
+  returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const maintenance = await ctx.db
@@ -146,6 +147,44 @@ export const tickState = query({
       }
     }
 
+    const [pendingApiWebhook, expiredApiWebhookClaim, expiredApiEvidence] = await Promise.all([
+      ctx.db
+        .query("apiWebhookDeliveries")
+        .withIndex("by_status_and_next_attempt_at", (q) =>
+          q.eq("status", "pending").lte("nextAttemptAt", args.now)
+        )
+        .take(1),
+      ctx.db
+        .query("apiWebhookDeliveries")
+        .withIndex("by_status_and_lease_expires_at", (q) =>
+          q.eq("status", "claimed").lte("leaseExpiresAt", args.now)
+        )
+        .take(1),
+      ctx.db
+        .query("apiEvidenceBundles")
+        .withIndex("by_expires_at", (q) => q.lte("expiresAt", args.now))
+        .take(1),
+    ]);
+    const activeApiReviews = await ctx.db
+      .query("apiReviewLinks")
+      .withIndex("by_status_and_updated_at", (q) => q.eq("status", "active"))
+      .order("asc")
+      .take(10);
+    let needsApiReconciliation = false;
+    for (const link of activeApiReviews) {
+      const review = await ctx.db
+        .query("reviews")
+        .withIndex("by_job_id", (q) => q.eq("jobId", link.jobId))
+        .unique();
+      if (
+        review?.deletedAt === undefined
+        && (review?.status === "complete" || review?.status === "failed")
+      ) {
+        needsApiReconciliation = true;
+        break;
+      }
+    }
+
     const automations = await ctx.db
       .query("reviewAutomations")
       .withIndex("by_enabled", (q) => q.eq("enabled", true))
@@ -157,6 +196,12 @@ export const tickState = query({
       needs_recovery: Boolean(running.length || queued.length),
       needs_review_recovery: needsReviewRecovery,
       needs_notification: needsNotification,
+      needs_api_maintenance: Boolean(
+        pendingApiWebhook.length
+        || expiredApiWebhookClaim.length
+        || expiredApiEvidence.length
+        || needsApiReconciliation
+      ),
       needs_maintenance: !maintenance?.complete,
     };
   },
