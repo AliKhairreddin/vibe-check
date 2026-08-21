@@ -89,7 +89,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 175 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, and webhook signing, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 176 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, webhook signing, browser API routing, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 

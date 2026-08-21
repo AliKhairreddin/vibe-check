@@ -5061,6 +5061,19 @@ def test_worker_scheduled_recovery_precedes_automation_eligibility_gate():
     assert recovery_request < automation_gate
 
 
+def test_worker_routes_api_browser_navigation_before_spa_assets():
+    wrangler_config = json.loads(
+        (Path(__file__).resolve().parents[2] / 'wrangler.jsonc').read_text(
+            encoding='utf-8',
+        ),
+    )
+
+    assert wrangler_config['assets']['not_found_handling'] == (
+        'single-page-application'
+    )
+    assert wrangler_config['assets']['run_worker_first'] == ['/api/*']
+
+
 def test_batch_item_update_rehydrates_missing_local_batch_from_convex(
     tmp_path,
     monkeypatch,
