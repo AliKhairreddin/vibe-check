@@ -1,56 +1,47 @@
-# Client portal design QA
+# Design QA: API documentation CTA
 
-## Visual truth
+- Source visual truth: conversation attachment, user-provided Dia screenshot of `/settings` at 1315 × 768 px.
+- Implementation screenshots:
+  - `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/design-qa-api-docs-cta-desktop.png`
+  - `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/design-qa-api-docs-cta-mobile.png`
+- Viewports: desktop 1315 × 768 CSS px; mobile 390 × 844 CSS px.
+- Pixel density: source and implementation were inspected at their native captured dimensions; no density normalization was required.
+- State: light theme, admin settings unlocked, API access tab selected, integration details visible. Local API data was mocked for visual verification only.
 
-- Live reference: `https://creative-compliance-cp.netlify.app/`
-- Reference dashboard capture: `/tmp/vibe-check-client-qa/source-final.png`
-- Local dashboard capture: `/tmp/vibe-check-client-qa/implementation-final.png`
-- Full dashboard comparison: `/tmp/vibe-check-client-qa/comparison-final.png`
-- Focused dashboard comparison: `/tmp/vibe-check-client-qa/comparison-focus-final.png`
-- Reference expanded-card capture: `/tmp/vibe-check-client-qa/source-expanded-actions.png`
-- Local expanded-card capture: `/tmp/vibe-check-client-qa/implementation-expanded-actions.png`
-- Focused expanded-card comparison: `/tmp/vibe-check-client-qa/comparison-expanded-actions.png`
-- Reference CSS viewport: 1440 x 900 at device pixel ratio 1; captured image: 1425 x 891 pixels because browser chrome reserved the remaining area.
-- Local CSS viewport: 1458 x 806 at device pixel ratio 2; the Browser capture is CSS-pixel normalized to 1458 x 806 pixels.
-- Comparison method: native captured pixels with no scaling; each full image was padded to a common 1460 x 892 canvas before horizontal composition.
-- State: desktop, light mode, admin signed in, Kissterra selected, All status, All batches, first batch open. Both collapsed-card and one-expanded-flagged-card states were compared.
+## Full-view comparison evidence
 
-The user asked for the reference information architecture and interaction model while retaining VibeCheck's existing shadcn visual language. Differences in fonts, colors, button treatments, and icon style are therefore intentional. Synthetic local preview data also differs from the reference's production-shaped filenames and totals.
+The source showed the documentation destination as a small underlined text link directly below the base URL. The implementation preserves the card, typography, spacing system, base URL, curl example, and surrounding runtime card while intentionally promoting that destination to a high-contrast primary action. At desktop width the action remains compact and left-aligned; at mobile width it fills the available card width without overflow.
 
-## Findings and comparison history
+## Focused region comparison evidence
 
-1. **P2 — The first local pass used two creative columns at the desktop QA width.**
-   - Earlier evidence: `/tmp/vibe-check-client-qa/comparison.png` showed materially larger cards and less batch density than the reference.
-   - Fix: the responsive grid now renders three columns at the desktop breakpoint while retaining two columns on medium screens and one on mobile.
-   - Post-fix evidence: `/tmp/vibe-check-client-qa/comparison-final.png` and `/tmp/vibe-check-client-qa/comparison-focus-final.png` show equivalent three-column scanning density.
+A focused comparison was required because the reported issue was isolated to the link between the base URL and the curl example. The revised action adds a clear two-line hierarchy, an external-link icon, and a 78 px mobile tap target. Its label and supporting text remain readable at 390 px, and the curl block stays visually separate below it.
 
-2. **P2 — The first local batch heading carried a redundant secondary label and excess vertical space.**
-   - Fix: the normalized batch date plus `Auto` is now the single primary title, with state and totals kept in their own compact tracks.
-   - Post-fix evidence: final batch rows match the reference hierarchy and expand/collapse rhythm.
+## Required fidelity surfaces
 
-No actionable P0, P1, or P2 findings remain.
+- Fonts and typography: existing Geist family, weights, line heights, and hierarchy are preserved. The CTA label is semibold and its supporting line uses the existing small-text scale.
+- Spacing and layout rhythm: existing card gaps and radii are preserved. The CTA uses the existing rounded control language and is responsive (`w-full` on narrow screens, content width at `sm` and above).
+- Colors and visual tokens: the CTA uses the existing `primary`, `primary-foreground`, `ring`, and hover tokens, so light/dark theme behavior stays aligned with the app.
+- Image quality and asset fidelity: no raster imagery is present or changed. The external-link cue uses the project’s existing icon library.
+- Copy and content: the destination is now labeled “Open interactive API docs,” with “Explore endpoints, schemas, and request examples.” explaining what users will find.
 
-## Fidelity surfaces
+## Findings
 
-- **Structure:** persistent client navigation, client-level totals, search, status filters, batch filters, accordion batches, three-column creative grid, per-creative decision control, and bulk approval are present.
-- **Expanded creative:** the expanded card preserves the reference's preview, flag/summary, and Drive action, then adds the user-requested `View full details` action to the existing VibeCheck detail screen.
-- **Typography and tokens:** the existing Geist/shadcn typography, neutral palette, semantic warning/success colors, borders, radii, focus rings, and Lucide icons remain the visual source of truth.
-- **Responsive behavior:** navigation stacks above content on narrow screens; filters wrap; batches remain readable; creative cards become a single column.
-- **Assets:** the implementation displays the review evidence thumbnail already stored by VibeCheck. No reference assets were copied.
+No actionable P0, P1, or P2 issues remain.
 
-## Interaction, authorization, and responsive checks
+## Interaction and accessibility checks
 
-- Admin login can switch among Kissterra, ACP, Lead Economy, and Smart Financial.
-- Each client login sees only its own portal; a server-side cross-client request returns 404.
-- All four portals currently display the single `Auto Insurance` category.
-- Batch expansion, creative expansion, search, status filters, batch filters, per-creative Pending/Approved/Disapproved changes, reset to Pending, and bulk approval were exercised locally.
-- `Open in Drive` and `View full details` are both visible in the expanded card; the detailed route opens the existing review page successfully.
-- A 390 x 844 mobile viewport was checked with client-only login, wrapped filters, and single-column cards.
-- Browser console checked after the interactions: no warnings or errors.
-- Full repository verification passes: 160 backend tests, Convex TypeScript validation, Worker typecheck, and frontend production build.
+- Link exposes an accessible name containing both the action and supporting description.
+- Link retains `target="_blank"` and `rel="noreferrer"`; activation opened the expected `/api/v1/docs` URL in a new tab.
+- Visible hover and keyboard focus styles are defined with the app’s existing color and ring tokens.
+- Desktop and mobile layouts were browser-rendered and inspected.
+- Browser console errors: none.
+
+## Comparison history
+
+- Pass 1: no actionable P0, P1, or P2 visual differences were found after the intentional affordance change; no remediation iteration was required.
 
 ## Follow-up polish
 
-- No P3 items are required for the requested local approval build.
+None required for this scoped change.
 
 final result: passed

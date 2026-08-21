@@ -5,6 +5,7 @@ import {
   Check,
   Clipboard,
   Code2,
+  ExternalLink,
   Infinity as InfinityIcon,
   KeyRound,
   LoaderCircle,
@@ -18,7 +19,7 @@ import {
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Card,
   CardAction,
@@ -699,12 +700,21 @@ export function ApiAccessPanel() {
             <Label>Base URL</Label>
             <code className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{baseUrl}</code>
             <a
-              className="w-fit text-xs font-medium text-primary underline-offset-4 hover:underline"
+              className={cn(
+                buttonVariants({ size: 'lg' }),
+                'mt-2 h-auto w-full justify-between gap-4 whitespace-normal px-4 py-3 sm:w-fit'
+              )}
               href={`${baseUrl}/docs`}
               target="_blank"
               rel="noreferrer"
             >
-              Open interactive API documentation
+              <span className="grid gap-0.5 text-left">
+                <span className="text-sm font-semibold">Open interactive API docs</span>
+                <span className="text-xs font-normal text-primary-foreground/75">
+                  Explore endpoints, schemas, and request examples.
+                </span>
+              </span>
+              <ExternalLink className="size-4 shrink-0" aria-hidden="true" />
             </a>
           </div>
           <div className="grid gap-1">
