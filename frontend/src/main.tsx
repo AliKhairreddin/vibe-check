@@ -2989,9 +2989,13 @@ function ApiHubPage() {
   const navigate = developerApiDocsRoute.useNavigate();
 
   useEffect(() => {
+    const previousTitle = document.title;
     document.title = view === 'guide'
       ? 'Vibe Check Partner API · Developer guide'
       : 'Vibe Check Partner API · Interactive reference';
+    return () => {
+      document.title = previousTitle;
+    };
   }, [view]);
 
   function changeView(nextView: ApiDocsView) {

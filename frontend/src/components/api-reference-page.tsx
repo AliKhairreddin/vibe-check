@@ -896,16 +896,16 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
 
   useEffect(() => {
     const previousTitle = document.title;
-    document.title = 'Vibe Check Partner API · Interactive reference';
+    if (!embedded) document.title = 'Vibe Check Partner API · Interactive reference';
     const hash = window.location.hash.slice(1);
     if (endpoints.some((endpoint) => endpoint.id === hash)) {
       setOpenEndpoints((current) => new Set(current).add(hash));
     }
     return () => {
-      document.title = previousTitle;
+      if (!embedded) document.title = previousTitle;
       for (const url of Object.values(objectUrls.current)) URL.revokeObjectURL(url);
     };
-  }, []);
+  }, [embedded]);
 
   function toggleEndpoint(id: string) {
     setOpenEndpoints((current) => {
