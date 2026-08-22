@@ -65,4 +65,13 @@ The selector/header region is legible at the comparison's 1313-pixel width, so a
 
 - No blocking visual polish remains. A future iteration could add a compact partner overview above the detailed account form after observing real admin usage.
 
+## Guide hero simplification follow-up
+
+- Reference fragments reviewed: the user-identified `Open interactive reference`, `OpenAPI JSON`, and `Developer guide` controls.
+- Final implementation capture: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/10-guide-hero-simplified.png`.
+- Combined comparison input: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/11-guide-hero-focused-comparison.png`.
+- Iteration 2: removed the three hero elements that repeated the docs header's Guide tab, Interactive reference tab, and OpenAPI JSON action. Retained `API v1`, `Server to server`, and `Copy base URL` because each contributes distinct context or utility.
+- Dia verification confirmed the selected Guide tab remains visible and actionable, the header-level OpenAPI JSON action remains present, the hero has no duplicate navigation or schema actions, and the bottom long-page `Open API reference` CTA remains available after the guide content.
+- No P0/P1/P2 visual findings remain. The simplified hero preserves alignment, spacing, responsive wrapping, and the existing component language.
+
 final result: passed

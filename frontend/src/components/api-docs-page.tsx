@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import {
   ArrowRight,
-  BookOpen,
   Check,
   Clipboard,
   Code2,
-  FileJson,
   Fingerprint,
   KeyRound,
-  Play,
   ScanSearch,
   ShieldCheck,
 } from 'lucide-react';
@@ -147,7 +144,6 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
         <div className="pointer-events-none absolute -right-24 -top-32 size-80 rounded-full bg-chart-2/10 blur-3xl" />
         <div className="relative grid max-w-4xl gap-5">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary"><BookOpen /> Developer guide</Badge>
             <Badge variant="outline">API v1</Badge>
             <Badge variant="outline"><ShieldCheck /> Server to server</Badge>
           </div>
@@ -161,12 +157,6 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button nativeButton={false} render={<a href="/developers/api?view=reference" />}>
-              <Play /> Open interactive reference <ArrowRight />
-            </Button>
-            <Button nativeButton={false} variant="outline" render={<a href={`${baseUrl}/openapi.json`} target="_blank" rel="noreferrer" />}>
-              <FileJson /> OpenAPI JSON
-            </Button>
             <CopyButton label="Copy base URL" value={baseUrl} />
           </div>
         </div>
