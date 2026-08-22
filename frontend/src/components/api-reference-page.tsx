@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  BookOpen,
   Check,
   ChevronDown,
   Clipboard,
   CloudUpload,
-  Code2,
   Download,
-  ExternalLink,
   Eye,
   EyeOff,
-  FileJson,
   FileSearch,
   Fingerprint,
   KeyRound,
@@ -1092,7 +1088,6 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
         <div className="relative grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-end">
           <div className="grid max-w-4xl gap-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary"><Code2 /> Interactive reference</Badge>
               <Badge variant="outline">API v1</Badge>
               <Badge variant="outline">OpenAPI 3.1</Badge>
               <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300"><span className="size-1.5 rounded-full bg-emerald-500" /> Production</Badge>
@@ -1105,12 +1100,6 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button nativeButton={false} variant="outline" render={<a href="/developers/api?view=guide" />}>
-                <BookOpen /> Developer guide
-              </Button>
-              <Button nativeButton={false} variant="outline" render={<a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" />}>
-                <FileJson /> OpenAPI JSON <ExternalLink />
-              </Button>
               <CopyButton label="Copy base URL" value={`${PRODUCTION_ORIGIN}/api/v1`} />
             </div>
           </div>

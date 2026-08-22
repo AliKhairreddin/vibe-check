@@ -73,5 +73,9 @@ The selector/header region is legible at the comparison's 1313-pixel width, so a
 - Iteration 2: removed the three hero elements that repeated the docs header's Guide tab, Interactive reference tab, and OpenAPI JSON action. Retained `API v1`, `Server to server`, and `Copy base URL` because each contributes distinct context or utility.
 - Dia verification confirmed the selected Guide tab remains visible and actionable, the header-level OpenAPI JSON action remains present, the hero has no duplicate navigation or schema actions, and the bottom long-page `Open API reference` CTA remains available after the guide content.
 - No P0/P1/P2 visual findings remain. The simplified hero preserves alignment, spacing, responsive wrapping, and the existing component language.
+- Interactive-reference implementation capture: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/12-reference-hero-simplified.png`.
+- Interactive-reference comparison input: `/Users/alikheireddine/.codex/visualizations/2026/08/21/01a0269b-f120-7570-aa0d-ef7eba1fa8bf/api-settings-audit/13-reference-hero-comparison.png`.
+- Iteration 3: applied the same hierarchy rule to the Interactive reference hero, removing its selected-view badge plus duplicate Developer guide and OpenAPI JSON actions. Retained API version, OpenAPI version, production status, and Copy base URL.
+- Dia verification confirmed the selected Interactive reference tab and header-level OpenAPI JSON action remain available, while the hero is visibly simpler and the API-key control remains aligned and usable.
 
 final result: passed
