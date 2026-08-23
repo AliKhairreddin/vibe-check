@@ -39,6 +39,66 @@ Keys are hashed before storage and can be independently scoped, expired, and rev
 
 The admin account can use **Unlimited monthly reviews** and **Unlimited queued submissions**. These remove per-account admission quotas; they do not remove file-size limits or the platform's bounded worker concurrency.
 
+## LemmonMaxx phase-one test: three endpoints
+
+The smallest integration surface accepts an existing public media URL and exposes only four job states. It uses the same API key, ownership checks, quotas, and analysis pipeline as the richer upload API.
+
+### 1. Submit a creative URL
+
+```bash
+curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/jobs' \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: lemmonmaxx-monday-001' \
+  --data '{"creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'
+```
+
+The URL must be public HTTPS and resolve to an MP4, JPG, PNG, or WebP file. Vibe Check rejects embedded credentials, private/local destinations, unsafe redirects, empty responses, unsupported file signatures, and media larger than the API partner's upload limit. A successful request returns HTTP `202` after the media is validated and queued:
+
+```json
+{
+  "job_id": "ab12...",
+  "creative_name": "Monday Creative",
+  "status": "queued",
+  "progress": 0,
+  "message": "Queued for processing",
+  "status_url": "/api/v1/jobs/ab12...",
+  "result_url": "/api/v1/jobs/ab12.../result"
+}
+```
+
+### 2. Poll status
+
+```http
+GET /api/v1/jobs/{job_id}
+Authorization: Bearer YOUR_API_KEY
+```
+
+`status` is always one of `queued`, `processing`, `completed`, or `failed`. The endpoint deliberately collapses the richer internal stages so a phase-one client needs only one polling state machine.
+
+### 3. Retrieve the result
+
+```http
+GET /api/v1/jobs/{job_id}/result
+Authorization: Bearer YOUR_API_KEY
+```
+
+Before completion this returns HTTP `409` with `Retry-After: 5`. Once complete it returns:
+
+```json
+{
+  "job_id": "ab12...",
+  "creative_name": "Monday Creative",
+  "status": "completed",
+  "result": {
+    "overall_status": "green",
+    "findings": []
+  }
+}
+```
+
+This URL-based contract is convenient when LemmonMaxx already has a durable media URL. Direct file upload remains the stronger production option when URLs are short-lived or access-controlled, or when the caller needs byte-for-byte control over what Vibe Check receives. Both routes feed the same analysis pipeline and can be used side by side.
+
 ## LemmonMaxx live-creative scans
 
 LemmonMaxx should download the media file that Meta is currently serving for an ad and send that file to `POST /scans/creative`. The stable `ad_id` must be Meta's ad ID or another immutable LemmonMaxx identifier—not the creative name.

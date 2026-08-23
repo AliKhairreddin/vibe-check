@@ -13,7 +13,9 @@ from app.review_pipeline.partner_api import (
     ApiKeyInput,
     ApiPartnerInput,
     ApiPrincipal,
+    DownloadedMedia,
     hash_api_token,
+    validate_media_url,
     validate_webhook_url,
 )
 
@@ -123,6 +125,60 @@ def test_webhook_configuration_accepts_public_https_url():
     assert validate_webhook_url('https://hooks.example.com/vibe') == 'https://hooks.example.com/vibe'
 
 
+@pytest.mark.parametrize('url', [
+    'http://cdn.example.com/creative.mp4',
+    'https://localhost/creative.mp4',
+    'https://127.0.0.1/creative.mp4',
+    'https://10.0.0.1/creative.mp4',
+    'https://user:password@cdn.example.com/creative.mp4',
+    'https://cdn.example.com:8443/creative.mp4',
+])
+def test_media_url_rejects_non_public_destinations(url):
+    with pytest.raises(ValueError):
+        validate_media_url(url)
+
+
+@pytest.mark.anyio
+async def test_media_url_download_verifies_file_signature(tmp_path, monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        headers = {'content-length': '16'}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aiter_bytes(self, _chunk_size):
+            yield b'\x89PNG\r\n\x1a\nexample!'
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(partner_api, '_assert_public_media_destination', lambda _url: None)
+    monkeypatch.setattr(partner_api.httpx, 'AsyncClient', lambda **_kwargs: FakeClient())
+
+    downloaded = await partner_api.download_api_media(
+        'https://cdn.example.com/download?id=1',
+        'Monday Creative',
+        tmp_path,
+        1_000,
+    )
+
+    assert downloaded.file_name == 'Monday Creative.png'
+    assert downloaded.media_kind == 'image'
+    assert downloaded.file_size == 16
+    assert downloaded.path.read_bytes().startswith(b'\x89PNG')
+
+
 @pytest.mark.anyio
 async def test_completion_webhook_signs_timestamp_and_exact_body(monkeypatch):
     sent = {}
@@ -188,6 +244,9 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
     assert response.status_code == 200
     schema = response.json()
     assert schema['components']['securitySchemes']['BearerAuth']['scheme'] == 'bearer'
+    assert '/api/v1/jobs' in schema['paths']
+    assert '/api/v1/jobs/{job_id}' in schema['paths']
+    assert '/api/v1/jobs/{job_id}/result' in schema['paths']
     assert '/api/v1/reviews' in schema['paths']
     assert '/api/v1/scans/creative' in schema['paths']
     assert '/api/reviews' not in schema['paths']
@@ -271,6 +330,144 @@ async def test_partner_copy_review_is_authenticated_claimed_and_queued(tmp_path,
     assert captured['meta'].api_partner_id == principal.partner_id
     assert captured['meta'].api_key_id == principal.api_key_id
     assert captured['meta'].offer_profiles[0].offer_id == 'acp'
+
+
+@pytest.mark.anyio
+async def test_simple_job_contract_downloads_url_and_returns_job_id(tmp_path, monkeypatch):
+    principal = api_principal()
+    captured = {}
+    profile = OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Use qualified, supportable claims.',
+        is_default=True,
+    )
+
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr('app.main.resolve_review_offer_snapshot', lambda: ([profile], []))
+
+    async def fake_download(_url, _creative_name, destination, _max_bytes):
+        media_path = destination / 'Monday Creative.mp4'
+        media_path.write_bytes(b'creative')
+        return DownloadedMedia(
+            file_name=media_path.name,
+            file_size=media_path.stat().st_size,
+            media_kind='video',
+            path=media_path,
+        )
+
+    def fake_claim(_principal, **kwargs):
+        captured['claim'] = kwargs
+        return {'created': True, 'review_id': kwargs['job_id']}
+
+    async def fake_enqueue(job_id, media_path, media_kind, meta, file_name, file_size=None):
+        captured['media_path'] = media_path
+        captured['media_kind'] = media_kind
+        captured['meta'] = meta
+        return JobRecord(job_id=job_id, file_name=file_name, file_size=file_size)
+
+    monkeypatch.setattr('app.main.download_api_media', fake_download)
+    monkeypatch.setattr('app.main.claim_api_review', fake_claim)
+    monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response = await client.post(
+            '/api/v1/jobs',
+            headers={
+                'authorization': 'Bearer vc_live_test-key',
+                'idempotency-key': 'lemmonmaxx-monday-001',
+            },
+            json={
+                'creative_name': 'Monday Creative',
+                'media_url': 'https://cdn.example.com/creative.mp4',
+            },
+        )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload['job_id'] == captured['claim']['job_id']
+    assert payload['creative_name'] == 'Monday Creative'
+    assert payload['status'] == 'queued'
+    assert payload['status_url'] == f"/api/v1/jobs/{payload['job_id']}"
+    assert captured['claim']['creative_name'] == 'Monday Creative'
+    assert captured['claim']['idempotency_key'] == 'lemmonmaxx-monday-001'
+    assert captured['media_kind'] == 'video'
+
+
+@pytest.mark.anyio
+async def test_simple_job_status_normalizes_pipeline_states(monkeypatch):
+    principal = api_principal()
+    job_id = '6' * 32
+    statuses = {
+        'queued': 'queued',
+        'extracting_frames': 'processing',
+        'reviewing_with_llm': 'processing',
+        'complete': 'completed',
+        'failed': 'failed',
+    }
+
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        for internal_status, expected_status in statuses.items():
+            monkeypatch.setattr(
+                'app.main.get_api_review',
+                lambda _principal, _job_id, status=internal_status: {
+                    'creative_name': 'Monday Creative',
+                    'job_id': job_id,
+                    'message': 'Working',
+                    'progress': 50,
+                    'report_ready': status == 'complete',
+                    'review_id': job_id,
+                    'status': status,
+                },
+            )
+            response = await client.get(
+                f'/api/v1/jobs/{job_id}',
+                headers={'authorization': 'Bearer vc_live_test-key'},
+            )
+            assert response.status_code == 200
+            assert response.json()['status'] == expected_status
+
+
+@pytest.mark.anyio
+async def test_simple_job_result_includes_creative_name_and_complete_report(monkeypatch):
+    principal = api_principal()
+    job_id = '7' * 32
+    report = {'overall_status': 'green', 'findings': []}
+
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr(
+        'app.main.get_api_review',
+        lambda _principal, _job_id: {
+            'creative_name': 'Monday Creative',
+            'job_id': job_id,
+            'report_ready': True,
+            'review_id': job_id,
+            'status': 'complete',
+        },
+    )
+    monkeypatch.setattr('app.main.get_stored_report', lambda _job_id: report)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response = await client.get(
+            f'/api/v1/jobs/{job_id}/result',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'job_id': job_id,
+        'creative_name': 'Monday Creative',
+        'status': 'completed',
+        'result': report,
+    }
 
 
 @pytest.mark.anyio

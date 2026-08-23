@@ -103,6 +103,12 @@ const groups: EndpointGroup[] = [
     icon: Server,
   },
   {
+    id: 'simple-jobs',
+    title: '3-API test flow',
+    description: 'Submit a public media URL, poll one normalized status, and retrieve the complete JSON result.',
+    icon: Play,
+  },
+  {
     id: 'creative-monitoring',
     title: 'Creative monitoring',
     description: 'Fingerprint currently running media and inspect change history by ad ID.',
@@ -242,7 +248,7 @@ const paginationFields: RequestField[] = [
 
 const jobIdField: RequestField = {
   name: 'job_id',
-  label: 'Review ID',
+  label: 'Job ID',
   location: 'path',
   required: true,
   placeholder: 'The job_id returned when the review was created',
@@ -266,6 +272,47 @@ const endpoints: Endpoint[] = [
     title: 'Inspect this API key',
     description: 'Return the owned partner, enabled scopes, limits, and key metadata for the supplied token.',
     scope: 'reviews:read',
+  },
+  {
+    id: 'create-simple-job',
+    group: 'simple-jobs',
+    method: 'POST',
+    path: '/api/v1/jobs',
+    title: 'Submit creative URL',
+    description: 'Accept a creative name and public HTTPS media URL, then return a job_id after the media is validated and queued.',
+    scope: 'reviews:create',
+    bodyEncoding: 'json',
+    fields: [
+      { name: 'creative_name', label: 'Creative name', location: 'json', required: true, placeholder: 'Monday Creative' },
+      { name: 'media_url', label: 'Media URL', location: 'json', required: true, placeholder: 'https://cdn.example.com/creative.mp4' },
+      {
+        name: 'Idempotency-Key',
+        label: 'Idempotency key',
+        location: 'header',
+        placeholder: 'lemmonmaxx-monday-001',
+        description: 'Recommended: reuse the same value when retrying this exact submission.',
+      },
+    ],
+  },
+  {
+    id: 'simple-job-status',
+    group: 'simple-jobs',
+    method: 'GET',
+    path: '/api/v1/jobs/{job_id}',
+    title: 'Get job status',
+    description: 'Return exactly one of queued, processing, completed, or failed.',
+    scope: 'reviews:read',
+    fields: [jobIdField],
+  },
+  {
+    id: 'simple-job-result',
+    group: 'simple-jobs',
+    method: 'GET',
+    path: '/api/v1/jobs/{job_id}/result',
+    title: 'Get job result',
+    description: 'Return the creative name and complete structured analysis result after processing completes.',
+    scope: 'reviews:read',
+    fields: [jobIdField],
   },
   {
     id: 'scan-creative',
@@ -1095,8 +1142,8 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
             <div className="grid gap-2">
               <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Vibe Check Partner API</h1>
               <p className="max-w-3xl text-base leading-7 text-muted-foreground">
-                Test the same endpoints LemmonMaxx will call to fingerprint live media, review changed creatives,
-                and retrieve owned findings, transcripts, OCR, visual observations, reports, and evidence frames.
+                Start with the three LemmonMaxx test endpoints for URL submission, normalized job status,
+                and complete JSON results. The richer upload, scan, evidence, and report APIs remain available below.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1182,7 +1229,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
           <Separator />
           <div className="grid gap-2 rounded-xl border bg-card p-3 text-xs leading-5 text-muted-foreground">
             <div className="flex items-center gap-2 font-medium text-foreground"><ScanSearch className="size-4" /> Recommended first test</div>
-            <p>Open “Observe a live creative,” scan a known file twice, then replace its bytes without changing the ad name.</p>
+            <p>Open “Submit creative URL,” send one public MP4 or image URL, then paste its job_id into the next two endpoints.</p>
           </div>
         </aside>
 

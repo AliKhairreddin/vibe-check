@@ -6,13 +6,15 @@ import hmac
 import ipaddress
 import json
 import logging
+import re
 import secrets
 import socket
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
@@ -35,10 +37,38 @@ DEFAULT_API_SCOPES = API_SCOPES[:-1]
 PARTNER_ID_PREFIX = 'partner_'
 KEY_ID_PREFIX = 'key_'
 MAX_EVIDENCE_BUNDLE_BYTES = 750_000
+MEDIA_DOWNLOAD_TIMEOUT = httpx.Timeout(300.0, connect=20.0)
+MEDIA_REDIRECT_LIMIT = 5
+MEDIA_SIGNATURE_BYTES = 64
 
 
 class PartnerApiUnavailable(RuntimeError):
     pass
+
+
+class PartnerMediaError(RuntimeError):
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class ApiJobInput(BaseModel):
+    creative_name: str = Field(min_length=1, max_length=300)
+    media_url: str = Field(min_length=1, max_length=4_000)
+
+    @field_validator('creative_name')
+    @classmethod
+    def normalize_creative_name(cls, value: str) -> str:
+        normalized = ' '.join(value.split()).strip()
+        if not normalized:
+            raise ValueError('creative_name must not be empty.')
+        return normalized
+
+    @field_validator('media_url')
+    @classmethod
+    def normalize_media_url(cls, value: str) -> str:
+        return validate_media_url(value)
 
 
 class ApiPartnerInput(BaseModel):
@@ -124,6 +154,14 @@ class ApiPrincipal:
             raise PermissionError(f'This API key does not include the {scope} permission.')
 
 
+@dataclass(frozen=True)
+class DownloadedMedia:
+    file_name: str
+    file_size: int
+    media_kind: Literal['video', 'image']
+    path: Path
+
+
 def _convex_call(kind: str, path: str, args: dict[str, Any]) -> Any:
     if not storage.convex_enabled():
         raise PartnerApiUnavailable('Partner API storage is unavailable because Convex is not configured.')
@@ -155,16 +193,169 @@ def validate_webhook_url(value: str | None) -> str | None:
     return normalized
 
 
-def _assert_public_webhook_destination(url: str) -> None:
+def validate_media_url(value: str) -> str:
+    normalized = value.strip()
+    parsed = urlsplit(normalized)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('media_url must be a public HTTPS URL without embedded credentials.')
+    if parsed.port not in {None, 443}:
+        raise ValueError('media_url must use the standard HTTPS port.')
+    hostname = parsed.hostname.rstrip('.').lower()
+    if hostname == 'localhost' or hostname.endswith('.localhost') or hostname.endswith('.local'):
+        raise ValueError('media_url must use a public hostname.')
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ValueError('media_url must use a public IP address.')
+    return normalized
+
+
+def _assert_public_destination(url: str, label: str) -> None:
     parsed = urlsplit(url)
     hostname = parsed.hostname or ''
     addresses = socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
     if not addresses:
-        raise ValueError('Webhook hostname did not resolve.')
+        raise ValueError(f'{label} hostname did not resolve.')
     for address in addresses:
         ip = ipaddress.ip_address(address[4][0])
         if not ip.is_global:
-            raise ValueError('Webhook hostname resolves to a non-public address.')
+            raise ValueError(f'{label} hostname resolves to a non-public address.')
+
+
+def _assert_public_webhook_destination(url: str) -> None:
+    _assert_public_destination(url, 'Webhook')
+
+
+def _assert_public_media_destination(url: str) -> None:
+    _assert_public_destination(url, 'Media URL')
+
+
+def _downloaded_media_format(signature: bytes) -> tuple[Literal['video', 'image'], str] | None:
+    if len(signature) >= 12 and b'ftyp' in signature[4:32]:
+        return 'video', '.mp4'
+    if signature.startswith(b'\xff\xd8\xff'):
+        return 'image', '.jpg'
+    if signature.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image', '.png'
+    if len(signature) >= 12 and signature.startswith(b'RIFF') and signature[8:12] == b'WEBP':
+        return 'image', '.webp'
+    return None
+
+
+def _downloaded_media_file_name(creative_name: str, suffix: str) -> str:
+    normalized = re.sub(r'[\x00-\x1f/\\]+', '-', creative_name).strip(' .')
+    if Path(normalized).suffix.lower() in {'.mp4', '.jpg', '.jpeg', '.png', '.webp'}:
+        normalized = Path(normalized).stem.strip(' .')
+    if not normalized:
+        normalized = 'creative'
+    stem = normalized.encode('utf-8')[:180].decode('utf-8', errors='ignore').rstrip(' .-')
+    return f'{stem or "creative"}{suffix}'
+
+
+async def download_api_media(
+    media_url: str,
+    creative_name: str,
+    destination_dir: Path,
+    max_bytes: int,
+) -> DownloadedMedia:
+    current_url = validate_media_url(media_url)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    temporary = destination_dir / f'.remote-{uuid.uuid4().hex}.part'
+    try:
+        async with httpx.AsyncClient(
+            timeout=MEDIA_DOWNLOAD_TIMEOUT,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            for redirect_count in range(MEDIA_REDIRECT_LIMIT + 1):
+                try:
+                    await asyncio.to_thread(_assert_public_media_destination, current_url)
+                except (OSError, ValueError) as exc:
+                    raise PartnerMediaError(400, str(exc)) from None
+                try:
+                    async with client.stream(
+                        'GET',
+                        current_url,
+                        headers={
+                            'accept': 'video/mp4,image/jpeg,image/png,image/webp,application/octet-stream',
+                            'user-agent': 'Vibe-Check-Media-Fetch/1.0',
+                        },
+                    ) as response:
+                        if response.status_code in {301, 302, 303, 307, 308}:
+                            location = response.headers.get('location', '').strip()
+                            if not location:
+                                raise PartnerMediaError(400, 'media_url returned a redirect without a location.')
+                            if redirect_count >= MEDIA_REDIRECT_LIMIT:
+                                raise PartnerMediaError(400, 'media_url returned too many redirects.')
+                            try:
+                                current_url = validate_media_url(urljoin(current_url, location))
+                            except ValueError as exc:
+                                raise PartnerMediaError(400, str(exc)) from None
+                            continue
+                        if not 200 <= response.status_code < 300:
+                            raise PartnerMediaError(
+                                400,
+                                f'media_url returned HTTP {response.status_code}.',
+                            )
+                        content_length = response.headers.get('content-length', '').strip()
+                        if content_length:
+                            try:
+                                declared_size = int(content_length)
+                            except ValueError:
+                                declared_size = 0
+                            if declared_size > max_bytes:
+                                raise PartnerMediaError(
+                                    413,
+                                    f'Max media size is {max_bytes // (1024 * 1024)} MB.',
+                                )
+                        received = 0
+                        signature = bytearray()
+                        with temporary.open('wb') as output:
+                            async for chunk in response.aiter_bytes(1024 * 1024):
+                                if not chunk:
+                                    continue
+                                received += len(chunk)
+                                if received > max_bytes:
+                                    raise PartnerMediaError(
+                                        413,
+                                        f'Max media size is {max_bytes // (1024 * 1024)} MB.',
+                                    )
+                                if len(signature) < MEDIA_SIGNATURE_BYTES:
+                                    remaining = MEDIA_SIGNATURE_BYTES - len(signature)
+                                    signature.extend(chunk[:remaining])
+                                output.write(chunk)
+                        if received == 0:
+                            raise PartnerMediaError(400, 'media_url returned an empty file.')
+                        detected = _downloaded_media_format(bytes(signature))
+                        if detected is None:
+                            raise PartnerMediaError(
+                                415,
+                                'media_url must resolve to an MP4, JPG, PNG, or WebP file.',
+                            )
+                        media_kind, suffix = detected
+                        file_name = _downloaded_media_file_name(creative_name, suffix)
+                        media_path = destination_dir / file_name
+                        temporary.replace(media_path)
+                        return DownloadedMedia(
+                            file_name=file_name,
+                            file_size=received,
+                            media_kind=media_kind,
+                            path=media_path,
+                        )
+                except PartnerMediaError:
+                    raise
+                except httpx.TimeoutException:
+                    raise PartnerMediaError(504, 'Timed out while downloading media_url.') from None
+                except httpx.HTTPError as exc:
+                    raise PartnerMediaError(
+                        502,
+                        f'Could not download media_url: {type(exc).__name__}.',
+                    ) from None
+    finally:
+        temporary.unlink(missing_ok=True)
+    raise PartnerMediaError(400, 'media_url could not be downloaded.')
 
 
 def list_api_partners() -> list[dict[str, Any]]:
@@ -275,6 +466,7 @@ def claim_api_review(
     principal: ApiPrincipal,
     *,
     job_id: str,
+    creative_name: str = '',
     external_id: str,
     idempotency_key: str,
     media_kind: str,
@@ -288,6 +480,8 @@ def claim_api_review(
         'mediaKind': media_kind,
         'partnerId': principal.partner_id,
     }
+    if creative_name:
+        args['creativeName'] = creative_name
     if external_id:
         args['externalId'] = external_id
     if file_size is not None:

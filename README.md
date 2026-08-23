@@ -89,7 +89,7 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 180 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, tenant-scoped fingerprint scans, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, webhook signing, browser API routing, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository currently includes 191 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, tenant-scoped fingerprint scans, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, webhook signing, browser API routing, media-URL safety, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
@@ -178,6 +178,9 @@ The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin
 
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /api/v1/jobs` | Submit a creative name and public HTTPS media URL; receive `job_id` |
+| `GET /api/v1/jobs/{job_id}` | Read normalized `queued/processing/completed/failed` status |
+| `GET /api/v1/jobs/{job_id}/result` | Read the complete JSON analysis with the creative name |
 | `POST /api/v1/reviews` | Authenticated partner creative or copy-only submission |
 | `POST /api/v1/scans/creative` | Hash currently served ad media and review it only when media, copy, or policy changed |
 | `GET /api/v1/scans/ads/{ad_id}` | Read tenant-owned current fingerprint and linked review state |

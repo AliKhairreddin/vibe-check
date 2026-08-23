@@ -26,6 +26,7 @@ from .review_pipeline.models import (
     DriveFolder,
     DriveSelectionResult,
     JobRecord,
+    JobStatus,
     LiveScanDay,
     LiveScanIngestResult,
     LiveScanMediaRequest,
@@ -124,15 +125,18 @@ from .review_pipeline.automations import (
 )
 from .review_pipeline.partner_api import (
     API_SCOPES,
+    ApiJobInput,
     ApiKeyInput,
     ApiPartnerInput,
     ApiPrincipal,
     PartnerApiUnavailable,
+    PartnerMediaError,
     authenticate_api_token,
     claim_api_review,
     claim_api_scan_review,
     create_api_partner,
     deliver_pending_api_webhooks,
+    download_api_media,
     finalize_api_review,
     get_api_evidence,
     get_api_review,
@@ -1025,9 +1029,34 @@ def api_submission_response(record:JobRecord, external_id:str)->dict:
         'progress':record.progress,
         'report_ready':record.report_ready,
         'result_url':f'/api/v1/reviews/{record.job_id}/result',
+        'job_id':record.job_id,
         'review_id':record.job_id,
         'status':record.status.value,
         'status_url':f'/api/v1/reviews/{record.job_id}',
+    }
+
+
+def simple_job_status(value:str)->str:
+    normalized=value.strip().casefold()
+    if normalized == 'queued':
+        return 'queued'
+    if normalized in {'complete','completed'}:
+        return 'completed'
+    if normalized in {'failed','deleted'}:
+        return 'failed'
+    return 'processing'
+
+
+def simple_job_response(review:dict)->dict:
+    job_id=str(review.get('job_id') or review.get('review_id') or '')
+    return {
+        'job_id':job_id,
+        'creative_name':review.get('creative_name'),
+        'status':simple_job_status(str(review.get('status') or 'queued')),
+        'progress':int(review.get('progress') or 0),
+        'message':str(review.get('message') or ''),
+        'status_url':f'/api/v1/jobs/{job_id}',
+        'result_url':f'/api/v1/jobs/{job_id}/result',
     }
 
 
@@ -1143,11 +1172,98 @@ async def partner_api_me(request:Request):
     }
 
 
+@app.post('/api/v1/jobs', status_code=202)
+async def partner_create_job(payload:ApiJobInput,request:Request):
+    principal=await require_api_principal(request,'reviews:create')
+    idempotency_key=api_idempotency_key(request)
+    meta=partner_review_meta(
+        principal,
+        ad_copy='',
+        policy_text='',
+        notes='',
+        manual_transcript='',
+        frame_interval_seconds=1.0,
+        scene_detection=False,
+        external_id='',
+    )
+    max_bytes=min(
+        principal.max_upload_mb,
+        int(os.getenv('MAX_UPLOAD_MB','400')),
+    )*1024*1024
+    job_id=uuid.uuid4().hex
+    jd=job_dir(job_id)
+    claimed=False
+    downloaded=None
+    try:
+        downloaded=await download_api_media(
+            payload.media_url,
+            payload.creative_name,
+            jd,
+            max_bytes,
+        )
+        claim=await asyncio.to_thread(
+            claim_api_review,
+            principal,
+            job_id=job_id,
+            creative_name=payload.creative_name,
+            external_id='',
+            idempotency_key=idempotency_key,
+            media_kind=downloaded.media_kind,
+            file_name=downloaded.file_name,
+            file_size=downloaded.file_size,
+        )
+        if not claim.get('created'):
+            shutil.rmtree(jd,ignore_errors=True)
+            review=await owned_api_review(principal,str(claim['review_id']))
+            return simple_job_response(review)
+        claimed=True
+        (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+        record=await enqueue_job(
+            job_id,
+            downloaded.path,
+            downloaded.media_kind,
+            meta,
+            downloaded.file_name,
+            file_size=downloaded.file_size,
+        )
+        return simple_job_response({
+            'creative_name':payload.creative_name,
+            'job_id':record.job_id,
+            'message':record.message,
+            'progress':record.progress,
+            'status':record.status.value,
+        })
+    except PartnerMediaError as exc:
+        shutil.rmtree(jd,ignore_errors=True)
+        raise HTTPException(exc.status_code,exc.detail) from None
+    except HTTPException:
+        shutil.rmtree(jd,ignore_errors=True)
+        raise
+    except Exception as exc:
+        if claimed and downloaded is not None:
+            await fail_claimed_api_review(
+                job_id,
+                file_name=downloaded.file_name,
+                file_size=downloaded.file_size,
+                has_ad_copy=False,
+                has_creative=True,
+                message=f'Submission failed: {type(exc).__name__}',
+            )
+        shutil.rmtree(jd,ignore_errors=True)
+        if claimed:
+            raise HTTPException(
+                503,
+                'The review could not be queued. Retry with the same Idempotency-Key.',
+            ) from None
+        raise partner_storage_error(exc) from None
+
+
 @app.post('/api/v1/reviews', status_code=202)
 async def partner_create_review(
     request:Request,
     creative:UploadFile|None=File(None),
     video:UploadFile|None=File(None),
+    creative_name:str=Form(''),
     ad_copy:str=Form(''),
     policy_text:str=Form(''),
     notes:str=Form(''),
@@ -1157,6 +1273,7 @@ async def partner_create_review(
     scene_detection:bool=Form(False),
 ):
     principal=await require_api_principal(request, 'reviews:create')
+    creative_name=validate_scan_field('creative_name',creative_name,maximum=300)
     external_id=validate_external_id(external_id)
     idempotency_key=api_idempotency_key(request)
     validate_partner_review_text(ad_copy,policy_text,notes,manual_transcript)
@@ -1182,6 +1299,7 @@ async def partner_create_review(
                 claim_api_review,
                 principal,
                 job_id=job_id,
+                creative_name=creative_name,
                 external_id=external_id,
                 idempotency_key=idempotency_key,
                 media_kind='copy_only',
@@ -1234,6 +1352,7 @@ async def partner_create_review(
             claim_api_review,
             principal,
             job_id=job_id,
+            creative_name=creative_name,
             external_id=external_id,
             idempotency_key=idempotency_key,
             media_kind=media_kind,
@@ -1557,6 +1676,7 @@ async def partner_upload_chunk(upload_id:str,chunk_index:int,request:Request):
 async def partner_complete_upload(
     upload_id:str,
     request:Request,
+    creative_name:str=Form(''),
     ad_copy:str=Form(''),
     policy_text:str=Form(''),
     notes:str=Form(''),
@@ -1566,6 +1686,7 @@ async def partner_complete_upload(
     scene_detection:bool=Form(False),
 ):
     principal,upload_dir,metadata=await owned_api_upload(request,upload_id)
+    creative_name=validate_scan_field('creative_name',creative_name,maximum=300)
     external_id=validate_external_id(external_id)
     idempotency_key=api_idempotency_key(request)
     validate_partner_review_text(ad_copy,policy_text,notes,manual_transcript)
@@ -1598,6 +1719,7 @@ async def partner_complete_upload(
             claim_api_review,
             principal,
             job_id=upload_id,
+            creative_name=creative_name,
             external_id=external_id,
             idempotency_key=idempotency_key,
             media_kind=str(metadata['media_kind']),
@@ -1650,6 +1772,33 @@ async def partner_review_history(request:Request,limit:int=50,cursor:str|None=No
         )
     except Exception as exc:
         raise partner_storage_error(exc) from None
+
+
+@app.get('/api/v1/jobs/{job_id}')
+async def partner_job_status(job_id:str,request:Request):
+    principal=await require_api_principal(request,'reviews:read')
+    review=await owned_api_review(principal,job_id)
+    return simple_job_response(review)
+
+
+@app.get('/api/v1/jobs/{job_id}/result')
+async def partner_job_result(job_id:str,request:Request):
+    principal=await require_api_principal(request,'reviews:read')
+    review=await owned_api_review(principal,job_id)
+    normalized_status=simple_job_status(str(review.get('status') or 'queued'))
+    if normalized_status == 'failed':
+        raise HTTPException(409,'Job processing failed; inspect the status response for details.')
+    if not review.get('report_ready'):
+        raise HTTPException(409,'Job result is not ready yet.',headers={'Retry-After':'5'})
+    report=await asyncio.to_thread(get_stored_report,job_id)
+    if report is None:
+        raise HTTPException(404,'Job result not found.')
+    return {
+        'job_id':job_id,
+        'creative_name':review.get('creative_name'),
+        'status':'completed',
+        'result':report,
+    }
 
 
 @app.get('/api/v1/reviews/{job_id}')

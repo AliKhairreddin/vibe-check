@@ -94,6 +94,7 @@ function publicPartner(partner: {
 function publicReview(
   link: {
     createdAt: number;
+    creativeName?: string;
     externalId?: string;
     fileName: string;
     fileSize?: number;
@@ -116,9 +117,11 @@ function publicReview(
   const deleted = link.status === "deleted";
   return {
     created_at: link.createdAt,
+    creative_name: link.creativeName ?? null,
     external_id: link.externalId ?? null,
     file_name: link.fileName,
     file_size: link.fileSize ?? null,
+    job_id: link.jobId,
     media_kind: link.mediaKind,
     message: deleted ? "Deleted" : review?.message ?? "Review unavailable",
     offer_ids: review?.offerIds ?? [],
@@ -188,7 +191,9 @@ async function finalizeReviewRecord(
     const payload = {
       created_at: new Date(now).toISOString(),
       data: {
+        creative_name: link.creativeName ?? null,
         external_id: link.externalId ?? null,
+        job_id: link.jobId,
         result_url: `/api/v1/reviews/${link.jobId}/result`,
         review_id: link.jobId,
         status,
@@ -423,6 +428,7 @@ export const authenticate = mutation({
 export const claimReview = mutation({
   args: {
     apiKeyId: v.string(),
+    creativeName: v.optional(v.string()),
     externalId: v.optional(v.string()),
     fileName: v.string(),
     fileSize: v.optional(v.number()),
@@ -489,6 +495,7 @@ export const claimReview = mutation({
     await ctx.db.insert("apiReviewLinks", {
       apiKeyId: key.keyId,
       createdAt: now,
+      creativeName: args.creativeName,
       externalId: args.externalId,
       fileName: args.fileName,
       fileSize: args.fileSize,
@@ -674,6 +681,7 @@ export const claimScanReview = mutation({
     await ctx.db.insert("apiReviewLinks", {
       apiKeyId: key.keyId,
       createdAt: now,
+      creativeName: args.creativeName,
       externalId: args.externalAdId,
       fileName: args.fileName,
       fileSize: args.fileSize,

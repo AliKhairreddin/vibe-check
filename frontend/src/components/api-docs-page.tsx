@@ -34,6 +34,27 @@ const endpoints: Array<{
   title: string;
 }> = [
   {
+    description: 'Send a creative name and public HTTPS media URL. Returns job_id after the media is validated and queued.',
+    method: 'POST',
+    path: '/jobs',
+    scope: 'reviews:create',
+    title: '1. Submit creative URL',
+  },
+  {
+    description: 'Poll by job_id. Status is always queued, processing, completed, or failed.',
+    method: 'GET',
+    path: '/jobs/{job_id}',
+    scope: 'reviews:read',
+    title: '2. Get job status',
+  },
+  {
+    description: 'Return the creative name and complete structured analysis result after processing finishes.',
+    method: 'GET',
+    path: '/jobs/{job_id}/result',
+    scope: 'reviews:read',
+    title: '3. Get job result',
+  },
+  {
     description: 'Upload the currently running media. Vibe Check hashes the bytes and only creates a review when something relevant changed.',
     method: 'POST',
     path: '/scans/creative',
@@ -125,18 +146,11 @@ function MethodBadge({ method }: { method: Method }) {
 
 export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
   const baseUrl = API_BASE_URL;
-  const scanExample = `curl -X POST '${baseUrl}/scans/creative' \\
+  const jobExample = `curl -X POST '${baseUrl}/jobs' \\
   -H 'Authorization: Bearer YOUR_API_KEY' \\
-  -H 'X-Vibe-Ad-Id: 23851234567890123' \\
-  -F 'creative=@current-ad-1.mp4' \\
-  -F 'ad_id=23851234567890123' \\
-  -F 'creative_name=Ad 1' \\
-  -F 'campaign_id=23850000000000000' \\
-  -F 'ad_set_id=23851111111111111' \\
-  -F 'ad_copy=The primary text currently running on Meta' \\
-  -F 'headline=The current headline' \\
-  -F 'call_to_action=LEARN_MORE' \\
-  -F 'destination_url=https://example.com/landing-page'`;
+  -H 'Content-Type: application/json' \\
+  -H 'Idempotency-Key: lemmonmaxx-monday-001' \\
+  --data '{"creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'`;
 
   return (
     <div className={embedded ? 'grid gap-6 pb-16' : 'grid gap-8 pb-16'}>
@@ -152,8 +166,8 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
               Put the full Vibe Check workflow inside LemmonMaxx.
             </h1>
             <p className="max-w-3xl text-base leading-7 text-muted-foreground sm:text-lg">
-              Upload the media that is actually running, detect silent creative replacements by content hash,
-              and retrieve the same findings, transcript, OCR, visual observations, and evidence frames available in Vibe Check.
+              Monday testing needs only three calls: submit a creative URL, poll its normalized status,
+              and retrieve the complete JSON analysis with the creative name.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -164,9 +178,9 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
 
       <section className="grid gap-4 lg:grid-cols-3">
         {[
-          [Fingerprint, '1. Hash', 'Vibe Check calculates SHA-256 directly from the uploaded media bytes. No OCR, transcription, or AI is used for this step.'],
-          [ScanSearch, '2. Compare', 'The media hash and review-field hash are compared with the last observation for the same partner and ad ID.'],
-          [ArrowRight, '3. Review or reuse', 'Changed content starts the normal pipeline. Unchanged content reuses the existing review and records a new audit observation.'],
+          [Fingerprint, '1. Accept', 'Vibe Check validates the public HTTPS destination, follows only safe redirects, verifies the file bytes, and returns job_id.'],
+          [ScanSearch, '2. Process', 'Poll by job_id and receive only queued, processing, completed, or failed while the full pipeline runs.'],
+          [ArrowRight, '3. Retrieve', 'When status is completed, request the result endpoint for the creative name and complete structured analysis.'],
         ].map(([Icon, title, description]) => {
           const StepIcon = Icon as typeof Fingerprint;
           return (
@@ -185,32 +199,40 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
         <KeyRound />
         <AlertTitle>Keep the key in the LemmonMaxx backend</AlertTitle>
         <AlertDescription>
-          Never ship it to browser JavaScript. Create a key in Settings → API access with
-          <code className="mx-1 rounded bg-muted px-1.5 py-0.5">scans:write</code>,
-          <code className="mr-1 rounded bg-muted px-1.5 py-0.5">scans:read</code>, and the result/evidence permissions LemmonMaxx needs.
+          Never ship it to browser JavaScript. The three-endpoint flow needs
+          <code className="mx-1 rounded bg-muted px-1.5 py-0.5">reviews:create</code> and
+          <code className="mr-1 rounded bg-muted px-1.5 py-0.5">reviews:read</code>.
         </AlertDescription>
       </Alert>
 
       <section id="quick-start" className="grid gap-4">
         <div>
           <p className="text-sm font-medium text-muted-foreground">Quick start</p>
-          <h2 className="font-heading text-2xl font-semibold tracking-tight">Send the currently running creative</h2>
+          <h2 className="font-heading text-2xl font-semibold tracking-tight">Submit a creative URL</h2>
         </div>
-        <CodeBlock code={scanExample} />
-        <div className="grid gap-3 sm:grid-cols-2">
+        <CodeBlock code={jobExample} />
+        <div className="grid gap-3 sm:grid-cols-3">
           <Card>
             <CardHeader>
-              <CardTitle>HTTP 202 — review created</CardTitle>
+              <CardTitle>HTTP 202 — accepted</CardTitle>
               <CardDescription>
-                The ad is new, its media changed, its copy changed, or the previous attempt failed. Poll the returned status URL.
+                The response includes job_id, creative_name, queued status, status_url, and result_url.
               </CardDescription>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>HTTP 200 — review reused</CardTitle>
+              <CardTitle>GET status — poll</CardTitle>
               <CardDescription>
-                Media, ad fields, review settings, and applicable policy are unchanged. No OCR, transcription, vision, or LLM processing runs again.
+                Continue while queued or processing. Stop on completed or failed.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>GET result — complete</CardTitle>
+              <CardDescription>
+                Returns creative_name, completed status, and the full report in result.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -265,7 +287,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="flex items-center gap-2 font-heading text-lg font-semibold"><Code2 /> Ready to test?</div>
-            <p className="mt-1 text-sm text-muted-foreground">Start with one known ad ID, scan it twice, then replace the file without changing its name.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Start with one direct public MP4, JPG, PNG, or WebP URL and use the returned job_id.</p>
           </div>
           <Button nativeButton={false} render={<a href="/developers/api?view=reference" />}>
             Open API reference <ArrowRight />

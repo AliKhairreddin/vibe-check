@@ -365,6 +365,7 @@ export default defineSchema({
   apiReviewLinks: defineTable({
     apiKeyId: v.string(),
     createdAt: v.number(),
+    creativeName: v.optional(v.string()),
     externalId: v.optional(v.string()),
     fileName: v.string(),
     fileSize: v.optional(v.number()),
