@@ -34,7 +34,7 @@ const endpoints: Array<{
   title: string;
 }> = [
   {
-    description: 'Send a creative name and public HTTPS media URL. Returns job_id after the media is validated and queued.',
+    description: 'Send an asset ID, creative name, and public HTTPS media URL. Returns job_id after the media is validated and queued.',
     method: 'POST',
     path: '/jobs',
     scope: 'reviews:create',
@@ -48,7 +48,7 @@ const endpoints: Array<{
     title: '2. Get job status',
   },
   {
-    description: 'Return the creative name and complete structured analysis result after processing finishes.',
+    description: 'Return the asset ID, creative name, and complete structured analysis result after processing finishes.',
     method: 'GET',
     path: '/jobs/{job_id}/result',
     scope: 'reviews:read',
@@ -150,7 +150,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
   -H 'Authorization: Bearer YOUR_API_KEY' \\
   -H 'Content-Type: application/json' \\
   -H 'Idempotency-Key: lemmonmaxx-monday-001' \\
-  --data '{"creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'`;
+  --data '{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'`;
 
   return (
     <div className={embedded ? 'grid gap-6 pb-16' : 'grid gap-8 pb-16'}>
@@ -180,7 +180,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
         {[
           [Fingerprint, '1. Accept', 'Vibe Check validates the public HTTPS destination, follows only safe redirects, verifies the file bytes, and returns job_id.'],
           [ScanSearch, '2. Process', 'Poll by job_id and receive only queued, processing, completed, or failed while the full pipeline runs.'],
-          [ArrowRight, '3. Retrieve', 'When status is completed, request the result endpoint for the creative name and complete structured analysis.'],
+          [ArrowRight, '3. Retrieve', 'When status is completed, request the result endpoint for the asset ID, creative name, and complete structured analysis.'],
         ].map(([Icon, title, description]) => {
           const StepIcon = Icon as typeof Fingerprint;
           return (
@@ -216,7 +216,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             <CardHeader>
               <CardTitle>HTTP 202 — accepted</CardTitle>
               <CardDescription>
-                The response includes job_id, creative_name, queued status, status_url, and result_url.
+                The response includes asset_id, job_id, creative_name, queued status, status_url, and result_url.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -232,7 +232,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             <CardHeader>
               <CardTitle>GET result — complete</CardTitle>
               <CardDescription>
-                Returns creative_name, completed status, and the full report in result.
+                Returns asset_id, creative_name, completed status, and the full report in result.
               </CardDescription>
             </CardHeader>
           </Card>

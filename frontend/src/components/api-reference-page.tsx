@@ -283,6 +283,7 @@ const endpoints: Endpoint[] = [
     scope: 'reviews:create',
     bodyEncoding: 'json',
     fields: [
+      { name: 'asset_id', label: 'Asset ID', location: 'json', required: true, placeholder: 'asset_12345' },
       { name: 'creative_name', label: 'Creative name', location: 'json', required: true, placeholder: 'Monday Creative' },
       { name: 'media_url', label: 'Media URL', location: 'json', required: true, placeholder: 'https://cdn.example.com/creative.mp4' },
       {
@@ -310,7 +311,7 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/jobs/{job_id}/result',
     title: 'Get job result',
-    description: 'Return the creative name and complete structured analysis result after processing completes.',
+    description: 'Return the asset ID, creative name, and complete structured analysis result after processing completes.',
     scope: 'reviews:read',
     fields: [jobIdField],
   },

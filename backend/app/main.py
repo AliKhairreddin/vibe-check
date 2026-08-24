@@ -1050,6 +1050,7 @@ def simple_job_status(value:str)->str:
 def simple_job_response(review:dict)->dict:
     job_id=str(review.get('job_id') or review.get('review_id') or '')
     return {
+        'asset_id':review.get('asset_id') or review.get('external_id'),
         'job_id':job_id,
         'creative_name':review.get('creative_name'),
         'status':simple_job_status(str(review.get('status') or 'queued')),
@@ -1184,7 +1185,7 @@ async def partner_create_job(payload:ApiJobInput,request:Request):
         manual_transcript='',
         frame_interval_seconds=1.0,
         scene_detection=False,
-        external_id='',
+        external_id=payload.asset_id,
     )
     max_bytes=min(
         principal.max_upload_mb,
@@ -1206,7 +1207,7 @@ async def partner_create_job(payload:ApiJobInput,request:Request):
             principal,
             job_id=job_id,
             creative_name=payload.creative_name,
-            external_id='',
+            external_id=payload.asset_id,
             idempotency_key=idempotency_key,
             media_kind=downloaded.media_kind,
             file_name=downloaded.file_name,
@@ -1227,6 +1228,7 @@ async def partner_create_job(payload:ApiJobInput,request:Request):
             file_size=downloaded.file_size,
         )
         return simple_job_response({
+            'asset_id':payload.asset_id,
             'creative_name':payload.creative_name,
             'job_id':record.job_id,
             'message':record.message,
@@ -1794,6 +1796,7 @@ async def partner_job_result(job_id:str,request:Request):
     if report is None:
         raise HTTPException(404,'Job result not found.')
     return {
+        'asset_id':review.get('asset_id') or review.get('external_id'),
         'job_id':job_id,
         'creative_name':review.get('creative_name'),
         'status':'completed',

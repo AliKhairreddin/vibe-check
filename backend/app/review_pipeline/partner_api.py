@@ -54,8 +54,19 @@ class PartnerMediaError(RuntimeError):
 
 
 class ApiJobInput(BaseModel):
+    asset_id: str = Field(min_length=1, max_length=200)
     creative_name: str = Field(min_length=1, max_length=300)
     media_url: str = Field(min_length=1, max_length=4_000)
+
+    @field_validator('asset_id')
+    @classmethod
+    def normalize_asset_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('asset_id must not be empty.')
+        if any(ord(character) < 32 for character in normalized):
+            raise ValueError('asset_id cannot contain control characters.')
+        return normalized
 
     @field_validator('creative_name')
     @classmethod

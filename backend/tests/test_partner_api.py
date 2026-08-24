@@ -251,6 +251,11 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
     assert '/api/v1/scans/creative' in schema['paths']
     assert '/api/reviews' not in schema['paths']
     assert all(path.startswith('/api/v1') for path in schema['paths'])
+    assert set(schema['components']['schemas']['ApiJobInput']['required']) == {
+        'asset_id',
+        'creative_name',
+        'media_url',
+    }
 
 
 @pytest.mark.anyio
@@ -374,6 +379,14 @@ async def test_simple_job_contract_downloads_url_and_returns_job_id(tmp_path, mo
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        missing_asset = await client.post(
+            '/api/v1/jobs',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+            json={
+                'creative_name': 'Monday Creative',
+                'media_url': 'https://cdn.example.com/creative.mp4',
+            },
+        )
         response = await client.post(
             '/api/v1/jobs',
             headers={
@@ -381,19 +394,25 @@ async def test_simple_job_contract_downloads_url_and_returns_job_id(tmp_path, mo
                 'idempotency-key': 'lemmonmaxx-monday-001',
             },
             json={
+                'asset_id': ' asset_12345 ',
                 'creative_name': 'Monday Creative',
                 'media_url': 'https://cdn.example.com/creative.mp4',
             },
         )
 
+    assert missing_asset.status_code == 422
+    assert missing_asset.json()['detail'][0]['loc'][-1] == 'asset_id'
     assert response.status_code == 202
     payload = response.json()
+    assert payload['asset_id'] == 'asset_12345'
     assert payload['job_id'] == captured['claim']['job_id']
     assert payload['creative_name'] == 'Monday Creative'
     assert payload['status'] == 'queued'
     assert payload['status_url'] == f"/api/v1/jobs/{payload['job_id']}"
     assert captured['claim']['creative_name'] == 'Monday Creative'
+    assert captured['claim']['external_id'] == 'asset_12345'
     assert captured['claim']['idempotency_key'] == 'lemmonmaxx-monday-001'
+    assert captured['meta'].api_external_id == 'asset_12345'
     assert captured['media_kind'] == 'video'
 
 
@@ -418,6 +437,7 @@ async def test_simple_job_status_normalizes_pipeline_states(monkeypatch):
                 'app.main.get_api_review',
                 lambda _principal, _job_id, status=internal_status: {
                     'creative_name': 'Monday Creative',
+                    'external_id': 'asset_12345',
                     'job_id': job_id,
                     'message': 'Working',
                     'progress': 50,
@@ -431,6 +451,7 @@ async def test_simple_job_status_normalizes_pipeline_states(monkeypatch):
                 headers={'authorization': 'Bearer vc_live_test-key'},
             )
             assert response.status_code == 200
+            assert response.json()['asset_id'] == 'asset_12345'
             assert response.json()['status'] == expected_status
 
 
@@ -446,6 +467,7 @@ async def test_simple_job_result_includes_creative_name_and_complete_report(monk
         'app.main.get_api_review',
         lambda _principal, _job_id: {
             'creative_name': 'Monday Creative',
+            'external_id': 'asset_12345',
             'job_id': job_id,
             'report_ready': True,
             'review_id': job_id,
@@ -463,6 +485,7 @@ async def test_simple_job_result_includes_creative_name_and_complete_report(monk
 
     assert response.status_code == 200
     assert response.json() == {
+        'asset_id': 'asset_12345',
         'job_id': job_id,
         'creative_name': 'Monday Creative',
         'status': 'completed',

@@ -50,13 +50,14 @@ curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/jobs' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: lemmonmaxx-monday-001' \
-  --data '{"creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'
+  --data '{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'
 ```
 
 The URL must be public HTTPS and resolve to an MP4, JPG, PNG, or WebP file. Vibe Check rejects embedded credentials, private/local destinations, unsafe redirects, empty responses, unsupported file signatures, and media larger than the API partner's upload limit. A successful request returns HTTP `202` after the media is validated and queued:
 
 ```json
 {
+  "asset_id": "asset_12345",
   "job_id": "ab12...",
   "creative_name": "Monday Creative",
   "status": "queued",
@@ -74,7 +75,7 @@ GET /api/v1/jobs/{job_id}
 Authorization: Bearer YOUR_API_KEY
 ```
 
-`status` is always one of `queued`, `processing`, `completed`, or `failed`. The endpoint deliberately collapses the richer internal stages so a phase-one client needs only one polling state machine.
+`status` is always one of `queued`, `processing`, `completed`, or `failed`. The response also echoes `asset_id`, allowing the caller to map the Vibe Check job back to its own asset. The endpoint deliberately collapses the richer internal stages so a phase-one client needs only one polling state machine.
 
 ### 3. Retrieve the result
 
@@ -87,6 +88,7 @@ Before completion this returns HTTP `409` with `Retry-After: 5`. Once complete i
 
 ```json
 {
+  "asset_id": "asset_12345",
   "job_id": "ab12...",
   "creative_name": "Monday Creative",
   "status": "completed",
@@ -96,6 +98,8 @@ Before completion this returns HTTP `409` with `Retry-After: 5`. Once complete i
   }
 }
 ```
+
+`asset_id` is required, may be up to 200 characters, and is stored as the caller's stable external identifier. It does not replace `job_id`: one asset can have multiple review jobs over time.
 
 This URL-based contract is convenient when LemmonMaxx already has a durable media URL. Direct file upload remains the stronger production option when URLs are short-lived or access-controlled, or when the caller needs byte-for-byte control over what Vibe Check receives. Both routes feed the same analysis pipeline and can be used side by side.
 

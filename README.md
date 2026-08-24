@@ -178,9 +178,9 @@ The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/v1/jobs` | Submit a creative name and public HTTPS media URL; receive `job_id` |
+| `POST /api/v1/jobs` | Submit an asset ID, creative name, and public HTTPS media URL; receive `job_id` |
 | `GET /api/v1/jobs/{job_id}` | Read normalized `queued/processing/completed/failed` status |
-| `GET /api/v1/jobs/{job_id}/result` | Read the complete JSON analysis with the creative name |
+| `GET /api/v1/jobs/{job_id}/result` | Read the complete JSON analysis with the asset ID and creative name |
 | `POST /api/v1/reviews` | Authenticated partner creative or copy-only submission |
 | `POST /api/v1/scans/creative` | Hash currently served ad media and review it only when media, copy, or policy changed |
 | `GET /api/v1/scans/ads/{ad_id}` | Read tenant-owned current fingerprint and linked review state |
