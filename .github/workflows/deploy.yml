@@ -72,11 +72,28 @@ jobs:
 
       - name: Deploy Cloudflare
         run: |
-          deployment=$(pnpm exec wrangler deployments status --json)
+          retry_wrangler() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output=$(pnpm exec wrangler "$@"); then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                printf '%s\n' "$output" >&2
+                return 1
+              fi
+              echo "::warning::Wrangler command failed (attempt $attempt/5); retrying in 10 seconds" >&2
+              sleep 10
+            done
+          }
+
+          deployment=$(retry_wrangler deployments status --json)
           version_id=$(echo "$deployment" | jq -r '.versions[] | select(.percentage == 100) | .version_id' | head -n 1)
           current_slot=""
           if [ -n "$version_id" ]; then
-            current_slot=$(pnpm exec wrangler versions view "$version_id" --json | jq -r '.resources.bindings[]? | select(.name == "BACKEND_SLOT") | .text' | head -n 1)
+            version=$(retry_wrangler versions view "$version_id" --json)
+            current_slot=$(echo "$version" | jq -r '.resources.bindings[]? | select(.name == "BACKEND_SLOT") | .text' | head -n 1)
           fi
           current_slot=${current_slot:-primary-v25}
           if [ "$current_slot" = "primary-blue" ]; then
@@ -86,17 +103,34 @@ jobs:
           fi
           echo "CURRENT_BACKEND_SLOT=$current_slot" >> "$GITHUB_ENV"
           echo "NEXT_BACKEND_SLOT=$next_slot" >> "$GITHUB_ENV"
-          pnpm exec wrangler deploy --keep-vars --var "BACKEND_SLOT:$current_slot"
+          retry_wrangler deploy --keep-vars --var "BACKEND_SLOT:$current_slot"
 
       - name: Wait for Cloudflare container rollout
         run: |
-          app_id=$(pnpm exec wrangler containers list --json | jq -r '.[] | select(.name == "vibe-check-reviewbackend") | .id')
+          retry_wrangler() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output=$(pnpm exec wrangler "$@"); then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                printf '%s\n' "$output" >&2
+                return 1
+              fi
+              echo "::warning::Wrangler command failed (attempt $attempt/5); retrying in 10 seconds" >&2
+              sleep 10
+            done
+          }
+
+          applications=$(retry_wrangler containers list --json)
+          app_id=$(echo "$applications" | jq -r '.[] | select(.name == "vibe-check-reviewbackend") | .id')
           if [ -z "$app_id" ]; then
             echo "::error::Cloudflare container application was not found"
             exit 1
           fi
           for attempt in $(seq 1 90); do
-            info=$(pnpm exec wrangler containers info "$app_id")
+            info=$(retry_wrangler containers info "$app_id")
             errors=$(echo "$info" | jq '.health.errors | length')
             healthy=$(echo "$info" | jq '.health.instances.healthy')
             rollout=$(echo "$info" | jq -r '.active_rollout_id // empty')
@@ -114,4 +148,21 @@ jobs:
           exit 1
 
       - name: Activate Worker after container rollout
-        run: pnpm exec wrangler deploy --containers-rollout=none --keep-vars --var "BACKEND_SLOT:$NEXT_BACKEND_SLOT"
+        run: |
+          retry_wrangler() {
+            local attempt output
+            for attempt in $(seq 1 5); do
+              if output=$(pnpm exec wrangler "$@"); then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                printf '%s\n' "$output" >&2
+                return 1
+              fi
+              echo "::warning::Wrangler command failed (attempt $attempt/5); retrying in 10 seconds" >&2
+              sleep 10
+            done
+          }
+
+          retry_wrangler deploy --containers-rollout=none --keep-vars --var "BACKEND_SLOT:$NEXT_BACKEND_SLOT"
