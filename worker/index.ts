@@ -55,7 +55,7 @@ const DOCUMENT_SECURITY_POLICY = [
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
   "object-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' https://static.cloudflareinsights.com",
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
 
