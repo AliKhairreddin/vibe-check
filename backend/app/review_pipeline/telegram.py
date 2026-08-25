@@ -76,7 +76,7 @@ def build_review_message(
     media_kind: MediaKind | None = None,
 ) -> str:
     report_url = build_report_url(record.job_id)
-    lines = ['<b>Vibe Check Result</b>']
+    lines = ['<b>AdChecked Result</b>']
 
     if record.has_creative:
         _add_source_identity(
@@ -392,8 +392,9 @@ def finish_batch_item_and_notify(
             logger.exception('Could not generate combined PDF report for batch %s.', batch_id)
     if should_notify:
         success = send_batch_message(batch)
-        mark_batch_notification(batch_id, success)
-        batch.notification_status = 'sent' if success else 'failed'
+        if mark_batch_notification(batch_id, success, batch.notification_claim_id):
+            batch.notification_claim_id = None
+            batch.notification_status = 'sent' if success else 'failed'
     return batch
 
 

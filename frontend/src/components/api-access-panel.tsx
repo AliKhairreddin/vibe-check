@@ -561,7 +561,7 @@ export function ApiAccessPanel() {
                     <Input
                       id="webhook-url"
                       type="url"
-                      placeholder="https://partner.example.com/webhooks/vibe-check"
+                      placeholder="https://partner.example.com/webhooks/adchecked"
                       value={draft.webhook_url ?? ''}
                       onChange={(event) => updateDraft({ webhook_url: event.currentTarget.value || null })}
                     />

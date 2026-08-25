@@ -1207,7 +1207,7 @@ def generate_review_report_pdf(
     canvas_target = str(target) if isinstance(target, Path) else target
     pdf = NumberedCanvas(canvas_target, pagesize=PAGE_SIZE, pageCompression=1)
     pdf.setTitle(f'{record.file_name or record.job_id} - Compliance Evidence Report')
-    pdf.setAuthor('Vibe Check')
+    pdf.setAuthor('AdChecked')
     _creative_page(
         pdf,
         record,

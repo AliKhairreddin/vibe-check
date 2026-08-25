@@ -257,16 +257,13 @@ export const getDetail = query({
   returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const stats = await ctx.db
+    const stat = await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .take(100);
-    const stat = stats.find((candidate) =>
-      candidate.offerId === args.offerId
-      && candidate.deletedAt === undefined
-      && candidate.status === "complete"
-    );
-    if (!stat) return null;
+      .withIndex("by_job_id_and_offer_id", (q) =>
+        q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+      )
+      .unique();
+    if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") return null;
     const [review, storedReport, decision, evidence] = await Promise.all([
       ctx.db
         .query("reviews")
@@ -341,12 +338,14 @@ export const hasReview = query({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const stats = await ctx.db
+    const stat = await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .take(100);
-    return stats.some((stat) =>
-      stat.offerId === args.offerId
+      .withIndex("by_job_id_and_offer_id", (q) =>
+        q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+      )
+      .unique();
+    return Boolean(
+      stat
       && stat.deletedAt === undefined
       && stat.status === "complete"
     );
@@ -363,11 +362,13 @@ export const getReport = query({
   returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const stats = await ctx.db
+    const stat = await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .take(100);
-    if (!stats.some((stat) => stat.offerId === args.offerId && stat.deletedAt === undefined)) {
+      .withIndex("by_job_id_and_offer_id", (q) =>
+        q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+      )
+      .unique();
+    if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") {
       return null;
     }
     const stored = await ctx.db
@@ -404,16 +405,13 @@ export const decide = mutation({
   returns: decisionValidator,
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const stats = await ctx.db
+    const stat = await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .take(100);
-    const stat = stats.find((candidate) =>
-      candidate.offerId === args.offerId
-      && candidate.deletedAt === undefined
-      && candidate.status === "complete"
-    );
-    if (!stat) {
+      .withIndex("by_job_id_and_offer_id", (q) =>
+        q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+      )
+      .unique();
+    if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") {
       throw new Error("Client review is unavailable");
     }
     const aiStatus = normalizeResultStatus(stat.resultStatus);
@@ -427,7 +425,7 @@ export const decide = mutation({
       throw new Error(`Feedback note must be ${MAX_FEEDBACK_NOTE_LENGTH} characters or fewer`);
     }
     if (isOverride && !args.feedbackReason) {
-      throw new Error("Tell us why your decision differs from Vibe Check");
+      throw new Error("Tell us why your decision differs from AdChecked");
     }
     if (
       isOverride
@@ -435,7 +433,7 @@ export const decide = mutation({
       && CALIBRATION_FEEDBACK_REASONS.has(args.feedbackReason)
       && feedbackNote.length < 3
     ) {
-      throw new Error("Add a short note so Vibe Check can learn the policy distinction");
+      throw new Error("Add a short note so AdChecked can learn the policy distinction");
     }
     const [storedReport, review] = await Promise.all([
       ctx.db
@@ -538,15 +536,13 @@ export const clearDecision = mutation({
   returns: v.object({ cleared: v.boolean() }),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const stats = await ctx.db
+    const stat = await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .take(100);
-    if (!stats.some((stat) =>
-      stat.offerId === args.offerId
-      && stat.deletedAt === undefined
-      && stat.status === "complete"
-    )) {
+      .withIndex("by_job_id_and_offer_id", (q) =>
+        q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+      )
+      .unique();
+    if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") {
       throw new Error("Client review is unavailable");
     }
     const existing = await ctx.db

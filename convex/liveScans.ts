@@ -7,6 +7,9 @@ type ReviewKind = "creative" | "copy";
 const CLAIM_LEASE_MS = 15 * 60 * 1000;
 const MAX_AD_IDS = 500;
 const MAX_NAMES = 100;
+const MAX_OBSERVATION_CREATIVES = 500;
+const MAX_OBSERVATION_COPIES = 500;
+const MAX_OBSERVED_AD_IDS = 500;
 
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
@@ -31,6 +34,12 @@ function overallStatus(report: unknown): ResultStatus | null {
 
 function mergeStrings(current: string[], incoming: string[], limit: number) {
   return [...new Set([...current, ...incoming].filter(Boolean))].slice(0, limit);
+}
+
+function requireArrayLimit(label: string, length: number, limit: number) {
+  if (length > limit) {
+    throw new Error(`${label} can contain at most ${limit} items`);
+  }
 }
 
 async function findReview(ctx: QueryCtx | MutationCtx, jobId: string) {
@@ -282,6 +291,18 @@ export const observe = mutation({
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    requireArrayLimit("Observed ad IDs", args.observedAdIds.length, MAX_OBSERVED_AD_IDS);
+    requireArrayLimit("Creative observations", args.creatives.length, MAX_OBSERVATION_CREATIVES);
+    requireArrayLimit("Copy observations", args.copies.length, MAX_OBSERVATION_COPIES);
+    for (const creative of args.creatives) {
+      requireArrayLimit("Creative ad IDs", creative.adIds.length, MAX_AD_IDS);
+      requireArrayLimit("Creative ad set names", creative.adSetNames.length, MAX_NAMES);
+      requireArrayLimit("Creative campaign names", creative.campaignNames.length, MAX_NAMES);
+      requireArrayLimit("Creative delivery statuses", creative.deliveryStatuses.length, MAX_NAMES);
+    }
+    for (const copy of args.copies) {
+      requireArrayLimit("Copy ad IDs", copy.adIds.length, MAX_AD_IDS);
+    }
     const account = await ctx.db
       .query("liveScanAccounts")
       .withIndex("by_date_account", (builder) =>

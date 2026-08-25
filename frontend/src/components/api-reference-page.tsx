@@ -93,7 +93,7 @@ type EndpointResponse = {
   error?: string;
 };
 
-const PRODUCTION_ORIGIN = 'https://vibe-check.ali-kheireddin1.workers.dev';
+const PRODUCTION_ORIGIN = 'https://api.adchecked.com';
 
 const groups: EndpointGroup[] = [
   {
@@ -186,7 +186,7 @@ const scanFields: RequestField[] = [
     kind: 'file',
     required: true,
     accept: 'video/*,image/*',
-    description: 'Vibe Check calculates SHA-256 directly from these file bytes before any AI work.',
+    description: 'AdChecked calculates SHA-256 directly from these file bytes before any AI work.',
   },
   {
     name: 'ad_id',
@@ -321,7 +321,7 @@ const endpoints: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/scans/creative',
     title: 'Observe a live creative',
-    description: 'Upload the media currently running for an ad. Unchanged content reuses its review; changed content starts the normal Vibe Check pipeline.',
+    description: 'Upload the media currently running for an ad. Unchanged content reuses its review; changed content starts the normal AdChecked pipeline.',
     scope: 'scans:write',
     bodyEncoding: 'multipart',
     fields: scanFields,
@@ -397,7 +397,7 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/reviews/{job_id}/result',
     title: 'Get full review results',
-    description: 'Return the complete Vibe Check report, findings, decisions, and artifact links.',
+    description: 'Return the complete AdChecked report, findings, decisions, and artifact links.',
     scope: 'reviews:read',
     fields: [jobIdField],
   },
@@ -504,7 +504,7 @@ const endpoints: Endpoint[] = [
     method: 'POST',
     path: '/api/v1/uploads/{upload_id}/complete',
     title: 'Complete a resumable upload',
-    description: 'Assemble all received chunks and create the Vibe Check review.',
+    description: 'Assemble all received chunks and create the AdChecked review.',
     scope: 'reviews:create',
     bodyEncoding: 'urlencoded',
     fields: [
@@ -940,7 +940,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
 
   useEffect(() => {
     const previousTitle = document.title;
-    if (!embedded) document.title = 'Vibe Check Partner API · Interactive reference';
+    if (!embedded) document.title = 'AdChecked Partner API · Interactive reference';
     const hash = window.location.hash.slice(1);
     if (endpoints.some((endpoint) => endpoint.id === hash)) {
       setOpenEndpoints((current) => new Set(current).add(hash));
@@ -1141,7 +1141,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
               <Badge variant="outline" className="text-emerald-700 dark:text-emerald-300"><span className="size-1.5 rounded-full bg-emerald-500" /> Production</Badge>
             </div>
             <div className="grid gap-2">
-              <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Vibe Check Partner API</h1>
+              <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">AdChecked Partner API</h1>
               <p className="max-w-3xl text-base leading-7 text-muted-foreground">
                 Start with the three LemmonMaxx test endpoints for URL submission, normalized job status,
                 and complete JSON results. The richer upload, scan, evidence, and report APIs remain available below.
@@ -1169,7 +1169,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
                   id="partner-api-key"
                   type={showKey ? 'text' : 'password'}
                   value={apiKey}
-                  placeholder="vck_live_…"
+                  placeholder="vc_live_…"
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(event) => setApiKey(event.target.value)}

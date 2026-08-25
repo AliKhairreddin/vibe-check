@@ -1,17 +1,20 @@
 const DEFAULT_CONFIG = {
   enabled: true,
-  serverUrl: 'https://vibe-check.thatcanadian.dev',
+  serverUrl: 'https://admin.adchecked.com',
   appPassword: '',
 };
+const LEGACY_SERVER_ORIGIN = 'https://vibe-check.thatcanadian.dev';
 const activeUploads = new Set();
+let cachedScannerSession = null;
 const META_MEDIA_HOSTS = ['.fbcdn.net', '.facebook.com', '.cdninstagram.com'];
-const MAX_MEDIA_BYTES = 200 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 95 * 1024 * 1024;
+const MAX_CONCURRENT_UPLOADS = 3;
 
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.local.get(DEFAULT_CONFIG);
   await chrome.storage.local.set({
     enabled: stored.enabled,
-    serverUrl: stored.serverUrl,
+    serverUrl: normalizedServerUrl(stored.serverUrl),
     appPassword: stored.appPassword,
   });
 });
@@ -36,15 +39,37 @@ async function config() {
 function normalizedServerUrl(value) {
   const url = new URL(String(value || DEFAULT_CONFIG.serverUrl));
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === 'localhost')) {
-    throw new Error('Vibe Check URL must use HTTPS.');
+    throw new Error('AdChecked URL must use HTTPS.');
   }
-  return url.origin;
+  return url.origin === LEGACY_SERVER_ORIGIN ? DEFAULT_CONFIG.serverUrl : url.origin;
 }
 
-function headers(settings, values = {}) {
+async function headers(settings, values = {}) {
   const result = new Headers(values);
-  if (settings.appPassword) result.set('x-app-password', settings.appPassword);
+  result.set('authorization', `Bearer ${await scannerToken(settings)}`);
   return result;
+}
+
+async function scannerToken(settings) {
+  if (!settings.appPassword) throw new Error('Add the scanner access password in extension settings.');
+  const cacheKey = `${settings.serverUrl}\0${settings.appPassword}`;
+  if (
+    cachedScannerSession?.cacheKey === cacheKey
+    && cachedScannerSession.expiresAt > Math.floor(Date.now() / 1000) + 60
+  ) return cachedScannerSession.token;
+  const response = await fetch(`${settings.serverUrl}/api/scanner/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: settings.appPassword }),
+  });
+  const session = await responseJson(response);
+  if (!session.token || !session.expires_at) throw new Error('AdChecked returned an invalid scanner session.');
+  cachedScannerSession = {
+    cacheKey,
+    expiresAt: Number(session.expires_at),
+    token: String(session.token),
+  };
+  return cachedScannerSession.token;
 }
 
 async function submitObservation(payload) {
@@ -52,7 +77,7 @@ async function submitObservation(payload) {
   if (!settings.enabled) return { disabled: true };
   const response = await fetch(`${settings.serverUrl}/api/live-scans/observe`, {
     method: 'POST',
-    headers: headers(settings, { 'content-type': 'application/json' }),
+    headers: await headers(settings, { 'content-type': 'application/json' }),
     body: JSON.stringify(payload),
   });
   const result = await responseJson(response);
@@ -77,20 +102,35 @@ async function submitObservation(payload) {
       media_url: ad.media_url || current.media_url || null,
     });
   }
-  const uploads = [];
-  for (const request of result.media_requests ?? []) {
+  await forEachWithConcurrency(result.media_requests ?? [], MAX_CONCURRENT_UPLOADS, async (request) => {
     const candidate = byCreativeName.get(request.creative_name);
     const mediaUrl = request.media_url || candidate?.media_url;
-    if (!mediaUrl || activeUploads.has(request.job_id)) continue;
+    if (!mediaUrl || activeUploads.has(request.job_id)) return;
     activeUploads.add(request.job_id);
-    uploads.push(uploadMedia(settings, payload, request, mediaUrl)
-      .catch(async (error) => {
-        await chrome.storage.local.set({ lastError: errorMessage(error) });
-      })
-      .finally(() => activeUploads.delete(request.job_id)));
-  }
-  await Promise.allSettled(uploads);
+    try {
+      await uploadMedia(settings, payload, request, mediaUrl);
+    } catch (error) {
+      await chrome.storage.local.set({ lastError: errorMessage(error) });
+    } finally {
+      activeUploads.delete(request.job_id);
+    }
+  });
   return result;
+}
+
+async function forEachWithConcurrency(values, concurrency, operation) {
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await operation(values[index]);
+      }
+    },
+  );
+  await Promise.all(workers);
 }
 
 async function uploadMedia(settings, payload, request, mediaUrl) {
@@ -106,12 +146,12 @@ async function uploadMedia(settings, payload, request, mediaUrl) {
   }
   const contentLength = Number(mediaResponse.headers.get('content-length') || 0);
   if (contentLength > MAX_MEDIA_BYTES) {
-    throw new Error('Meta media is larger than the 200 MB upload limit.');
+    throw new Error('Meta media is larger than the 95 MB browser-scanner upload limit.');
   }
   const blob = await mediaResponse.blob();
   if (!blob.size) throw new Error('Meta returned an empty media file.');
   if (blob.size > MAX_MEDIA_BYTES) {
-    throw new Error('Meta media is larger than the 200 MB upload limit.');
+    throw new Error('Meta media is larger than the 95 MB browser-scanner upload limit.');
   }
   if (
     blob.type
@@ -131,7 +171,7 @@ async function uploadMedia(settings, payload, request, mediaUrl) {
   form.append('source_url', payload.source_url);
   const response = await fetch(`${settings.serverUrl}/api/live-scans/creative`, {
     method: 'POST',
-    headers: headers(settings),
+    headers: await headers(settings),
     body: form,
   });
   await responseJson(response);
@@ -175,7 +215,7 @@ async function responseJson(response) {
     value = {};
   }
   if (!response.ok) {
-    throw new Error(value.detail || value.message || `Vibe Check request failed (${response.status}).`);
+    throw new Error(value.detail || value.message || `AdChecked request failed (${response.status}).`);
   }
   return value;
 }

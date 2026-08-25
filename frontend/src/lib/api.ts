@@ -242,12 +242,6 @@ export type ClientSession = {
   username: string;
 };
 
-export type ClientCredentials = {
-  password: string;
-  session: ClientSession;
-  username: string;
-};
-
 export type ClientReviewDetail = {
   client_id: string;
   display_name: string;
@@ -503,61 +497,21 @@ type ChunkedUpload = {
 const CHUNKED_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 const MAX_CHUNK_ATTEMPTS = 3;
 const BACKEND_SHARD_HEADER = 'x-vibe-backend-shard';
-const ADMIN_PASSWORD_KEY = 'vibe-check-admin-password';
-const CLIENT_CREDENTIALS_KEY = 'vibe-check-client-credentials';
 
-export function getAdminPassword(): string {
-  if (typeof window === 'undefined') return '';
-  return window.sessionStorage.getItem(ADMIN_PASSWORD_KEY) ?? '';
+function adminHeaders(headers?: HeadersInit): Headers {
+  return new Headers(headers);
 }
 
-export function setAdminPassword(password: string): void {
-  if (typeof window === 'undefined') return;
-  const normalized = password.trim();
-  if (normalized) window.sessionStorage.setItem(ADMIN_PASSWORD_KEY, normalized);
-  else window.sessionStorage.removeItem(ADMIN_PASSWORD_KEY);
+function requestHeaders(headers?: HeadersInit): Headers {
+  return new Headers(headers);
 }
 
-function adminHeaders(headers?: HeadersInit, password = getAdminPassword()): Headers {
-  const result = new Headers(headers);
-  if (password) result.set('x-admin-password', password);
-  return result;
+export function fetchWithAdminAccess(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, { ...init, headers: requestHeaders(init?.headers) });
 }
 
-export function getClientCredentials(): ClientCredentials | null {
-  if (typeof window === 'undefined') return null;
-  const stored = window.sessionStorage.getItem(CLIENT_CREDENTIALS_KEY);
-  if (!stored) return null;
-  try {
-    const value = JSON.parse(stored) as Partial<ClientCredentials>;
-    if (
-      typeof value.username !== 'string'
-      || typeof value.password !== 'string'
-      || !value.session
-      || !Array.isArray(value.session.portals)
-    ) return null;
-    return value as ClientCredentials;
-  } catch {
-    return null;
-  }
-}
-
-export function setClientCredentials(credentials: ClientCredentials | null): void {
-  if (typeof window === 'undefined') return;
-  if (credentials) window.sessionStorage.setItem(CLIENT_CREDENTIALS_KEY, JSON.stringify(credentials));
-  else window.sessionStorage.removeItem(CLIENT_CREDENTIALS_KEY);
-}
-
-function clientHeaders(
-  headers?: HeadersInit,
-  credentials = getClientCredentials()
-) {
-  const result = new Headers(headers);
-  if (credentials) {
-    result.set('x-client-username', credentials.username);
-    result.set('x-client-password', credentials.password);
-  }
-  return result;
+function clientHeaders(headers?: HeadersInit) {
+  return new Headers(headers);
 }
 
 function apiErrorMessage(body: string, status: number): string {
@@ -594,7 +548,7 @@ function parseJson<T>(body: string): T {
 }
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init);
+  const response = await fetch(input, { ...init, headers: requestHeaders(init?.headers) });
   const body = await response.text();
   if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
   return parseJson<T>(body);
@@ -754,7 +708,7 @@ async function sendChunkWithRetry(
   for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt += 1) {
     let response: Response | undefined;
     try {
-      response = await fetch(`/api/uploads/${uploadId}/chunks/${index}`, {
+      response = await fetchWithAdminAccess(`/api/uploads/${uploadId}/chunks/${index}`, {
         method: 'PUT',
         headers: shardHeaders(shardKey, { 'content-type': 'application/octet-stream' }),
         body: chunk,
@@ -799,8 +753,21 @@ export async function deleteReview(id: string): Promise<DeletedReview> {
 }
 
 export async function verifyAdminPassword(password: string): Promise<void> {
-  await requestJson<{ authorized: boolean }>('/api/admin/check', {
-    headers: adminHeaders(undefined, password),
+  await requestJson<{ authorized: boolean }>('/api/admin/session', {
+    method: 'POST',
+    headers: adminHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function getAdminSession(): Promise<void> {
+  await requestJson<{ authorized: boolean }>('/api/admin/session');
+}
+
+export async function clearAdminSession(): Promise<void> {
+  await requestJson<{ signed_out: boolean }>('/api/admin/session', {
+    method: 'DELETE',
+    keepalive: true,
   });
 }
 
@@ -1018,12 +985,21 @@ export async function verifyClientCredentials(
   username: string,
   password: string
 ): Promise<ClientSession> {
-  return requestJson<ClientSession>('/api/client/check', {
-    headers: clientHeaders(undefined, {
-      password,
-      session: { portals: [], role: 'client', username },
-      username,
-    }),
+  return requestJson<ClientSession>('/api/client/session', {
+    method: 'POST',
+    headers: clientHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function getClientSession(): Promise<ClientSession> {
+  return requestJson<ClientSession>('/api/client/session');
+}
+
+export async function clearClientSession(): Promise<void> {
+  await requestJson<{ signed_out: boolean }>('/api/client/session', {
+    method: 'DELETE',
+    keepalive: true,
   });
 }
 
@@ -1112,10 +1088,10 @@ export function preloadClientReviewImage(
 
 export async function fetchClientReviewPdf(
   clientId: string,
-  jobId: string,
-  reportUrl: string
+  jobId: string
 ): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(reportUrl, { headers: clientHeaders() });
+  const reportPath = `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/report.pdf`;
+  const response = await fetch(reportPath, { headers: clientHeaders() });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(apiErrorMessage(body, response.status));

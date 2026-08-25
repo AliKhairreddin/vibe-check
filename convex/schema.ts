@@ -214,7 +214,8 @@ export default defineSchema({
       "status",
       "createdAt",
     ])
-    .index("by_job_id", ["jobId"]),
+    .index("by_job_id", ["jobId"])
+    .index("by_job_id_and_offer_id", ["jobId", "offerId"]),
   reviewOfferReports: defineTable({
     createdAt: v.number(),
     jobId: v.string(),
@@ -251,6 +252,7 @@ export default defineSchema({
     })),
     notificationStatus: v.string(),
     notificationAttempts: v.optional(v.number()),
+    notificationClaimId: v.optional(v.string()),
     notificationLeaseExpiresAt: v.optional(v.number()),
     notificationReady: v.optional(v.boolean()),
     updatedAt: v.number(),
@@ -458,6 +460,7 @@ export default defineSchema({
     .index("by_expires_at", ["expiresAt"]),
   apiWebhookDeliveries: defineTable({
     attempts: v.number(),
+    claimId: v.optional(v.string()),
     createdAt: v.number(),
     deliveryId: v.string(),
     eventType: v.string(),

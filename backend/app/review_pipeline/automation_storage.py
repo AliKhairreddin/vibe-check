@@ -538,7 +538,7 @@ def deliver_pending_batch_notifications(*, limit:int=1) -> int:
             break
         batch=ReviewBatch.model_validate(value)
         success=send_batch_message(batch)
-        mark_batch_notification(batch.batch_id, success)
+        mark_batch_notification(batch.batch_id, success, batch.notification_claim_id)
         delivered += 1
     return delivered
 

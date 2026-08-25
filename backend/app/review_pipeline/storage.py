@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -99,7 +100,22 @@ def job_dir(job_id:str)->Path:
 
 def write_json(path:Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    encoded=json.dumps(data, indent=2, ensure_ascii=False)
+    descriptor,temp_name=tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f'.{path.name}.',
+        suffix='.tmp',
+        text=True,
+    )
+    temp_path=Path(temp_name)
+    try:
+        with os.fdopen(descriptor,'w',encoding='utf-8') as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path,path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 def read_json(path:Path):
     return json.loads(path.read_text(encoding='utf-8'))
@@ -549,18 +565,29 @@ def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
         return local,local_should_notify
     return ReviewBatch.model_validate(remote['batch']),bool(remote['shouldNotify'])
 
-def mark_batch_notification(batch_id:str, success:bool)->None:
+def mark_batch_notification(
+    batch_id:str,
+    success:bool,
+    claim_id:str|None=None,
+)->bool:
     status='sent' if success else 'failed'
+    args={
+        'batchId':batch_id,
+        'status':status,
+    }
+    if claim_id:
+        args['claimId']=claim_id
+    remote=_convex_call('mutation', 'batches:markNotification', args)
+    if isinstance(remote,dict) and remote.get('updated') is False:
+        return False
     local_path=batch_path(batch_id)
     if local_path.exists():
         batch=ReviewBatch.model_validate(read_json(local_path))
+        batch.notification_claim_id=None
         batch.notification_status=status
         batch.updated_at=now_ms()
         write_json(local_path, batch.model_dump(mode='json'))
-    _convex_call('mutation', 'batches:markNotification', {
-        'batchId':batch_id,
-        'status':status,
-    })
+    return True
 
 def _overall_status(report:dict[str, Any]|None)->str|None:
     status=report.get('overall_status') if isinstance(report, dict) else None
@@ -885,9 +912,12 @@ def get_client_review_report(client_id:str, offer_id:str, job_id:str)->dict[str,
         'offerId':offer_id,
         'jobId':job_id,
     })
-    if remote is not None:
+    if convex_enabled():
         return remote if isinstance(remote, dict) else None
     try:
+        record=get_status(job_id)
+        if record.status != JobStatus.complete or offer_id not in record.offer_ids:
+            return None
         return _report_offer_result(get_report(job_id), offer_id)
     except FileNotFoundError:
         return None
@@ -949,13 +979,13 @@ def set_client_review_decision(
     expected_decision='disapproved' if ai_status == 'red' else 'approved'
     is_override=decision != expected_decision
     if is_override and feedback_reason is None:
-        raise ValueError('Tell us why your decision differs from Vibe Check.')
+        raise ValueError('Tell us why your decision differs from AdChecked.')
     if (
         is_override
         and feedback_reason in CALIBRATION_FEEDBACK_REASONS
         and len(feedback_note) < 3
     ):
-        raise ValueError('Add a short note so Vibe Check can learn the policy distinction.')
+        raise ValueError('Add a short note so AdChecked can learn the policy distinction.')
     findings=[]
     for finding in report.get('findings', []):
         if not isinstance(finding, dict):

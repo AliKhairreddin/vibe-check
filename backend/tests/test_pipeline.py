@@ -2236,6 +2236,7 @@ def test_notification_delivery_drains_claimed_batch_outbox(monkeypatch):
         'created_at':1,
         'updated_at':2,
         'expected_count':1,
+        'notification_claim_id':'notification-claim',
         'notification_status':'claimed',
         'items':[{
             'file_name':'creative.png',
@@ -2259,12 +2260,56 @@ def test_notification_delivery_drains_claimed_batch_outbox(monkeypatch):
     marked=[]
     monkeypatch.setattr(review_automation_storage, '_convex_call', fake_convex_call)
     monkeypatch.setattr(review_telegram, 'send_batch_message', lambda value: sent.append(value) or True)
-    monkeypatch.setattr(review_storage, 'mark_batch_notification', lambda batch_id, success: marked.append((batch_id, success)))
+    monkeypatch.setattr(
+        review_storage,
+        'mark_batch_notification',
+        lambda batch_id, success, claim_id=None: marked.append((batch_id, success, claim_id)),
+    )
 
     assert review_automation_storage.recover_interrupted_automation_jobs() == 0
     assert review_automation_storage.deliver_pending_batch_notifications(limit=1) == 1
     assert [value.batch_id for value in sent] == ['recovered-batch']
-    assert marked == [('recovered-batch', True)]
+    assert marked == [('recovered-batch', True, 'notification-claim')]
+
+
+def test_stale_batch_notification_completion_does_not_overwrite_local_state(tmp_path,monkeypatch):
+    monkeypatch.setattr(review_storage,'JOB_DATA_DIR',tmp_path)
+    batch=ReviewBatch(
+        batch_id='fenced-batch',
+        created_at=1,
+        updated_at=2,
+        expected_count=1,
+        notification_claim_id='newer-claim',
+        notification_status='claimed',
+        items=[ReviewBatchItem(
+            item_id='item-1',
+            file_name='creative.png',
+            media_kind='image',
+            status='complete',
+        )],
+    )
+    review_storage.write_json(
+        review_storage.batch_path(batch.batch_id),
+        batch.model_dump(mode='json'),
+    )
+    monkeypatch.setattr(
+        review_storage,
+        '_convex_call',
+        lambda *args,**kwargs:{'status':'claimed','updated':False},
+    )
+
+    updated=review_storage.mark_batch_notification(
+        batch.batch_id,
+        True,
+        'stale-claim',
+    )
+
+    stored=ReviewBatch.model_validate(
+        review_storage.read_json(review_storage.batch_path(batch.batch_id))
+    )
+    assert updated is False
+    assert stored.notification_claim_id == 'newer-claim'
+    assert stored.notification_status == 'claimed'
 
 
 def test_automation_filters_large_folder_before_match_limit(monkeypatch):
@@ -3130,6 +3175,44 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert fast_detail.status_code == 200
     assert fast_detail.json()['report']['summary'] == 'Loaded from the direct detail query.'
 
+
+def test_client_report_fallback_requires_a_visible_completed_review(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    job_id='5' * 32
+    set_status(
+        job_id,
+        JobStatus.queued,
+        0,
+        'Queued',
+        'Client creative.png',
+        offer_ids=['kissterra'],
+        primary_offer_id='kissterra',
+    )
+    set_report(job_id, {
+        'offer_id':'kissterra',
+        'overall_status':'yellow',
+        'summary':'Stored before completion.',
+        'findings':[],
+    })
+
+    assert review_storage.get_client_review_report('kissterra','kissterra',job_id) is None
+
+    set_status(job_id, JobStatus.complete, 100, 'Complete')
+    assert review_storage.get_client_review_report(
+        'kissterra','kissterra',job_id
+    )['summary'] == 'Stored before completion.'
+
+    delete_review(job_id)
+    assert review_storage.get_client_review_report('kissterra','kissterra',job_id) is None
+
+    (tmp_path/job_id/'deleted.json').unlink()
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', 'https://example.convex.cloud')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', 'test-secret')
+    monkeypatch.setattr(review_storage, '_convex_call', lambda *_args, **_kwargs: None)
+    assert review_storage.get_client_review_report('kissterra','kissterra',job_id) is None
+
 def test_review_history_splits_creative_and_ad_copy_results(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
@@ -3979,7 +4062,7 @@ def test_review_history_prefers_explicit_source_results(tmp_path, monkeypatch):
     assert history[0].ad_copy_result=='yellow'
 
 def test_telegram_message_includes_minimal_split_results_and_report_links(monkeypatch):
-    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
     record=JobRecord(
         job_id='abc123',
         file_name='summer-drive-video.mp4',
@@ -4033,7 +4116,7 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
     assert message.count('N/A — Not reviewed') == 3
 
 def test_telegram_message_omits_missing_source_sections(monkeypatch):
-    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
     record=JobRecord(
         job_id='copy123',
         file_name='Ad copy: Save today.',
@@ -4063,7 +4146,7 @@ def test_telegram_message_omits_missing_source_sections(monkeypatch):
     assert 'Open report' in message
 
 def test_telegram_message_labels_image_creatives(monkeypatch):
-    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
     record=JobRecord(
         job_id='image123',
         file_name='static-ad.png',
@@ -4086,7 +4169,7 @@ def test_telegram_message_labels_image_creatives(monkeypatch):
     assert '🟡 Yellow — Fix or review before publishing' in message
 
 def test_telegram_message_identifies_green_internal_exception(monkeypatch):
-    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
     record=JobRecord(
         job_id='exception123',
         file_name='approved.png',
@@ -4109,7 +4192,7 @@ def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeyp
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
-    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
     sent=[]
     monkeypatch.setattr(review_telegram, 'send_batch_message', lambda batch: sent.append(batch) or True)
 
@@ -4152,7 +4235,7 @@ def test_batch_persists_and_formats_per_offer_outcomes(tmp_path, monkeypatch):
     monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
     monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
-    monkeypatch.setenv('APP_PUBLIC_URL', 'https://vibe-check.thatcanadian.dev')
+    monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
     create_batch('multi-results', [
         CreateBatchItem(item_id='item1', file_name='creative.png', media_kind='image'),
         CreateBatchItem(item_id='item2', file_name='failed.png', media_kind='image'),
@@ -4943,6 +5026,40 @@ async def test_live_scan_groups_media_by_name_and_queues_unique_primary_texts(tm
     assert released == []
 
 
+@pytest.mark.anyio
+async def test_live_scan_rejects_oversized_copy_observation_set_before_claiming(monkeypatch):
+    monkeypatch.delenv('APP_PASSWORD',raising=False)
+    claims=[]
+    monkeypatch.setattr(
+        'app.main.claim_live_review',
+        lambda *args,**kwargs:claims.append((args,kwargs)),
+    )
+    ads=[]
+    for ad_index in range(21):
+        ads.append({
+            'ad_id':f'ad-{ad_index}',
+            'creative_name':f'Creative {ad_index}',
+            'primary_texts':[
+                f'Copy {ad_index}-{copy_index}'
+                for copy_index in range(25)
+            ],
+        })
+
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+        response=await client.post('/api/live-scans/observe',json={
+            'account_id':'act_oversized',
+            'account_name':'Oversized Account',
+            'observation_date':'2026-08-25',
+            'observed_at':1_777_000_000_000,
+            'ads':ads,
+        })
+
+    assert response.status_code == 413
+    assert 'at most 500 copy variants' in response.json()['detail']
+    assert claims == []
+
+
 def test_live_scan_current_state_preserves_partial_copy_then_removes_paused_ad(
     tmp_path,
     monkeypatch,
@@ -5138,7 +5255,71 @@ def test_worker_routes_api_browser_navigation_before_spa_assets():
     assert wrangler_config['assets']['not_found_handling'] == (
         'single-page-application'
     )
-    assert wrangler_config['assets']['run_worker_first'] == ['/api/*']
+    assert wrangler_config['assets']['run_worker_first'] is True
+
+
+@pytest.mark.anyio
+async def test_admin_hostname_requires_browser_session_for_operator_api(monkeypatch):
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-admin-password')
+    monkeypatch.setenv('SESSION_SECRET', 'session-secret-for-tests')
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url='https://admin.adchecked.com',
+    ) as client:
+        unauthorized=await client.get('/api/health')
+        signed_in=await client.post(
+            '/api/admin/session',
+            headers={'origin':'https://admin.adchecked.com'},
+            json={'password':'test-admin-password'},
+        )
+        authorized=await client.get('/api/health')
+        partner_info=await client.get('/api/v1')
+
+    assert unauthorized.status_code == 401
+    assert signed_in.status_code == 200
+    assert authorized.status_code == 200
+    assert partner_info.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_admin_auth_uses_scope_path_and_rejects_malformed_host_bypass(monkeypatch):
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-admin-password')
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url='https://admin.adchecked.com',
+    ) as client:
+        response=await client.get(
+            '/api/health',
+            headers={'host':'admin.adchecked.com:80/benign?x='},
+        )
+
+    assert response.status_code in {400,401}
+
+
+@pytest.mark.anyio
+async def test_admin_cors_preflight_runs_before_authentication(monkeypatch):
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-admin-password')
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url='https://admin.adchecked.com',
+    ) as client:
+        response=await client.options(
+            '/api/health',
+            headers={
+                'origin':'https://admin.adchecked.com',
+                'access-control-request-method':'GET',
+                'access-control-request-headers':'x-admin-password',
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers['access-control-allow-origin'] == 'https://admin.adchecked.com'
 
 
 def test_batch_item_update_rehydrates_missing_local_batch_from_convex(
@@ -5235,3 +5416,140 @@ def test_convex_progress_write_does_not_retry_validation_errors(monkeypatch):
         )
 
     assert len(calls) == 1
+
+
+@pytest.mark.anyio
+async def test_client_browser_session_uses_httponly_cookie_and_rejects_raw_headers(monkeypatch):
+    monkeypatch.setenv('KISSTERRA_CLIENT_PASSWORD','client-secret')
+    monkeypatch.setenv('SESSION_SECRET','session-secret-for-tests')
+    transport=httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport,base_url='https://app.adchecked.com') as client:
+        raw=await client.get('/api/client/check',headers={
+            'x-client-username':'kissterra',
+            'x-client-password':'client-secret',
+        })
+        signed_in=await client.post(
+            '/api/client/session',
+            headers={'origin':'https://app.adchecked.com'},
+            json={
+                'username':'kissterra',
+                'password':'client-secret',
+            },
+        )
+        checked=await client.get('/api/client/check')
+        portal=await client.get('/api/client/kissterra/check')
+        signed_out=await client.delete(
+            '/api/client/session',
+            headers={'origin':'https://app.adchecked.com'},
+        )
+        after_logout=await client.get('/api/client/check')
+
+    assert raw.status_code == 401
+    assert signed_in.status_code == 200
+    assert signed_in.json()['portals'][0]['client_id'] == 'kissterra'
+    cookie=signed_in.headers['set-cookie'].casefold()
+    assert 'httponly' in cookie
+    assert 'samesite=strict' in cookie
+    assert 'secure' in cookie
+    assert checked.status_code == 200
+    assert portal.status_code == 200
+    assert signed_out.status_code == 200
+    assert after_logout.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_admin_browser_session_invalidates_when_password_rotates(monkeypatch):
+    monkeypatch.setenv('ADMIN_PASSWORD','owner-secret')
+    monkeypatch.setenv('SESSION_SECRET','session-secret-for-tests')
+    transport=httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport,base_url='https://admin.adchecked.com') as client:
+        rejected_origin=await client.post(
+            '/api/admin/session',
+            headers={'origin':'https://evil.adchecked.com'},
+            json={'password':'owner-secret'},
+        )
+        signed_in=await client.post(
+            '/api/admin/session',
+            headers={'origin':'https://admin.adchecked.com'},
+            json={'password':'owner-secret'},
+        )
+        checked=await client.get('/api/admin/check')
+        monkeypatch.setenv('ADMIN_PASSWORD','rotated-owner-secret')
+        after_rotation=await client.get('/api/admin/check')
+
+    assert rejected_origin.status_code == 403
+    assert signed_in.status_code == 200
+    cookie=signed_in.headers['set-cookie'].casefold()
+    assert 'httponly' in cookie
+    assert 'samesite=strict' in cookie
+    assert 'secure' in cookie
+    assert checked.status_code == 200
+    assert after_rotation.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_scanner_session_is_scoped_to_ingest_routes(monkeypatch):
+    monkeypatch.setenv('ADMIN_PASSWORD','owner-secret')
+    monkeypatch.setenv('SESSION_SECRET','session-secret-for-tests')
+    transport=httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport,base_url='https://admin.adchecked.com') as client:
+        session=await client.post('/api/scanner/session',json={'password':'owner-secret'})
+        token=session.json()['token']
+        scanner_request=await client.post(
+            '/api/live-scans/observe',
+            headers={'authorization':f'Bearer {token}'},
+            json={},
+        )
+        ordinary_admin_request=await client.get(
+            '/api/health',
+            headers={'x-admin-password':'owner-secret'},
+        )
+        monkeypatch.setenv('ADMIN_PASSWORD','rotated-owner-secret')
+        expired_credential=await client.post(
+            '/api/live-scans/observe',
+            headers={'authorization':f'Bearer {token}'},
+            json={},
+        )
+
+    assert session.status_code == 200
+    assert session.json()['token_type'] == 'Bearer'
+    assert scanner_request.status_code == 422
+    assert ordinary_admin_request.status_code == 401
+    assert expired_credential.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_legacy_scanner_proxy_requires_a_configured_legacy_credential(monkeypatch):
+    monkeypatch.setenv('ADMIN_PASSWORD','owner-secret')
+    monkeypatch.setenv('APP_PASSWORD','legacy-app-secret')
+    monkeypatch.setenv('APP_LEGACY_HOSTS','vibe-check.thatcanadian.dev')
+    transport=httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url='https://vibe-check.thatcanadian.dev',
+    ) as client:
+        missing=await client.post('/api/live-scans/observe',json={})
+        wrong=await client.post(
+            '/api/live-scans/observe',
+            headers={'x-app-password':'wrong'},
+            json={},
+        )
+        accepted=await client.post(
+            '/api/live-scans/observe',
+            headers={'x-app-password':'legacy-app-secret'},
+            json={},
+        )
+        owner_header=await client.post(
+            '/api/live-scans/observe',
+            headers={'x-admin-password':'owner-secret'},
+            json={},
+        )
+
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert accepted.status_code == 422
+    assert owner_header.status_code == 422

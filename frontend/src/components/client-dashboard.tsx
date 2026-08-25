@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import {
   AlertCircle,
   Check,
@@ -46,13 +46,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import {
+  clearClientSession,
   decideClientReview,
   fetchClientReviewPdf,
-  getClientCredentials,
+  getClientSession,
   getClientReview,
   listClientReviews,
   preloadClientReviewImage,
-  setClientCredentials,
   verifyClientCredentials,
   type ClientDecisionValue,
   type ClientFeedbackReason,
@@ -86,7 +86,9 @@ type DecisionInput = {
 };
 
 type ClientAuthValue = {
-  logout: () => void;
+  error: string;
+  isSigningOut: boolean;
+  logout: () => Promise<void>;
   session: ClientSession;
 };
 
@@ -113,37 +115,42 @@ export const KissterraReviewDetailPage = ClientReviewDetailPage;
 
 function ClientPortalGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const storedCredentials = getClientCredentials();
-  const [username, setUsername] = useState(storedCredentials?.username ?? '');
-  const [password, setPassword] = useState(storedCredentials?.password ?? '');
-  const [session, setSession] = useState<ClientSession | null>(storedCredentials?.session ?? null);
-  const [isChecking, setIsChecking] = useState(false);
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [session, setSession] = useState<ClientSession | null>(null);
+  const [isChecking, setIsChecking] = useState(true);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const stored = getClientCredentials();
-    if (!stored) {
-      setIsChecking(false);
-      return;
-    }
     let active = true;
-    void verifyClientCredentials(stored.username, stored.password)
+    void getClientSession()
       .then((nextSession) => {
         if (!active) return;
-        setClientCredentials({ ...stored, session: nextSession });
         setSession(nextSession);
+        if (window.location.pathname === '/login' || window.location.pathname === '/') {
+          void navigate({ to: '/client', replace: true });
+        }
       })
-      .catch((reason) => {
-        if (!active) return;
-        setClientCredentials(null);
-        setSession(null);
-        setPassword('');
-        setError(errorMessage(reason));
-      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setIsChecking(false);
+      });
     return () => {
       active = false;
     };
-  }, []);
+  }, [navigate]);
+
+  useEffect(() => {
+    if (isChecking) return;
+    document.title = !session
+      ? 'Client sign in · AdChecked'
+      : pathname.includes('/reviews/')
+        ? 'Creative review · AdChecked'
+        : 'Client dashboard · AdChecked';
+  }, [isChecking,pathname,session]);
 
   async function unlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -156,7 +163,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
     setError('');
     try {
       const nextSession = await verifyClientCredentials(normalizedUsername, password);
-      setClientCredentials({ password, session: nextSession, username: normalizedUsername });
+      setPassword('');
       const firstPortal = nextSession.portals[0];
       if (firstPortal) {
         void queryClient.prefetchQuery({
@@ -166,6 +173,9 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
         });
       }
       setSession(nextSession);
+      if (window.location.pathname === '/login' || window.location.pathname === '/') {
+        await navigate({ to: '/client', replace: true });
+      }
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -173,13 +183,23 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
     }
   }
 
-  function logout() {
-    setClientCredentials(null);
+  async function logout() {
+    setIsSigningOut(true);
+    setError('');
+    try {
+      await clearClientSession();
+    } catch (reason) {
+      setError(`Could not sign out. ${errorMessage(reason)}`);
+      setIsSigningOut(false);
+      return;
+    }
     window.sessionStorage.removeItem(SELECTED_CLIENT_KEY);
     setPassword('');
     setSession(null);
     setError('');
     queryClient.removeQueries({ queryKey: ['client'] });
+    await navigate({ to: '/login', replace: true });
+    setIsSigningOut(false);
   }
 
   if (!session) {
@@ -190,7 +210,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
             <span className="mb-2 grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground">
               <ShieldCheck className="size-5" />
             </span>
-            <CardTitle as="h1" className="text-2xl">Compliance Checker</CardTitle>
+            <CardTitle as="h1" className="text-2xl">Sign in to AdChecked</CardTitle>
             <CardDescription>
               Sign in to open your client review dashboard. Your account controls which creatives you can access.
             </CardDescription>
@@ -238,7 +258,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
   }
 
   return (
-    <ClientAuthContext.Provider value={{ logout, session }}>
+    <ClientAuthContext.Provider value={{ error, isSigningOut, logout, session }}>
       {children}
     </ClientAuthContext.Provider>
   );
@@ -513,7 +533,7 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
   counts?: Map<string, number | undefined>;
   onSelectClient?: (clientId: string) => void;
 }) {
-  const { logout, session } = useClientAuth();
+  const { error, isSigningOut, logout, session } = useClientAuth();
   const navigate = useNavigate();
   const categories = useMemo(() => {
     const values = new Map<string, ClientPortalSummary[]>();
@@ -538,7 +558,7 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
           <Link to="/client" className="flex items-center gap-3">
             <span className="grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground"><ShieldCheck className="size-4" /></span>
             <span className="min-w-0">
-              <span className="block truncate font-heading font-semibold">Compliance Checker</span>
+              <span className="block truncate font-heading font-semibold">AdChecked</span>
               <span className="block text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Client review dashboard</span>
             </span>
           </Link>
@@ -570,7 +590,18 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
               <p className="text-xs font-medium">Signed in as {session.username}</p>
               <p className="mt-1 text-xs text-muted-foreground">{session.role === 'admin' ? 'Admin view · all clients' : 'Client view'}</p>
             </div>
-            <Button type="button" className="mt-2 w-full" variant="ghost" size="sm" onClick={logout}><LogOut />Sign out</Button>
+            <Button
+              type="button"
+              className="mt-2 w-full"
+              variant="ghost"
+              size="sm"
+              disabled={isSigningOut}
+              onClick={() => void logout()}
+            >
+              {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
+              {isSigningOut ? 'Signing out' : 'Sign out'}
+            </Button>
+            {error ? <p role="alert" className="mt-2 max-w-60 text-xs text-destructive">{error}</p> : null}
           </div>
         </div>
       </aside>
@@ -708,7 +739,7 @@ function ClientReviewDetail() {
     );
   }
 
-  const { evidence_frames: evidenceFrames, google_drive_url: googleDriveUrl, report, report_pdf_url: reportPdfUrl, review } = query.data;
+  const { evidence_frames: evidenceFrames, google_drive_url: googleDriveUrl, report, review } = query.data;
   return (
     <ClientPortalFrame activeClientId={clientId}>
       <div className="grid gap-5">
@@ -729,7 +760,7 @@ function ClientReviewDetail() {
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{report.summary}</p>
               <div className="flex flex-wrap gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Client override</Badge> : null}</div>
               <div className="flex flex-wrap items-center gap-2">
-                <ClientPdfDownloadButton clientId={clientId} displayName={portal.display_name} jobId={jobId} reportUrl={reportPdfUrl} />
+                <ClientPdfDownloadButton clientId={clientId} displayName={portal.display_name} jobId={jobId} />
                 {googleDriveUrl ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={googleDriveUrl} target="_blank" rel="noreferrer"><ExternalLink />Open in Google Drive</a> : <span className="text-xs text-muted-foreground">Google Drive link unavailable for this upload.</span>}
               </div>
             </div>
@@ -744,7 +775,7 @@ function ClientReviewDetail() {
                 {report.findings.map((finding, index) => <FindingCard key={`${finding.source}-${finding.timestamp_start ?? 'none'}-${index}`} finding={finding} frame={nearestEvidenceFrame(evidenceFrames, finding.timestamp_start)} index={index + 1} jobId={jobId} clientId={clientId} />)}
               </div>
             ) : (
-              <div className="grid min-h-40 place-items-center rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-6 text-center"><div className="grid gap-2"><CheckCircle2 className="mx-auto size-7 text-emerald-600" /><p className="font-medium">No policy findings</p><p className="text-sm text-muted-foreground">Vibe Check found no {portal.display_name} policy issue in this creative.</p></div></div>
+              <div className="grid min-h-40 place-items-center rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-6 text-center"><div className="grid gap-2"><CheckCircle2 className="mx-auto size-7 text-emerald-600" /><p className="font-medium">No policy findings</p><p className="text-sm text-muted-foreground">AdChecked found no {portal.display_name} policy issue in this creative.</p></div></div>
             )}
           </CardContent>
         </Card>
@@ -812,11 +843,11 @@ function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
         </select>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'What should Vibe Check learn?' : 'Optional note'}</Label>
+        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'What should AdChecked learn?' : 'Optional note'}</Label>
         <Textarea
           id={`feedback-note-${review.job_id}`}
           maxLength={1000}
-          placeholder={noteRequired ? 'Describe the rule or distinction to apply next time.' : 'Add context for the Vibe Check team.'}
+          placeholder={noteRequired ? 'Describe the rule or distinction to apply next time.' : 'Add context for the AdChecked team.'}
           value={note}
           onChange={(event) => setNote(event.currentTarget.value)}
         />
@@ -867,7 +898,7 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
   );
 }
 
-function ClientPdfDownloadButton({ clientId, displayName, jobId, reportUrl }: { clientId: string; displayName: string; jobId: string; reportUrl: string }) {
+function ClientPdfDownloadButton({ clientId, displayName, jobId }: { clientId: string; displayName: string; jobId: string }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState('');
   async function download() {
@@ -875,7 +906,7 @@ function ClientPdfDownloadButton({ clientId, displayName, jobId, reportUrl }: { 
     setIsDownloading(true);
     setError('');
     try {
-      const { blob, filename } = await fetchClientReviewPdf(clientId, jobId, reportUrl);
+      const { blob, filename } = await fetchClientReviewPdf(clientId, jobId);
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
@@ -986,14 +1017,14 @@ function isCalibrationFeedback(review: ClientReviewItem) {
 function feedbackReasonOptions(decision: Exclude<ClientDecisionValue, 'pending'>): { label: string; value: ClientFeedbackReason }[] {
   if (decision === 'approved') {
     return [
-      { label: 'Vibe Check was too strict', value: 'false_positive' },
+      { label: 'AdChecked was too strict', value: 'false_positive' },
       { label: 'Partner preference to reuse', value: 'partner_preference' },
       { label: 'One-off exception', value: 'one_off_exception' },
       { label: 'Business decision, not policy', value: 'business_decision' },
     ];
   }
   return [
-    { label: 'Vibe Check missed a policy issue', value: 'missed_policy_issue' },
+    { label: 'AdChecked missed a policy issue', value: 'missed_policy_issue' },
     { label: 'Partner preference to reuse', value: 'partner_preference' },
     { label: 'Business decision, not policy', value: 'business_decision' },
   ];

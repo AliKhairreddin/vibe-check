@@ -108,6 +108,32 @@ def test_optional_convex_arguments_are_omitted_instead_of_sent_as_null(monkeypat
     assert 'fileSize' not in calls[2][2]
 
 
+def test_partner_list_supplies_a_caller_computed_utc_month_key(monkeypatch):
+    calls = []
+    utc_time = object()
+
+    class FakeTime:
+        @staticmethod
+        def gmtime():
+            return utc_time
+
+        @staticmethod
+        def strftime(pattern, value):
+            assert pattern == '%Y-%m'
+            assert value is utc_time
+            return '2026-08'
+
+    monkeypatch.setattr(partner_api, 'time', FakeTime)
+    monkeypatch.setattr(
+        partner_api,
+        '_convex_call',
+        lambda kind, path, args: calls.append((kind, path, args)) or [],
+    )
+
+    assert partner_api.list_api_partners() == []
+    assert calls == [('query', 'apiPartners:list', {'monthKey': '2026-08'})]
+
+
 @pytest.mark.parametrize('url', [
     'http://hooks.example.com/vibe',
     'https://localhost/vibe',
@@ -193,6 +219,7 @@ async def test_completion_webhook_signs_timestamp_and_exact_body(monkeypatch):
         assert kind == 'mutation'
         if path == 'apiPartners:claimWebhookDeliveries':
             return [{
+                'claim_id': 'claim_example',
                 'delivery_id': 'evt_example',
                 'event_type': 'review.completed',
                 'payload': payload,
@@ -230,6 +257,7 @@ async def test_completion_webhook_signs_timestamp_and_exact_body(monkeypatch):
     assert sent['url'] == 'https://hooks.example.com/vibe'
     assert sent['content'] == body
     assert sent['headers']['x-vibe-signature'] == f'v1={signature}'
+    assert completions[0]['claimId'] == 'claim_example'
     assert completions[0]['success'] is True
     assert completions[0]['responseStatus'] == 204
 

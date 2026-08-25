@@ -1,14 +1,16 @@
-# Vibe Check Live Scanner
+# AdChecked Live Scanner
 
-This unpacked Chrome extension observes Meta Ads Manager automatically. It submits live ad metadata to Vibe Check, sends every unique primary-text variant as a text-only review, and uploads media only when Vibe Check has not already reviewed that creative name.
+This unpacked Chrome extension observes Meta Ads Manager automatically. It submits live ad metadata to AdChecked, sends every unique primary-text variant as a text-only review, and uploads media only when AdChecked has not already reviewed that creative name.
 
 ## Install internally
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Choose **Load unpacked** and select this `extension` directory.
-4. Open the extension’s **Settings** and confirm the Vibe Check URL.
-5. Enter the Vibe Check app password if the deployment uses one.
+4. Open the extension’s **Settings** and confirm the AdChecked URL is `https://admin.adchecked.com`.
+5. Enter the scanner access password (currently the owner password). The server accepts it only on the two live-scanner ingest routes.
+
+When upgrading an existing unpacked Vibe Check install, click **Reload** on `chrome://extensions`, then reopen Settings. Version 0.2 migrates the old hostname automatically; re-enter the owner password if the previous install used a blank or separate app password.
 
 No scan button is required. The content script activates when Ads Manager opens, when the selected ad account changes, when the tab regains focus, and periodically while the page remains open.
 
@@ -17,8 +19,9 @@ No scan button is required. The content script activates when Ads Manager opens,
 - The Ads Manager ad name is treated as the creative name and the primary creative deduplication key.
 - Common media extensions, punctuation, whitespace, and letter case are normalized before matching.
 - Different primary texts never cause the media creative to be processed again. Each exact normalized primary text receives its own text-only review.
-- Facebook cookies, passwords, and session tokens are never transmitted to Vibe Check.
+- Facebook cookies, passwords, and session tokens are never transmitted to AdChecked.
 - The extension only uploads media URLs hosted by Facebook, Instagram, or Facebook CDN domains.
+- Media uploads are capped at 95 MB and run at most three at a time so the browser and Cloudflare request limits are not overwhelmed.
 
 ## Operational limitation
 

@@ -1,16 +1,16 @@
-# Vibe Check
+# AdChecked
 
 [![Deploy](https://github.com/AliKhairreddin/vibe-check/actions/workflows/deploy.yml/badge.svg)](https://github.com/AliKhairreddin/vibe-check/actions/workflows/deploy.yml)
 
-Vibe Check is a cloud-native ad-compliance review system for video, image, and copy-only creatives. It converts raw media into compact, traceable evidence—metadata, sampled frames, OCR, transcript segments, and visual observations—then produces a structured decision-support report against saved publisher guidance and optional campaign-specific policies.
+AdChecked is a cloud-native ad-compliance review system for video, image, and copy-only creatives. It converts raw media into compact, traceable evidence—metadata, sampled frames, OCR, transcript segments, and visual observations—then produces a structured decision-support report against saved publisher guidance and optional campaign-specific policies.
 
-**Live application:** [vibe-check.thatcanadian.dev](https://vibe-check.thatcanadian.dev)
+**Production:** [adchecked.com](https://adchecked.com) · [Client portal](https://app.adchecked.com/login) · [Admin console](https://admin.adchecked.com/login) · [Partner API](https://api.adchecked.com/api/v1)
 
 > **Status:** Deployed internal MVP. Reports support human review; they are not official publisher approval and should not be treated as legal advice.
 
 ## Why This Project Exists
 
-Creative review is slow when a reviewer must separately inspect video frames, on-screen text, spoken claims, captions, and policy documents. Vibe Check turns that fragmented process into a repeatable pipeline while preserving the evidence behind every result.
+Creative review is slow when a reviewer must separately inspect video frames, on-screen text, spoken claims, captions, and policy documents. AdChecked turns that fragmented process into a repeatable pipeline while preserving the evidence behind every result.
 
 The system is intentionally hybrid:
 
@@ -29,7 +29,7 @@ The system is intentionally hybrid:
 - Applies offer-scoped current internal rules above source guidelines on exact conflicts, while recording every permitted exception that changes a run decision.
 - Uses a three-level action model: green for ready-to-run results, yellow for routine fixes or review, and red only when a deterministic server guard verifies an approved severe consequence in the controlling effective policy.
 - Handles files up to 400 MB through retryable 8 MB chunks.
-- Admits uploads and processes review jobs through bounded parallel pools (four by default, configurable up to eight).
+- Admits up to ten browser uploads at once and processes production review jobs with five workers (configurable from one to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.
 - Supports folder-first Google Drive browsing, whole-folder selection, drill-down file selection, and exact-ID deduplication.
 - Sends one multi-offer Telegram summary after every item in a batch reaches a terminal state.
@@ -89,13 +89,13 @@ Batches are registered before item uploads begin. Upload failures become termina
 
 ### Regression Coverage
 
-The repository currently includes 191 backend tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, tenant-scoped fingerprint scans, Telegram output, folder selection, deletion/statistics, admin authorization, Partner API authentication, ownership isolation, webhook signing, browser API routing, media-URL safety, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
+The repository includes more than 200 backend and routing tests covering pipeline behavior, consequence-based red enforcement, multi-offer eligibility and N/A snapshots, multi-offer dashboard statistics, effective-policy precedence, internal rules and exceptions, partner-specific PDFs, scheduled automation claims and retries, live-scan ingestion, fingerprint scans, Telegram output, folder selection, deletion/statistics, session authorization, Partner API ownership isolation, webhook signing, host routing, media-URL safety, size limits, chunked uploads, parallel processing, Drive boundaries, durable state, source links, and failure handling.
 
 ## Technology
 
 | Layer | Technologies |
 | --- | --- |
-| Frontend | React, TypeScript, Vite, TanStack Router/Query/Table, Tailwind CSS |
+| Frontend | React, TypeScript, Vite, TanStack Router/Query, Tailwind CSS |
 | API | FastAPI, Pydantic, Python |
 | Media | ffmpeg, ffprobe, OpenCV, Pillow, Tesseract |
 | AI | OpenRouter chat, vision, and speech-to-text models |
@@ -157,24 +157,13 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
 
 Each review writes its latest processing-attempt timing to one `reviewProcessingMetrics` document after it finishes. The document separates queue wait from per-stage time and supports overlapping stages, so p50/p90 measurements can distinguish Cloudflare CPU work, OpenRouter calls, Convex persistence, and report-artifact generation without adding a Convex mutation at every progress update. Keep OpenRouter's account-wide ZDR setting enabled as well: its transcription endpoint does not currently accept the same per-request provider-routing controls as chat and vision.
 
-Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository.
-The public offer catalog contains names and version counts only. Full official guidelines and current internal rules require an admin password, which the Settings page keeps in browser session storage after it verifies the password with the backend. Configure production with `pnpm exec wrangler secret put ADMIN_PASSWORD` before using Settings or removing history.
+Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository. Browser sign-in exchanges a password for a signed, host-only, HttpOnly, `SameSite=Strict` session cookie; passwords are not retained in browser storage or replayed on API calls. Credential fingerprints invalidate existing sessions when a password is rotated. Configure `ADMIN_PASSWORD`, `CLIENT_ADMIN_PASSWORD`, the individual client passwords, and `SESSION_SECRET` as Cloudflare Worker secrets.
 
-The client portal is available at `/client`. It uses username/password access,
-stores the credentials in browser session storage after server verification,
-and persists client approve/disapprove decisions separately from the automated
-verdict. The client admin account can switch between Kissterra, ACP, Lead
-Economy, and Smart Financial. Each client account is enforced server-side to its
-own offer. When a client overrides Vibe Check, the portal captures a structured
-reason and note. Reusable policy disagreements become same-offer historical
-precedents for future reviews; one-off exceptions and non-policy business choices
-remain auditable but are excluded from calibration. Existing automated verdicts
-are never rewritten. The former `/kissterra` routes redirect into this shared
-portal.
+Production uses separate SaaS surfaces: `adchecked.com` for the public product site, `app.adchecked.com` for shared client sign-in and offer-scoped dashboards, `admin.adchecked.com` for the private owner console, and `api.adchecked.com` for server-to-server integrations. The client admin account can switch between Kissterra, ACP, Lead Economy, and Smart Financial, while each client account is enforced server-side to its own offer. Client approve/disapprove decisions remain separate from the automated verdict. When a client overrides AdChecked, the portal captures a structured reason and note. Reusable policy disagreements become same-offer historical precedents for future reviews; one-off exceptions and non-policy business choices remain auditable but are excluded from calibration. Existing automated verdicts are never rewritten. The former `vibe-check.thatcanadian.dev` and `/kissterra` entry points redirect into the appropriate new surface.
 
 ## API Overview
 
-The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin1.workers.dev/api/v1`. The dedicated Worker hostname avoids browser-only edge challenges on the application domain. Human-facing documentation now lives in one branded hub at `https://vibe-check.thatcanadian.dev/developers/api`, with URL-backed **Guide** and **Interactive reference** views. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) for the full integration flow.
+The server-to-server Partner API is rooted at `https://api.adchecked.com/api/v1`. The dedicated API hostname keeps machine traffic separate from the browser application. Human-facing documentation lives in the private admin hub at `https://admin.adchecked.com/developers/api`, with URL-backed **Guide** and **Interactive reference** views. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) for the full integration flow.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -199,7 +188,9 @@ The server-to-server Partner API is rooted at `https://vibe-check.ali-kheireddin
 | `GET /api/reviews/{job_id}/report` | Read structured report JSON |
 | `GET /api/reviews/{job_id}/source` | Resolve safe creative/copy source links |
 | `GET /api/reviews/{job_id}/evidence` | List durable timestamped evidence frames |
-| `GET /api/client/check` | Verify client credentials and return the allowed client scopes |
+| `POST /api/client/session` | Exchange client credentials for a protected browser session |
+| `GET /api/client/session` | Return the signed-in account and allowed client scopes |
+| `DELETE /api/client/session` | Sign out and clear the client session |
 | `GET /api/client/{client_id}/reviews` | Read the authenticated account's offer-scoped review queue |
 | `PUT /api/client/{client_id}/reviews/{job_id}/decision` | Save or reset a client approval decision |
 | `POST /api/live-scans/observe` | Ingest live Meta ad observations and queue unseen primary-text reviews |
@@ -220,7 +211,7 @@ The bundled source policies in `backend/app/review_pipeline/guidelines/` cover A
 
 Cloudflare Cron checks Convex once per minute and only wakes the review container when an automation is due. Runs are claimed idempotently by schedule with bounded recovery for failed or abandoned scans, and Drive files are claimed by automation, file ID, and modified time so an unchanged successful creative is not reviewed again. Failed review jobs release their file-version claim for a future retry. Filename globs support `{date}`, `{YYYY}`, `{MM}`, and `{DD}` placeholders. No automation is seeded or enabled by deployment.
 
-The Chrome extension is installed from `extension/` as an unpacked internal extension. It observes Ads Manager network responses and visible live rows without requiring a scan button. The ad name is the creative identity: file extensions, punctuation, letter case, and whitespace are normalized before matching. Different primary texts do not cause another media review; each exact normalized primary text receives its own deterministic copy-only job. The extension never sends Facebook cookies or session tokens. When a Meta CDN media URL is available, the extension transfers that media to the existing temporary review pipeline and Vibe Check removes it after processing.
+The Chrome extension is installed from `extension/` as an unpacked internal extension. It observes Ads Manager network responses and visible live rows without requiring a scan button. The ad name is the creative identity: file extensions, punctuation, letter case, and whitespace are normalized before matching. Different primary texts do not cause another media review; each exact normalized primary text receives its own deterministic copy-only job. The extension never sends Facebook cookies or session tokens. When a Meta CDN media URL is available, the extension transfers that media to the existing temporary review pipeline and AdChecked removes it after processing.
 
 ## Verification
 
@@ -241,6 +232,7 @@ Pushes to `main` trigger `.github/workflows/deploy.yml`, which verifies the repo
 
 ## Known Limitations
 
+- Client authorization is currently offer-scoped rather than organization-scoped. Add an explicit tenant/organization identity before onboarding unrelated customers that share the same offer.
 - Frame sampling can miss very short visual disclosures.
 - OCR may miss small, stylized, moving, or obstructed text.
 - Speech timestamps are approximate chunk ranges rather than word-level alignment.

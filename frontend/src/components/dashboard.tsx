@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Card,
@@ -620,17 +619,6 @@ function DashboardStatsSkeleton() {
   );
 }
 
-function normalizeResultStatus(status?: string | null): OverallStatus | null {
-  if (status === 'green' || status === 'yellow' || status === 'red') {
-    return status;
-  }
-  if (status === 'amber' || status === 'orange') return 'yellow';
-  if (status === 'pass') return 'green';
-  if (status === 'needs_review') return 'yellow';
-  if (status === 'likely_violation') return 'red';
-  return null;
-}
-
 function formatPercent(value: number, total: number) {
   return total ? `${Math.round((value / total) * 100)}%` : '0%';
 }
@@ -646,10 +634,6 @@ function offerFilterLabel(offers: OfferCatalogItem[], selectedOfferIds: string[]
 function distributionLabel(stats: ReviewStats, total: number) {
   if (!total) return 'No rated review outcomes';
   return RESULT_ORDER.map((status) => `${RESULT_META[status].label} ${stats.outcomes[status]}`).join(', ');
-}
-
-function formatStatus(status: string) {
-  return status.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatDateTime(value?: number | null) {

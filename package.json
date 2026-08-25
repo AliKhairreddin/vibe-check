@@ -11,13 +11,14 @@
     "convex:dev": "convex dev --once",
     "deploy": "pnpm run convex:deploy && pnpm run cloudflare:deploy",
     "test": "scripts/test-backend.sh",
+    "test:routing": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck:worker": "tsc -p tsconfig.worker.json --noEmit",
-    "verify": "pnpm run wrangler:types && pnpm run typecheck:worker && pnpm run test && pnpm run build",
+    "verify": "pnpm run wrangler:types && pnpm run typecheck:worker && pnpm run test:routing && pnpm run test && pnpm run build",
     "wrangler:types": "wrangler types worker-configuration.d.ts"
   },
   "devDependencies": {
     "@cloudflare/containers": "latest",
-    "@cloudflare/workers-types": "^5.20260821.1",
+    "@cloudflare/workers-types": "^5.20260825.1",
     "@types/node": "^26.1.0",
     "convex": "^1.42.1",
     "typescript": "5.9.3",

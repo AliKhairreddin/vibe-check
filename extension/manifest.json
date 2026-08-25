@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Vibe Check Live Scanner",
-  "version": "0.1.2",
-  "description": "Automatically submits live Meta Ads Manager creatives and primary text to Vibe Check.",
+  "name": "AdChecked Live Scanner",
+  "version": "0.2.0",
+  "description": "Automatically submits live Meta Ads Manager creatives and primary text to AdChecked.",
   "permissions": [
     "storage"
   ],
@@ -10,6 +10,7 @@
     "https://*.facebook.com/*",
     "https://*.fbcdn.net/*",
     "https://*.cdninstagram.com/*",
+    "https://admin.adchecked.com/*",
     "https://vibe-check.thatcanadian.dev/*",
     "http://localhost:8000/*"
   ],
@@ -43,7 +44,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Vibe Check Live Scanner"
+    "default_title": "AdChecked Live Scanner"
   },
   "options_page": "options.html"
 }

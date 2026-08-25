@@ -370,7 +370,9 @@ async def download_api_media(
 
 
 def list_api_partners() -> list[dict[str, Any]]:
-    value = _convex_call('query', 'apiPartners:list', {})
+    value = _convex_call('query', 'apiPartners:list', {
+        'monthKey':time.strftime('%Y-%m', time.gmtime()),
+    })
     return value if isinstance(value, list) else []
 
 
@@ -710,6 +712,7 @@ async def deliver_pending_api_webhooks(limit: int = 5) -> int:
     completed = 0
     async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
         for delivery in deliveries:
+            claim_id = str(delivery.get('claim_id') or '')
             delivery_id = str(delivery.get('delivery_id') or '')
             webhook_url = str(delivery.get('webhook_url') or '')
             signing_secret = str(delivery.get('signing_secret') or '')
@@ -749,6 +752,8 @@ async def deliver_pending_api_webhooks(limit: int = 5) -> int:
                 'now': storage.now_ms(),
                 'success': success,
             }
+            if claim_id:
+                completion_args['claimId'] = claim_id
             if error:
                 completion_args['error'] = error
             if response_status is not None:

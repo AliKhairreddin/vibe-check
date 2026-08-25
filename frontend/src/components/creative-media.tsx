@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FileImage } from 'lucide-react';
 
-import { fetchClientReviewImage } from '@/lib/api';
+import { fetchClientReviewImage, fetchWithAdminAccess } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export function CreativeThumbnail({
@@ -67,13 +67,23 @@ function CreativeImage({
 
   useEffect(() => {
     setFailed(!jobId);
-    if (!clientId || !jobId) {
+    if (!jobId) {
       setProtectedUrl('');
       return;
     }
     let active = true;
     let objectUrl = '';
-    void fetchClientReviewImage(clientId, jobId, filename)
+    const imageRequest = clientId
+      ? fetchClientReviewImage(clientId, jobId, filename)
+      : fetchWithAdminAccess(
+        filename
+          ? `/api/reviews/${encodeURIComponent(jobId)}/frames/${encodeURIComponent(filename)}`
+          : `/api/reviews/${encodeURIComponent(jobId)}/thumbnail`,
+      ).then((response) => {
+        if (!response.ok) throw new Error(`Image request failed with status ${response.status}.`);
+        return response.blob();
+      });
+    void imageRequest
       .then((blob) => {
         if (!active) return;
         objectUrl = URL.createObjectURL(blob);
@@ -88,13 +98,7 @@ function CreativeImage({
     };
   }, [clientId, filename, jobId]);
 
-  const source = clientId
-    ? protectedUrl
-    : jobId
-      ? filename
-        ? `/api/reviews/${encodeURIComponent(jobId)}/frames/${encodeURIComponent(filename)}`
-        : `/api/reviews/${encodeURIComponent(jobId)}/thumbnail`
-      : '';
+  const source = protectedUrl;
 
   return (
     <span

@@ -1,8 +1,9 @@
 const DEFAULT_CONFIG = {
   enabled: true,
-  serverUrl: 'https://vibe-check.thatcanadian.dev',
+  serverUrl: 'https://admin.adchecked.com',
   appPassword: '',
 };
+const LEGACY_SERVER_ORIGIN = 'https://vibe-check.thatcanadian.dev';
 const form = document.querySelector('#settings-form');
 const enabled = document.querySelector('#enabled');
 const serverUrl = document.querySelector('#server-url');
@@ -11,7 +12,9 @@ const saved = document.querySelector('#saved');
 
 chrome.storage.local.get(DEFAULT_CONFIG).then((value) => {
   enabled.checked = value.enabled !== false;
-  serverUrl.value = value.serverUrl;
+  serverUrl.value = value.serverUrl === LEGACY_SERVER_ORIGIN
+    ? DEFAULT_CONFIG.serverUrl
+    : value.serverUrl;
   appPassword.value = value.appPassword;
 });
 

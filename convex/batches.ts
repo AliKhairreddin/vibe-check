@@ -56,6 +56,7 @@ const publicBatchValidator = v.object({
     result: v.union(v.string(), v.null()),
     status: v.string(),
   })),
+  notification_claim_id: v.union(v.string(), v.null()),
   notification_status: v.string(),
   updated_at: v.number(),
 });
@@ -75,6 +76,7 @@ function publicBatch(batch: {
   expectedCount: number;
   sourceLabel?: string;
   items: BatchItem[];
+  notificationClaimId?: string;
   notificationStatus: string;
   updatedAt: number;
 }) {
@@ -102,6 +104,7 @@ function publicBatch(batch: {
       result: item.result ?? null,
       status: item.status,
     })),
+    notification_claim_id: batch.notificationClaimId ?? null,
     notification_status: batch.notificationStatus,
     updated_at: batch.updatedAt,
   };
@@ -290,48 +293,97 @@ export const finishItem = mutation({
     const notificationReady = items.every((item) =>
       TERMINAL_BATCH_STATUSES.has(item.status)
     );
-    const shouldNotify = batch.notificationStatus === "pending" && notificationReady;
-    const notificationStatus = shouldNotify ? "claimed" : batch.notificationStatus;
+    const currentNotificationAttempts = batch.notificationAttempts ?? 0;
+    const notificationExhausted = (
+      batch.notificationStatus === "pending"
+      && notificationReady
+      && currentNotificationAttempts >= MAX_NOTIFICATION_ATTEMPTS
+    );
+    const shouldNotify = (
+      batch.notificationStatus === "pending"
+      && notificationReady
+      && !notificationExhausted
+    );
+    const notificationStatus = shouldNotify
+      ? "claimed"
+      : notificationExhausted
+        ? "failed_exhausted"
+        : batch.notificationStatus;
     const updatedAt = Date.now();
+    const notificationClaimId = shouldNotify
+      ? crypto.randomUUID()
+      : notificationExhausted
+        ? undefined
+        : batch.notificationClaimId;
     const notificationAttempts = shouldNotify
-      ? (batch.notificationAttempts ?? 0) + 1
+      ? currentNotificationAttempts + 1
       : batch.notificationAttempts;
     const notificationLeaseExpiresAt = shouldNotify
       ? updatedAt + NOTIFICATION_LEASE_MS
-      : batch.notificationLeaseExpiresAt;
+      : notificationExhausted
+        ? undefined
+        : batch.notificationLeaseExpiresAt;
     await ctx.db.patch(batch._id, {
       items,
       notificationAttempts,
+      notificationClaimId,
       notificationLeaseExpiresAt,
       notificationReady,
       notificationStatus,
       updatedAt,
     });
     return {
-      batch: publicBatch({ ...batch, items, notificationStatus, updatedAt }),
+      batch: publicBatch({
+        ...batch,
+        items,
+        notificationClaimId,
+        notificationStatus,
+        updatedAt,
+      }),
       shouldNotify,
     };
   },
 });
 
 export const markNotification = mutation({
-  args: { secret: v.string(), batchId: v.string(), status: v.string() },
+  args: {
+    secret: v.string(),
+    batchId: v.string(),
+    claimId: v.optional(v.string()),
+    status: v.string(),
+  },
+  returns: v.object({
+    status: v.string(),
+    updated: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const batch = await findBatch(ctx, args.batchId);
     if (!batch) throw new Error("Review batch not found");
+    if (batch.notificationStatus !== "claimed") {
+      return { status: batch.notificationStatus, updated: false };
+    }
+    if (
+      batch.notificationClaimId !== undefined
+        ? args.claimId !== batch.notificationClaimId
+        : args.claimId !== undefined
+    ) {
+      return { status: batch.notificationStatus, updated: false };
+    }
     const now = Date.now();
     const status = (
       args.status === "failed"
       && (batch.notificationAttempts ?? 0) >= MAX_NOTIFICATION_ATTEMPTS
     ) ? "failed_exhausted" : args.status;
     await ctx.db.patch(batch._id, {
+      notificationClaimId: undefined,
       notificationLeaseExpiresAt: status === "failed"
         ? now + NOTIFICATION_LEASE_MS
-        : batch.notificationLeaseExpiresAt,
+        : undefined,
       notificationStatus: status,
       updatedAt: now,
     });
+    return { status, updated: true };
   },
 });
 
@@ -361,21 +413,26 @@ export const claimNotification = mutation({
         const attempts = batch.notificationAttempts ?? 0;
         if (attempts >= MAX_NOTIFICATION_ATTEMPTS) {
           await ctx.db.patch(batch._id, {
+            notificationClaimId: undefined,
+            notificationLeaseExpiresAt: undefined,
             notificationStatus: "failed_exhausted",
             updatedAt: now,
           });
           continue;
         }
         const notificationAttempts = attempts + 1;
+        const notificationClaimId = crypto.randomUUID();
         const notificationLeaseExpiresAt = now + NOTIFICATION_LEASE_MS;
         await ctx.db.patch(batch._id, {
           notificationAttempts,
+          notificationClaimId,
           notificationLeaseExpiresAt,
           notificationStatus: "claimed",
           updatedAt: now,
         });
         return publicBatch({
           ...batch,
+          notificationClaimId,
           notificationStatus: "claimed",
           updatedAt: now,
         });

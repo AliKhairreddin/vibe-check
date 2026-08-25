@@ -1,22 +1,22 @@
-# Vibe Check Partner API v1
+# AdChecked Partner API v1
 
-The Partner API lets another server submit video, image, or copy-only creatives to the same review pipeline used by the Vibe Check application. Processing is asynchronous: a submission returns immediately with a review ID, and the caller polls or receives a signed webhook before downloading results.
+The Partner API lets another server submit video, image, or copy-only creatives to the same review pipeline used by the AdChecked application. Processing is asynchronous: a submission returns immediately with a review ID, and the caller polls or receives a signed webhook before downloading results.
 
 ## Access and credentials
 
 Production base URL:
 
 ```text
-https://vibe-check.ali-kheireddin1.workers.dev/api/v1
+https://api.adchecked.com/api/v1
 ```
 
 Human-facing documentation uses one hub on the branded application domain:
 
-- Developer guide: `https://vibe-check.thatcanadian.dev/developers/api?view=guide`
-- Interactive request console: `https://vibe-check.thatcanadian.dev/developers/api?view=reference`
-- Machine-readable schema: `https://vibe-check.ali-kheireddin1.workers.dev/api/v1/openapi.json`
+- Developer guide: `https://admin.adchecked.com/developers/api?view=guide`
+- Interactive request console: `https://admin.adchecked.com/developers/api?view=reference`
+- Machine-readable schema: `https://api.adchecked.com/api/v1/openapi.json`
 
-The dedicated Worker hostname remains the server-to-server base because the application domain can apply browser-oriented Cloudflare challenges to non-browser clients.
+The dedicated API hostname remains the server-to-server base so machine traffic stays separate from the browser application and admin console.
 
 An administrator creates an account in **Settings → API access**, chooses offer access and limits, and issues one or more API keys. The full key is shown once. Store it only in the integrating service's secret manager and send it on every request:
 
@@ -46,14 +46,14 @@ The smallest integration surface accepts an existing public media URL and expose
 ### 1. Submit a creative URL
 
 ```bash
-curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/jobs' \
+curl -X POST 'https://api.adchecked.com/api/v1/jobs' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: lemmonmaxx-monday-001' \
   --data '{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'
 ```
 
-The URL must be public HTTPS and resolve to an MP4, JPG, PNG, or WebP file. Vibe Check rejects embedded credentials, private/local destinations, unsafe redirects, empty responses, unsupported file signatures, and media larger than the API partner's upload limit. A successful request returns HTTP `202` after the media is validated and queued:
+The URL must be public HTTPS and resolve to an MP4, JPG, PNG, or WebP file. AdChecked rejects embedded credentials, private/local destinations, unsafe redirects, empty responses, unsupported file signatures, and media larger than the API partner's upload limit. A successful request returns HTTP `202` after the media is validated and queued:
 
 ```json
 {
@@ -75,7 +75,7 @@ GET /api/v1/jobs/{job_id}
 Authorization: Bearer YOUR_API_KEY
 ```
 
-`status` is always one of `queued`, `processing`, `completed`, or `failed`. The response also echoes `asset_id`, allowing the caller to map the Vibe Check job back to its own asset. The endpoint deliberately collapses the richer internal stages so a phase-one client needs only one polling state machine.
+`status` is always one of `queued`, `processing`, `completed`, or `failed`. The response also echoes `asset_id`, allowing the caller to map the AdChecked job back to its own asset. The endpoint deliberately collapses the richer internal stages so a phase-one client needs only one polling state machine.
 
 ### 3. Retrieve the result
 
@@ -101,14 +101,14 @@ Before completion this returns HTTP `409` with `Retry-After: 5`. Once complete i
 
 `asset_id` is required, may be up to 200 characters, and is stored as the caller's stable external identifier. It does not replace `job_id`: one asset can have multiple review jobs over time.
 
-This URL-based contract is convenient when LemmonMaxx already has a durable media URL. Direct file upload remains the stronger production option when URLs are short-lived or access-controlled, or when the caller needs byte-for-byte control over what Vibe Check receives. Both routes feed the same analysis pipeline and can be used side by side.
+This URL-based contract is convenient when LemmonMaxx already has a durable media URL. Direct file upload remains the stronger production option when URLs are short-lived or access-controlled, or when the caller needs byte-for-byte control over what AdChecked receives. Both routes feed the same analysis pipeline and can be used side by side.
 
 ## LemmonMaxx live-creative scans
 
 LemmonMaxx should download the media file that Meta is currently serving for an ad and send that file to `POST /scans/creative`. The stable `ad_id` must be Meta's ad ID or another immutable LemmonMaxx identifier—not the creative name.
 
 ```bash
-curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/scans/creative' \
+curl -X POST 'https://api.adchecked.com/api/v1/scans/creative' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'X-Vibe-Ad-Id: 23851234567890123' \
   -F 'creative=@current-ad-1.mp4' \
@@ -124,11 +124,11 @@ curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/scans/creati
 
 `X-Vibe-Ad-Id` must exactly match the `ad_id` form field. The edge uses it to spread different ads across the configured backend shards while keeping repeated scans of one ad on a stable shard.
 
-Vibe Check streams the upload to temporary storage while calculating SHA-256 directly from the exact media bytes. This hash step does not run OCR, transcription, vision, or an LLM. A second hash covers the ad copy, headline, description, call to action, destination URL, review options, custom context, applicable offer-policy versions, and calibration snapshot.
+AdChecked streams the upload to temporary storage while calculating SHA-256 directly from the exact media bytes. This hash step does not run OCR, transcription, vision, or an LLM. A second hash covers the ad copy, headline, description, call to action, destination URL, review options, custom context, applicable offer-policy versions, and calibration snapshot.
 
 The two hashes are combined and compared atomically with the last observation for the same API partner and `ad_id`:
 
-- HTTP `202` with `review_created: true` means the ad is new, its media changed, a review field or policy changed, or a failed review needs a retry. The normal Vibe Check pipeline is queued.
+- HTTP `202` with `review_created: true` means the ad is new, its media changed, a review field or policy changed, or a failed review needs a retry. The normal AdChecked pipeline is queued.
 - HTTP `200` with `review_created: false` and `change_status: unchanged` means the content is unchanged. The existing review is returned and no AI pipeline runs.
 - Every accepted request records a tenant-owned observation, including unchanged scans, so LemmonMaxx has an audit trail. Observation history follows the partner's configured retention window; the current state for each ad remains available.
 
@@ -140,14 +140,14 @@ Read current and historical state with:
 - `GET /scans/ads/{ad_id}`
 - `GET /scans/ads/{ad_id}/observations?limit=50&cursor=...`
 
-All comparisons and history are isolated by API partner. A different partner cannot read, reuse, or infer another partner's ad or review. Exact-byte hashing is deliberately conservative: if Meta re-encodes an otherwise similar video, the bytes change and Vibe Check runs a new review rather than risking a missed replacement.
+All comparisons and history are isolated by API partner. A different partner cannot read, reuse, or infer another partner's ad or review. Exact-byte hashing is deliberately conservative: if Meta re-encodes an otherwise similar video, the bytes change and AdChecked runs a new review rather than risking a missed replacement.
 
 ## Submit and read a review
 
 Send an `Idempotency-Key` on every submission. Reusing the same value for the same account returns the first review instead of creating another one.
 
 ```bash
-curl -X POST 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1/reviews' \
+curl -X POST 'https://api.adchecked.com/api/v1/reviews' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Idempotency-Key: creative-2026-08-21-v1' \
   -F 'creative=@creative.mp4' \
@@ -198,7 +198,7 @@ Reports remain in the normal durable review store. The expanded API evidence bun
 
 ## Signed completion webhooks
 
-An administrator may save a public HTTPS webhook URL and create a signing secret. Vibe Check sends `review.completed` or `review.failed` events. Redirects are not followed, private/local destinations are rejected, and failed deliveries are retried with backoff up to five attempts.
+An administrator may save a public HTTPS webhook URL and create a signing secret. AdChecked sends `review.completed` or `review.failed` events. Redirects are not followed, private/local destinations are rejected, and failed deliveries are retried with backoff up to five attempts.
 
 Webhook headers include:
 

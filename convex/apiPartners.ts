@@ -15,6 +15,7 @@ const API_SCOPES = new Set([
 ]);
 const WEBHOOK_LEASE_MS = 2 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 5;
+const MONTH_KEY_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
@@ -218,10 +219,13 @@ async function finalizeReviewRecord(
 }
 
 export const list = query({
-  args: { secret: v.string() },
+  args: { monthKey: v.string(), secret: v.string() },
   returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    if (!MONTH_KEY_PATTERN.test(args.monthKey)) {
+      throw new Error("Month key must use YYYY-MM format");
+    }
     const partners = await ctx.db.query("apiPartners").order("desc").take(100);
     return await Promise.all(partners.map(async (partner) => {
       const keys = await ctx.db
@@ -229,11 +233,10 @@ export const list = query({
         .withIndex("by_partner_id", (q) => q.eq("partnerId", partner.partnerId))
         .order("desc")
         .take(100);
-      const monthKey = new Date().toISOString().slice(0, 7);
       const usage = await ctx.db
         .query("apiMonthlyUsage")
         .withIndex("by_partner_id_and_month_key", (q) =>
-          q.eq("partnerId", partner.partnerId).eq("monthKey", monthKey)
+          q.eq("partnerId", partner.partnerId).eq("monthKey", args.monthKey)
         )
         .unique();
       const active = await ctx.db
@@ -246,7 +249,7 @@ export const list = query({
         ...publicPartner(partner),
         active_reviews: active.length,
         keys: keys.map(publicKey),
-        month_key: monthKey,
+        month_key: args.monthKey,
         monthly_reviews_created: usage?.reviewsCreated ?? 0,
       };
     }));
@@ -1004,7 +1007,18 @@ export const claimWebhookDeliveries = mutation({
       )
       .take(limit);
     for (const delivery of expiredClaims) {
+      if (delivery.attempts >= WEBHOOK_MAX_ATTEMPTS) {
+        await ctx.db.patch(delivery._id, {
+          claimId: undefined,
+          lastError: delivery.lastError ?? "Webhook delivery lease expired after the final attempt",
+          leaseExpiresAt: undefined,
+          status: "failed",
+          updatedAt: args.now,
+        });
+        continue;
+      }
       await ctx.db.patch(delivery._id, {
+        claimId: undefined,
         leaseExpiresAt: undefined,
         nextAttemptAt: args.now,
         status: "pending",
@@ -1019,6 +1033,16 @@ export const claimWebhookDeliveries = mutation({
       .take(limit);
     const claimed = [];
     for (const delivery of deliveries) {
+      if (delivery.attempts >= WEBHOOK_MAX_ATTEMPTS) {
+        await ctx.db.patch(delivery._id, {
+          claimId: undefined,
+          lastError: delivery.lastError ?? "Webhook delivery retry limit reached",
+          leaseExpiresAt: undefined,
+          status: "failed",
+          updatedAt: args.now,
+        });
+        continue;
+      }
       const partner = await ctx.db
         .query("apiPartners")
         .withIndex("by_partner_id", (q) => q.eq("partnerId", delivery.partnerId))
@@ -1032,14 +1056,17 @@ export const claimWebhookDeliveries = mutation({
         continue;
       }
       const attempts = delivery.attempts + 1;
+      const claimId = crypto.randomUUID();
       await ctx.db.patch(delivery._id, {
         attempts,
+        claimId,
         leaseExpiresAt: args.now + WEBHOOK_LEASE_MS,
         status: "claimed",
         updatedAt: args.now,
       });
       claimed.push({
         attempts,
+        claim_id: claimId,
         delivery_id: delivery.deliveryId,
         event_type: delivery.eventType,
         payload: delivery.payload,
@@ -1053,6 +1080,7 @@ export const claimWebhookDeliveries = mutation({
 
 export const completeWebhookDelivery = mutation({
   args: {
+    claimId: v.optional(v.string()),
     deliveryId: v.string(),
     error: v.optional(v.string()),
     now: v.number(),
@@ -1068,8 +1096,15 @@ export const completeWebhookDelivery = mutation({
       .withIndex("by_delivery_id", (q) => q.eq("deliveryId", args.deliveryId))
       .unique();
     if (!delivery) throw new Error("Webhook delivery not found");
+    const claimMatches = delivery.claimId !== undefined
+      ? args.claimId === delivery.claimId
+      : args.claimId === undefined;
+    if (delivery.status !== "claimed" || !claimMatches) {
+      return { stale: true, status: delivery.status };
+    }
     if (args.success) {
       await ctx.db.patch(delivery._id, {
+        claimId: undefined,
         lastError: undefined,
         leaseExpiresAt: undefined,
         responseStatus: args.responseStatus,
@@ -1080,6 +1115,7 @@ export const completeWebhookDelivery = mutation({
     }
     if (delivery.attempts >= WEBHOOK_MAX_ATTEMPTS) {
       await ctx.db.patch(delivery._id, {
+        claimId: undefined,
         lastError: args.error,
         leaseExpiresAt: undefined,
         responseStatus: args.responseStatus,
@@ -1091,6 +1127,7 @@ export const completeWebhookDelivery = mutation({
     const delays = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
     const nextAttemptAt = args.now + delays[Math.min(delivery.attempts - 1, delays.length - 1)];
     await ctx.db.patch(delivery._id, {
+      claimId: undefined,
       lastError: args.error,
       leaseExpiresAt: undefined,
       nextAttemptAt,

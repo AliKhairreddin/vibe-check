@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, hashlib, json, logging, os, re, secrets, shutil, uuid
+import asyncio, base64, binascii, hashlib, hmac, json, logging, os, re, secrets, shutil, time, uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -166,10 +166,15 @@ OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
 PARTNER_ID_PATTERN = re.compile(r'^partner_[0-9a-f]{32}$')
 API_KEY_ID_PATTERN = re.compile(r'^key_[0-9a-f]{32}$')
 MAX_BATCH_ITEMS = 100
+MAX_LIVE_SCAN_GROUPS = 500
+MAX_LIVE_SCAN_NAMES = 100
 ADMIN_PASSWORD_HEADER = 'x-admin-password'
 CLIENT_USERNAME_HEADER = 'x-client-username'
 CLIENT_PASSWORD_HEADER = 'x-client-password'
 AUTOMATION_SECRET_HEADER = 'x-automation-secret'
+ADMIN_SESSION_COOKIE = 'adchecked_admin_session'
+CLIENT_SESSION_COOKIE = 'adchecked_client_session'
+SESSION_TTL_SECONDS = 12 * 60 * 60
 CLIENT_PORTALS = {
     'acp': {
         'display_name': 'ACP',
@@ -274,6 +279,9 @@ def review_meta(
     batch_item_id: str,
     offer_ids: list[str] | None = None,
 ) -> ReviewRequestMeta:
+    if not 0.25 <= frame_interval_seconds <= 30:
+        raise HTTPException(400, 'frame_interval_seconds must be between 0.25 and 30.')
+    validate_review_text(ad_copy,policy_text,notes,manual_transcript)
     # Offer eligibility is server-owned. The legacy offer_ids input remains accepted
     # for backwards compatibility, but a caller cannot force a disabled/unconfigured
     # offer to run or omit an eligible one.
@@ -369,7 +377,7 @@ async def lifespan(app: FastAPI):
     await stop_job_workers()
 
 app=FastAPI(
-    title='Ad Compliance Creative Reviewer',
+    title='AdChecked',
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -377,19 +385,131 @@ app=FastAPI(
 )
 allowed_hosts=[h.strip() for h in os.getenv('APP_ALLOWED_HOSTS','*').split(',') if h.strip()]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
-app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
+cors_origins=[
+    origin.strip()
+    for origin in os.getenv(
+        'CORS_ALLOWED_ORIGINS',
+        'https://admin.adchecked.com,https://app.adchecked.com,http://localhost:5173',
+    ).split(',')
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_methods=['DELETE','GET','OPTIONS','POST','PUT'],
+    allow_headers=[
+        'authorization',
+        'content-type',
+        'idempotency-key',
+        'x-admin-password',
+        'x-api-key',
+        'x-app-password',
+        'x-request-id',
+        'x-vibe-ad-id',
+        'x-vibe-backend-shard',
+    ],
+    expose_headers=['content-disposition','x-request-id'],
+)
 
 @app.middleware('http')
 async def optional_password_gate(request: Request, call_next):
+    path=str(request.scope.get('path') or '')
+    if request.method == 'OPTIONS':
+        return await call_next(request)
+    raw_host=request.headers.get('host','').casefold()
+    hostname=raw_host.split(':',1)[0]
+    admin_hosts={
+        value.strip().casefold()
+        for value in os.getenv('APP_ADMIN_HOSTS','admin.adchecked.com').split(',')
+        if value.strip()
+    }
+    legacy_hosts={
+        value.strip().casefold()
+        for value in os.getenv('APP_LEGACY_HOSTS','vibe-check.thatcanadian.dev').split(',')
+        if value.strip()
+    }
     password = os.getenv('APP_PASSWORD')
-    is_client_portal = request.url.path.startswith('/api/client/')
-    is_partner_api = request.url.path.startswith('/api/v1')
-    if (
-        password
-        and request.url.path.startswith('/api')
+    is_client_portal = path == '/api/client/check' or path.startswith('/api/client/')
+    is_partner_api = path == '/api/v1' or path.startswith('/api/v1/')
+    is_internal_api = path.startswith('/api/internal/') or path.startswith('/api/automations/internal/')
+    is_admin_session = path == '/api/admin/session'
+    is_scanner_session = path == '/api/scanner/session'
+    is_scanner_api = path in {'/api/live-scans/observe','/api/live-scans/creative'}
+    is_state_change = request.method in {'DELETE','PATCH','POST','PUT'}
+    if is_state_change and not is_internal_api and not is_scanner_api and not is_scanner_session:
+        expected_origin=''
+        if hostname in admin_hosts:
+            if hostname in {'localhost','127.0.0.1'}:
+                configured_origins={
+                    origin.strip()
+                    for origin in os.getenv('CORS_ALLOWED_ORIGINS','http://localhost:5173').split(',')
+                    if origin.strip()
+                }
+                if request.headers.get('origin','') not in configured_origins:
+                    return JSONResponse({'detail':'Invalid request origin.'},status_code=403)
+            else:
+                expected_origin=f'https://{hostname}'
+        elif hostname == 'app.adchecked.com':
+            expected_origin='https://app.adchecked.com'
+        if expected_origin and request.headers.get('origin','') != expected_origin:
+            return JSONResponse({'detail':'Invalid request origin.'},status_code=403)
+    is_operator_api = (
+        path.startswith('/api/')
         and not is_client_portal
         and not is_partner_api
-        and request.headers.get('x-app-password') != password
+        and not is_internal_api
+        and not is_admin_session
+        and not is_scanner_session
+    )
+    if hostname in admin_hosts and is_operator_api and is_scanner_api:
+        expected=os.getenv('ADMIN_PASSWORD','')
+        provided=request.headers.get(ADMIN_PASSWORD_HEADER,'')
+        scanner_session=read_scanner_session(request)
+        has_legacy_password=(
+            bool(expected)
+            and bool(provided)
+            and secrets.compare_digest(provided,expected)
+        )
+        if not expected or (scanner_session is None and not has_legacy_password):
+            return JSONResponse(
+                {'detail':'Invalid or missing scanner authorization.'},
+                status_code=401,
+            )
+    elif hostname in legacy_hosts and is_scanner_api:
+        admin_password=os.getenv('ADMIN_PASSWORD','')
+        app_password=os.getenv('APP_PASSWORD','')
+        scanner_session=read_scanner_session(request)
+        provided_app_password=request.headers.get('x-app-password','')
+        provided_admin_password=request.headers.get(ADMIN_PASSWORD_HEADER,'')
+        has_legacy_password=(
+            bool(app_password)
+            and bool(provided_app_password)
+            and secrets.compare_digest(provided_app_password,app_password)
+        ) or (
+            bool(admin_password)
+            and bool(provided_admin_password)
+            and secrets.compare_digest(provided_admin_password,admin_password)
+        )
+        if scanner_session is None and not has_legacy_password:
+            return JSONResponse(
+                {'detail':'Invalid or missing scanner authorization.'},
+                status_code=401,
+            )
+    elif hostname in admin_hosts and is_operator_api:
+        if read_session_cookie(request, ADMIN_SESSION_COOKIE, 'admin') is None:
+            return JSONResponse(
+                {'detail':'Sign in to continue.'},
+                status_code=401,
+            )
+    if (
+        password
+        and hostname not in admin_hosts
+        and path.startswith('/api')
+        and not is_client_portal
+        and not is_partner_api
+        and not is_internal_api
+        and not is_scanner_api
+        and not secrets.compare_digest(request.headers.get('x-app-password',''),password)
     ):
         return JSONResponse({'detail':'Invalid or missing x-app-password'}, status_code=401)
     response=await call_next(request)
@@ -407,7 +527,9 @@ def require_admin(request:Request)->None:
             'Admin access is not configured. Set the ADMIN_PASSWORD Worker secret first.',
         )
     provided=request.headers.get(ADMIN_PASSWORD_HEADER,'')
-    if not provided or not secrets.compare_digest(provided, expected):
+    has_password=bool(provided) and secrets.compare_digest(provided, expected)
+    has_session=read_session_cookie(request, ADMIN_SESSION_COOKIE, 'admin') is not None
+    if not has_password and not has_session:
         raise HTTPException(401, 'Invalid or missing admin password.')
 
 
@@ -542,14 +664,141 @@ def public_client_portal(client_id:str, config:dict[str, str])->dict[str, str]:
     }
 
 
-def authenticate_client(request:Request)->dict:
-    username=request.headers.get(CLIENT_USERNAME_HEADER, '').strip()
-    password=request.headers.get(CLIENT_PASSWORD_HEADER, '')
+def session_ttl_seconds()->int:
+    try:
+        configured=int(os.getenv('SESSION_TTL_SECONDS', str(SESSION_TTL_SECONDS)))
+    except ValueError:
+        configured=SESSION_TTL_SECONDS
+    return max(300, min(configured, 24 * 60 * 60))
+
+
+def encode_session_token(kind:str, payload:dict)->str:
+    secret=os.getenv('SESSION_SECRET','')
+    if not secret:
+        raise HTTPException(503, 'Browser sessions are not configured.')
+    value={
+        **payload,
+        'exp':int(time.time()) + session_ttl_seconds(),
+        'kind':kind,
+    }
+    encoded=base64.urlsafe_b64encode(
+        json.dumps(value,separators=(',',':'),sort_keys=True).encode('utf-8')
+    ).rstrip(b'=').decode('ascii')
+    signature=hmac.new(secret.encode('utf-8'),encoded.encode('ascii'),hashlib.sha256).digest()
+    encoded_signature=base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')
+    return f'{encoded}.{encoded_signature}'
+
+
+def decode_session_token(token:str, kind:str)->dict|None:
+    secret=os.getenv('SESSION_SECRET','')
+    if not secret or not token:
+        return None
+    encoded,separator,encoded_signature=token.partition('.')
+    if not separator or not encoded or not encoded_signature:
+        return None
+    try:
+        expected=hmac.new(secret.encode('utf-8'),encoded.encode('ascii'),hashlib.sha256).digest()
+        signature=base64.urlsafe_b64decode(encoded_signature + '=' * (-len(encoded_signature) % 4))
+    except (binascii.Error,UnicodeEncodeError,ValueError,TypeError):
+        return None
+    if not secrets.compare_digest(signature,expected):
+        return None
+    try:
+        decoded=base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+        payload=json.loads(decoded.decode('utf-8'))
+    except (binascii.Error,ValueError,TypeError,UnicodeDecodeError,json.JSONDecodeError):
+        return None
+    if not isinstance(payload,dict) or payload.get('kind') != kind:
+        return None
+    expires_at=payload.get('exp')
+    if not isinstance(expires_at,int) or expires_at <= int(time.time()):
+        return None
+    return payload
+
+
+def credential_fingerprint(username:str, password:str)->str:
+    session_secret=os.getenv('SESSION_SECRET','')
+    if not session_secret:
+        return ''
+    return hmac.new(
+        session_secret.encode('utf-8'),
+        f'{username}\0{password}'.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def current_client_credential_fingerprint(session:dict)->str:
+    username=str(session.get('username') or '')
+    if session.get('role') == 'admin':
+        return credential_fingerprint(username,os.getenv('CLIENT_ADMIN_PASSWORD',''))
+    portal_ids=session.get('portal_ids')
+    if not isinstance(portal_ids,list) or len(portal_ids) != 1:
+        return ''
+    config=CLIENT_PORTALS.get(str(portal_ids[0]))
+    if config is None:
+        return ''
+    return credential_fingerprint(username,os.getenv(config['password_env'],''))
+
+
+def read_session_cookie(request:Request, cookie_name:str, kind:str)->dict|None:
+    session=decode_session_token(request.cookies.get(cookie_name,''),kind)
+    if session is None:
+        return None
+    fingerprint=str(session.get('credential_fingerprint') or '')
+    if kind == 'admin':
+        expected=credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
+    else:
+        expected=current_client_credential_fingerprint(session)
+    if not fingerprint or not expected or not secrets.compare_digest(fingerprint,expected):
+        return None
+    return session
+
+
+def read_scanner_session(request:Request)->dict|None:
+    authorization=request.headers.get('authorization','').strip()
+    scheme,separator,token=authorization.partition(' ')
+    if not separator or scheme.casefold() != 'bearer':
+        return None
+    session=decode_session_token(token.strip(),'scanner')
+    if session is None:
+        return None
+    fingerprint=str(session.get('credential_fingerprint') or '')
+    expected=credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
+    if not fingerprint or not expected or not secrets.compare_digest(fingerprint,expected):
+        return None
+    return session
+
+
+def set_session_cookie(response:Response, request:Request, name:str, value:str)->None:
+    forwarded_proto=request.headers.get('x-forwarded-proto','').split(',',1)[0].strip().casefold()
+    response.set_cookie(
+        name,
+        value,
+        httponly=True,
+        max_age=session_ttl_seconds(),
+        path='/',
+        samesite='strict',
+        secure=request.url.scheme == 'https' or forwarded_proto == 'https',
+    )
+
+
+def clear_session_cookie(response:Response, request:Request, name:str)->None:
+    forwarded_proto=request.headers.get('x-forwarded-proto','').split(',',1)[0].strip().casefold()
+    response.delete_cookie(
+        name,
+        path='/',
+        samesite='strict',
+        secure=request.url.scheme == 'https' or forwarded_proto == 'https',
+    )
+
+
+def authenticate_client_credentials(username:str,password:str)->dict:
+    username=username.strip()
     if not username or not password:
         raise HTTPException(401, 'Invalid or missing client credentials.')
 
     admin_username=os.getenv('CLIENT_ADMIN_USERNAME', 'admin').strip() or 'admin'
-    admin_password=os.getenv('CLIENT_ADMIN_PASSWORD', '') or os.getenv('ADMIN_PASSWORD', '')
+    admin_password=os.getenv('CLIENT_ADMIN_PASSWORD', '')
     if (
         admin_password
         and secrets.compare_digest(username, admin_username)
@@ -580,6 +829,38 @@ def authenticate_client(request:Request)->dict:
     raise HTTPException(401, 'Invalid or missing client credentials.')
 
 
+def client_cookie_session(request:Request)->dict|None:
+    session=read_session_cookie(request,CLIENT_SESSION_COOKIE,'client')
+    if session is None:
+        return None
+    portal_ids=session.get('portal_ids')
+    username=session.get('username')
+    role=session.get('role')
+    if (
+        not isinstance(portal_ids,list)
+        or not portal_ids
+        or any(not isinstance(client_id,str) or client_id not in CLIENT_PORTALS for client_id in portal_ids)
+        or not isinstance(username,str)
+        or role not in {'admin','client'}
+    ):
+        return None
+    return {'portal_ids':portal_ids,'role':role,'username':username}
+
+
+def authenticate_client(request:Request)->dict:
+    session=client_cookie_session(request)
+    if session is not None:
+        return session
+    raw_host=request.headers.get('host','').casefold()
+    hostname=raw_host.split(':',1)[0]
+    if hostname == 'app.adchecked.com':
+        raise HTTPException(401, 'Sign in to continue.')
+    return authenticate_client_credentials(
+        request.headers.get(CLIENT_USERNAME_HEADER,''),
+        request.headers.get(CLIENT_PASSWORD_HEADER,''),
+    )
+
+
 def public_client_session(session:dict)->dict:
     return {
         'portals':[
@@ -604,6 +885,65 @@ def require_automation_secret(request:Request)->None:
     provided=request.headers.get(AUTOMATION_SECRET_HEADER,'')
     if not expected or not provided or not secrets.compare_digest(provided, expected):
         raise HTTPException(401, 'Invalid or missing automation secret.')
+
+
+@app.post('/api/admin/session')
+async def create_admin_session(request:Request):
+    expected=os.getenv('ADMIN_PASSWORD','')
+    if not expected:
+        raise HTTPException(503,'Admin access is not configured.')
+    try:
+        payload=await request.json()
+    except (ValueError,json.JSONDecodeError):
+        raise HTTPException(400,'Provide a JSON password.') from None
+    password=str(payload.get('password') or '') if isinstance(payload,dict) else ''
+    if not password or not secrets.compare_digest(password,expected):
+        raise HTTPException(401,'Invalid or missing admin password.')
+    token=encode_session_token('admin',{
+        'credential_fingerprint':credential_fingerprint('admin',expected),
+    })
+    response=JSONResponse({'authorized':True})
+    set_session_cookie(response,request,ADMIN_SESSION_COOKIE,token)
+    response.headers['cache-control']='no-store'
+    return response
+
+
+@app.post('/api/scanner/session')
+async def create_scanner_session(request:Request):
+    expected=os.getenv('ADMIN_PASSWORD','')
+    if not expected:
+        raise HTTPException(503,'Scanner access is not configured.')
+    try:
+        payload=await request.json()
+    except (ValueError,json.JSONDecodeError):
+        raise HTTPException(400,'Provide a JSON password.') from None
+    password=str(payload.get('password') or '') if isinstance(payload,dict) else ''
+    if not password or not secrets.compare_digest(password,expected):
+        raise HTTPException(401,'Invalid or missing scanner password.')
+    expires_at=int(time.time()) + session_ttl_seconds()
+    token=encode_session_token('scanner',{
+        'credential_fingerprint':credential_fingerprint('admin',expected),
+        'exp':expires_at,
+    })
+    return JSONResponse(
+        {'expires_at':expires_at,'token':token,'token_type':'Bearer'},
+        headers={'cache-control':'no-store'},
+    )
+
+
+@app.get('/api/admin/session')
+def get_admin_session(request:Request):
+    if read_session_cookie(request,ADMIN_SESSION_COOKIE,'admin') is None:
+        raise HTTPException(401,'Sign in to continue.')
+    return {'authorized':True}
+
+
+@app.delete('/api/admin/session')
+def delete_admin_session(request:Request):
+    response=JSONResponse({'signed_out':True})
+    clear_session_cookie(response,request,ADMIN_SESSION_COOKIE)
+    response.headers['cache-control']='no-store'
+    return response
 
 
 @app.get('/api/admin/check')
@@ -742,6 +1082,49 @@ def evidence_frame_response(job_id:str, filename:str)->Response:
 @app.get('/api/client/check')
 def client_session_check(request:Request):
     return public_client_session(authenticate_client(request))
+
+
+@app.post('/api/client/session')
+async def create_client_session(request:Request):
+    try:
+        payload=await request.json()
+    except (ValueError,json.JSONDecodeError):
+        raise HTTPException(400,'Provide a JSON username and password.') from None
+    if not isinstance(payload,dict):
+        raise HTTPException(400,'Provide a JSON username and password.')
+    session=authenticate_client_credentials(
+        str(payload.get('username') or ''),
+        str(payload.get('password') or ''),
+    )
+    session_payload={
+        **session,
+        'credential_fingerprint':current_client_credential_fingerprint(session),
+    }
+    response=JSONResponse(public_client_session(session))
+    set_session_cookie(
+        response,
+        request,
+        CLIENT_SESSION_COOKIE,
+        encode_session_token('client',session_payload),
+    )
+    response.headers['cache-control']='no-store'
+    return response
+
+
+@app.get('/api/client/session')
+def get_client_session(request:Request):
+    session=client_cookie_session(request)
+    if session is None:
+        raise HTTPException(401,'Sign in to continue.')
+    return public_client_session(session)
+
+
+@app.delete('/api/client/session')
+def delete_client_session(request:Request):
+    response=JSONResponse({'signed_out':True})
+    clear_session_cookie(response,request,CLIENT_SESSION_COOKIE)
+    response.headers['cache-control']='no-store'
+    return response
 
 
 @app.get('/api/client/{client_id}/check')
@@ -896,7 +1279,7 @@ def client_review_frame(client_id:str, job_id:str, filename:str, request:Request
     return evidence_frame_response(job_id, filename)
 
 
-def validate_partner_review_text(
+def validate_review_text(
     ad_copy:str,
     policy_text:str,
     notes:str,
@@ -1090,7 +1473,7 @@ async def fail_claimed_api_review(
 @app.get('/api/v1')
 def partner_api_index():
     return {
-        'name':'Vibe Check Partner API',
+        'name':'AdChecked Partner API',
         'version':'v1',
         'authentication':'Authorization: Bearer <api-key>',
         'base_url':partner_api_base_url(),
@@ -1121,7 +1504,7 @@ def partner_api_openapi():
         and route.path not in {'/api/v1/docs','/api/v1/reference','/api/v1/openapi.json'}
     ]
     schema=get_openapi(
-        title='Vibe Check Partner API',
+        title='AdChecked Partner API',
         version='1.0.0',
         description=(
             'Server-to-server API for fingerprinting live ad media, reviewing changed '
@@ -1135,7 +1518,7 @@ def partner_api_openapi():
     security_schemes['BearerAuth']={
         'type':'http',
         'scheme':'bearer',
-        'bearerFormat':'Vibe Check API key',
+        'bearerFormat':'AdChecked API key',
     }
     for path,item in schema.get('paths',{}).items():
         if path == '/api/v1':
@@ -1255,7 +1638,7 @@ async def partner_create_job(payload:ApiJobInput,request:Request):
         if claimed:
             raise HTTPException(
                 503,
-                'The review could not be queued. Retry with the same Idempotency-Key.',
+                'The review could not be queued. Retry with a new Idempotency-Key.',
             ) from None
         raise partner_storage_error(exc) from None
 
@@ -1278,7 +1661,7 @@ async def partner_create_review(
     creative_name=validate_scan_field('creative_name',creative_name,maximum=300)
     external_id=validate_external_id(external_id)
     idempotency_key=api_idempotency_key(request)
-    validate_partner_review_text(ad_copy,policy_text,notes,manual_transcript)
+    validate_review_text(ad_copy,policy_text,notes,manual_transcript)
     meta=partner_review_meta(
         principal,
         ad_copy=ad_copy,
@@ -1325,7 +1708,7 @@ async def partner_create_review(
                 has_creative=False,
                 message=f'Submission failed: {type(exc).__name__}',
             )
-            raise HTTPException(503, 'The review could not be queued. Retry with the same Idempotency-Key.') from None
+            raise HTTPException(503, 'The review could not be queued. Retry with a new Idempotency-Key.') from None
         return api_submission_response(record,external_id)
 
     file_name=Path(upload.filename or 'upload').name or 'upload'
@@ -1383,7 +1766,7 @@ async def partner_create_review(
             )
         shutil.rmtree(jd,ignore_errors=True)
         if claimed:
-            raise HTTPException(503,'The review could not be queued. Retry with the same Idempotency-Key.') from None
+            raise HTTPException(503,'The review could not be queued. Retry with a new Idempotency-Key.') from None
         raise partner_storage_error(exc) from None
 
 
@@ -1435,7 +1818,7 @@ async def partner_scan_creative(
         call_to_action=call_to_action,
         destination_url=destination_url,
     )
-    validate_partner_review_text(structured_ad_copy,policy_text,notes,manual_transcript)
+    validate_review_text(structured_ad_copy,policy_text,notes,manual_transcript)
     meta=partner_review_meta(
         principal,
         ad_copy=structured_ad_copy,
@@ -1691,7 +2074,7 @@ async def partner_complete_upload(
     creative_name=validate_scan_field('creative_name',creative_name,maximum=300)
     external_id=validate_external_id(external_id)
     idempotency_key=api_idempotency_key(request)
-    validate_partner_review_text(ad_copy,policy_text,notes,manual_transcript)
+    validate_review_text(ad_copy,policy_text,notes,manual_transcript)
     if metadata.get('completed') or (upload_dir/'status.json').exists():
         return await owned_api_review(principal,upload_id)
     meta=partner_review_meta(
@@ -1758,7 +2141,7 @@ async def partner_complete_upload(
                 has_creative=True,
                 message=f'Submission failed: {type(exc).__name__}',
             )
-            raise HTTPException(503,'The review could not be queued. Retry with the same Idempotency-Key.') from None
+            raise HTTPException(503,'The review could not be queued. Retry with a new Idempotency-Key.') from None
         raise partner_storage_error(exc) from None
 
 
@@ -2037,11 +2420,18 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
     job_id=uuid.uuid4().hex; jd=job_dir(job_id)
     media_path=jd/file_name
     size=0
-    with media_path.open('wb') as f:
-        while chunk:=await upload.read(1024*1024):
-            size += len(chunk)
-            if size > max_mb*1024*1024: raise HTTPException(413, f'Max upload is {max_mb} MB')
-            f.write(chunk)
+    try:
+        with media_path.open('wb') as f:
+            while chunk:=await upload.read(1024*1024):
+                size += len(chunk)
+                if size > max_mb*1024*1024:
+                    raise HTTPException(413, f'Max upload is {max_mb} MB')
+                f.write(chunk)
+        if size == 0:
+            raise HTTPException(400,'The creative file is empty.')
+    except HTTPException:
+        shutil.rmtree(jd,ignore_errors=True)
+        raise
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
     rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name, file_size=size)
     return rec
@@ -2091,6 +2481,11 @@ async def observe_live_scan(payload:LiveScanObservation):
             copy['creative_name']=ad.creative_name
             copy['primary_text']=text
             copy['ad_ids'].add(ad.ad_id)
+
+    if len(creative_groups) > MAX_LIVE_SCAN_GROUPS:
+        raise HTTPException(413, f'A live scan can contain at most {MAX_LIVE_SCAN_GROUPS} creatives.')
+    if len(copy_groups) > MAX_LIVE_SCAN_GROUPS:
+        raise HTTPException(413, f'A live scan can contain at most {MAX_LIVE_SCAN_GROUPS} copy variants.')
 
     media_requests=[]
     for key,value in creative_groups.items():
@@ -2173,9 +2568,9 @@ async def observe_live_scan(payload:LiveScanObservation):
             'creative_name':value['creative_name'],
             'ad_ids':sorted(value['ad_ids']),
             'ad_count':len(value['ad_ids']),
-            'campaign_names':sorted(value['campaign_names']),
-            'ad_set_names':sorted(value['ad_set_names']),
-            'delivery_statuses':sorted(value['delivery_statuses']),
+            'campaign_names':sorted(value['campaign_names'])[:MAX_LIVE_SCAN_NAMES],
+            'ad_set_names':sorted(value['ad_set_names'])[:MAX_LIVE_SCAN_NAMES],
+            'delivery_statuses':sorted(value['delivery_statuses'])[:MAX_LIVE_SCAN_NAMES],
         }
         for key,value in creative_groups.items()
     ]

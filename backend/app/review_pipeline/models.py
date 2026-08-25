@@ -550,6 +550,7 @@ class ReviewBatch(BaseModel):
     expected_count: int
     source_label: str | None = None
     items: list[ReviewBatchItem]
+    notification_claim_id: str | None = None
     notification_status: str = 'pending'
 
 

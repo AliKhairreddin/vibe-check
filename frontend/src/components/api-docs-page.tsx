@@ -24,7 +24,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 
 type Method = 'GET' | 'POST';
-const API_BASE_URL = 'https://vibe-check.ali-kheireddin1.workers.dev/api/v1';
+const API_BASE_URL = 'https://api.adchecked.com/api/v1';
 
 const endpoints: Array<{
   description: string;
@@ -55,7 +55,7 @@ const endpoints: Array<{
     title: '3. Get job result',
   },
   {
-    description: 'Upload the currently running media. Vibe Check hashes the bytes and only creates a review when something relevant changed.',
+    description: 'Upload the currently running media. AdChecked hashes the bytes and only creates a review when something relevant changed.',
     method: 'POST',
     path: '/scans/creative',
     scope: 'scans:write',
@@ -163,7 +163,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
           </div>
           <div className="grid gap-3">
             <h1 className="max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl">
-              Put the full Vibe Check workflow inside LemmonMaxx.
+              Put the full AdChecked workflow inside LemmonMaxx.
             </h1>
             <p className="max-w-3xl text-base leading-7 text-muted-foreground sm:text-lg">
               Monday testing needs only three calls: submit a creative URL, poll its normalized status,
@@ -178,7 +178,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
 
       <section className="grid gap-4 lg:grid-cols-3">
         {[
-          [Fingerprint, '1. Accept', 'Vibe Check validates the public HTTPS destination, follows only safe redirects, verifies the file bytes, and returns job_id.'],
+          [Fingerprint, '1. Accept', 'AdChecked validates the public HTTPS destination, follows only safe redirects, verifies the file bytes, and returns job_id.'],
           [ScanSearch, '2. Process', 'Poll by job_id and receive only queued, processing, completed, or failed while the full pipeline runs.'],
           [ArrowRight, '3. Retrieve', 'When status is completed, request the result endpoint for the asset ID, creative name, and complete structured analysis.'],
         ].map(([Icon, title, description]) => {
