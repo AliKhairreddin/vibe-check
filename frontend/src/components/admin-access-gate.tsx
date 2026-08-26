@@ -33,9 +33,11 @@ type AdminAccessValue = {
   isChecking: boolean;
   isSigningOut: boolean;
   isUnlocked: boolean;
+  loginUsername: string;
   lock: () => Promise<void>;
   password: string;
   role: AdminSession['role'] | null;
+  setLoginUsername: (value: string) => void;
   setPassword: (value: string) => void;
   unlock: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   username: string;
@@ -50,6 +52,7 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [error, setError] = useState('');
+  const [loginUsername, setLoginUsernameState] = useState('');
   const [role, setRole] = useState<AdminSession['role'] | null>(null);
   const [username, setUsername] = useState('');
 
@@ -79,6 +82,11 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
     if (error) setError('');
   }
 
+  function setLoginUsername(value: string) {
+    setLoginUsernameState(value);
+    if (error) setError('');
+  }
+
   async function unlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const candidate = password.trim();
@@ -89,8 +97,9 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
     setIsChecking(true);
     setError('');
     try {
-      const session = await verifyAdminPassword(candidate);
+      const session = await verifyAdminPassword(candidate, loginUsername.trim());
       setPasswordState('');
+      setLoginUsernameState('');
       applySession(session);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['offer-profiles'] }),
@@ -115,6 +124,7 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
       return;
     }
     setPasswordState('');
+    setLoginUsernameState('');
     setIsUnlocked(false);
     setRole(null);
     setUsername('');
@@ -129,9 +139,11 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
       isChecking,
       isSigningOut,
       isUnlocked,
+      loginUsername,
       lock,
       password,
       role,
+      setLoginUsername,
       setPassword,
       unlock,
       username,
@@ -157,7 +169,7 @@ export function AdminPortalGate({ children }: { children: ReactNode }) {
         </a>
         <AdminLoginCard />
         <p className="text-center text-xs text-muted-foreground">
-          Owner and reviewer console · <a className="underline underline-offset-4" href="https://app.adchecked.com/login">Client sign in</a>
+          Owner and employee console · <a className="underline underline-offset-4" href="https://app.adchecked.com/login">Client sign in</a>
         </p>
       </div>
     </main>
@@ -177,7 +189,15 @@ export function useAdminAccess() {
 }
 
 function AdminLoginCard({ compact = false }: { compact?: boolean }) {
-  const { error, isChecking, password, setPassword, unlock } = useAdminAccess();
+  const {
+    error,
+    isChecking,
+    loginUsername,
+    password,
+    setLoginUsername,
+    setPassword,
+    unlock,
+  } = useAdminAccess();
 
   return (
     <Card className={compact ? undefined : 'w-full border-zinc-950/8 shadow-2xl shadow-zinc-950/8'} size={compact ? 'sm' : 'default'}>
@@ -189,19 +209,30 @@ function AdminLoginCard({ compact = false }: { compact?: boolean }) {
           Admin sign in
         </CardTitle>
         <CardDescription>
-          Owners can manage the full workspace. Reviewers can submit and inspect reviews without changing settings.
+          The existing owner password keeps full access. Employees sign in with their username and can work with reviews without changing settings.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form className="grid gap-4" onSubmit={unlock}>
           <div className="grid gap-2">
-            <Label htmlFor={compact ? 'inline-admin-password' : 'admin-password'}>Owner or reviewer password</Label>
+            <Label htmlFor={compact ? 'inline-admin-username' : 'admin-username'}>Employee username</Label>
+            <Input
+              id={compact ? 'inline-admin-username' : 'admin-username'}
+              value={loginUsername}
+              autoComplete="username"
+              autoFocus={!compact}
+              disabled={isChecking}
+              placeholder="Leave blank for owner access"
+              onChange={(event) => setLoginUsername(event.currentTarget.value)}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor={compact ? 'inline-admin-password' : 'admin-password'}>Password</Label>
             <Input
               id={compact ? 'inline-admin-password' : 'admin-password'}
               type="password"
               value={password}
               autoComplete="current-password"
-              autoFocus={!compact}
               disabled={isChecking}
               onChange={(event) => setPassword(event.currentTarget.value)}
             />

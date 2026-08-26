@@ -256,7 +256,7 @@ export type ClientSession = {
 export type AdminSession = {
   authorized: true;
   can_manage_settings: boolean;
-  role: 'owner' | 'reviewer';
+  role: 'owner' | 'employee';
   username: string;
 };
 
@@ -776,11 +776,14 @@ export async function deleteReview(id: string): Promise<DeletedReview> {
   });
 }
 
-export async function verifyAdminPassword(password: string): Promise<AdminSession> {
+export async function verifyAdminPassword(
+  password: string,
+  username = ''
+): Promise<AdminSession> {
   return requestJson<AdminSession>('/api/admin/session', {
     method: 'POST',
     headers: adminHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, username }),
   });
 }
 

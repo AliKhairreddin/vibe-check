@@ -402,8 +402,8 @@ function AppSidebar({
           </p>
         ) : null}
         <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 text-muted-foreground group-data-[collapsible=icon]:hidden">
-          {role === 'reviewer' ? (
-            <><span className="font-medium text-foreground">{username || 'Reviewer'} access</span> · Review submission and results only. Settings are locked.</>
+          {role === 'employee' ? (
+            <><span className="font-medium text-foreground">{username || 'Employee'} access</span> · Review submission and results only. Settings are locked.</>
           ) : (
             'Results reflect effective policy, with approved internal exceptions identified separately.'
           )}
@@ -3205,7 +3205,7 @@ function OwnerAccessRequired({ section }: { section: string }) {
           </span>
           <CardTitle as="h1" className="text-xl">Owner access required</CardTitle>
           <CardDescription>
-            {section} can change workspace configuration and is not available to reviewer accounts.
+            {section} can change workspace configuration and is not available to employee accounts.
           </CardDescription>
         </CardHeader>
         <CardContent>

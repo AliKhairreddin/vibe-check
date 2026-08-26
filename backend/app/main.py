@@ -782,9 +782,9 @@ def current_admin_credential_fingerprint(session:dict)->str:
     role=str(session.get('role') or 'owner')
     if role == 'owner':
         return credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
-    if role == 'reviewer':
-        username=os.getenv('CLIENT_ADMIN_USERNAME','admin').strip() or 'admin'
-        return credential_fingerprint(username,os.getenv('CLIENT_ADMIN_PASSWORD',''))
+    if role == 'employee':
+        username=os.getenv('EMPLOYEE_ADMIN_USERNAME','employee').strip() or 'employee'
+        return credential_fingerprint(username,os.getenv('EMPLOYEE_ADMIN_PASSWORD',''))
     return ''
 
 
@@ -938,22 +938,29 @@ def require_automation_secret(request:Request)->None:
 @app.post('/api/admin/session')
 async def create_admin_session(request:Request):
     owner_password=os.getenv('ADMIN_PASSWORD','')
-    reviewer_password=os.getenv('CLIENT_ADMIN_PASSWORD','')
+    employee_username=os.getenv('EMPLOYEE_ADMIN_USERNAME','employee').strip() or 'employee'
+    employee_password=os.getenv('EMPLOYEE_ADMIN_PASSWORD','')
     if not owner_password:
         raise HTTPException(503,'Admin access is not configured.')
     try:
         payload=await request.json()
     except (ValueError,json.JSONDecodeError):
         raise HTTPException(400,'Provide a JSON password.') from None
+    username=str(payload.get('username') or '').strip() if isinstance(payload,dict) else ''
     password=str(payload.get('password') or '') if isinstance(payload,dict) else ''
     if password and secrets.compare_digest(password,owner_password):
         role='owner'
         username='owner'
         fingerprint=credential_fingerprint('admin',owner_password)
-    elif reviewer_password and password and secrets.compare_digest(password,reviewer_password):
-        role='reviewer'
-        username=os.getenv('CLIENT_ADMIN_USERNAME','admin').strip() or 'admin'
-        fingerprint=credential_fingerprint(username,reviewer_password)
+    elif (
+        employee_password
+        and secrets.compare_digest(username,employee_username)
+        and password
+        and secrets.compare_digest(password,employee_password)
+    ):
+        role='employee'
+        username=employee_username
+        fingerprint=credential_fingerprint(username,employee_password)
     else:
         raise HTTPException(401,'Invalid or missing admin password.')
     token=encode_session_token('admin',{

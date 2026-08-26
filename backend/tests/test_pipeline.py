@@ -5521,11 +5521,13 @@ async def test_admin_browser_session_invalidates_when_password_rotates(monkeypat
 
 
 @pytest.mark.anyio
-async def test_reviewer_admin_can_submit_reviews_but_cannot_change_settings(tmp_path,monkeypatch):
+async def test_employee_admin_can_submit_reviews_but_cannot_change_settings(tmp_path,monkeypatch):
     monkeypatch.setattr(review_storage,'JOB_DATA_DIR',tmp_path)
     monkeypatch.setenv('ADMIN_PASSWORD','owner-secret')
-    monkeypatch.setenv('CLIENT_ADMIN_USERNAME','review-admin')
-    monkeypatch.setenv('CLIENT_ADMIN_PASSWORD','reviewer-secret')
+    monkeypatch.setenv('CLIENT_ADMIN_USERNAME','client-admin')
+    monkeypatch.setenv('CLIENT_ADMIN_PASSWORD','client-admin-secret')
+    monkeypatch.setenv('EMPLOYEE_ADMIN_USERNAME','employee')
+    monkeypatch.setenv('EMPLOYEE_ADMIN_PASSWORD','employee-secret')
     monkeypatch.setenv('SESSION_SECRET','session-secret-for-tests')
     profile=OfferProfile(
         offer_id='acp',
@@ -5552,10 +5554,15 @@ async def test_reviewer_admin_can_submit_reviews_but_cannot_change_settings(tmp_
     transport=httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport,base_url='https://admin.adchecked.com') as client:
+        client_admin_rejected=await client.post(
+            '/api/admin/session',
+            headers={'origin':'https://admin.adchecked.com'},
+            json={'username':'client-admin','password':'client-admin-secret'},
+        )
         signed_in=await client.post(
             '/api/admin/session',
             headers={'origin':'https://admin.adchecked.com'},
-            json={'password':'reviewer-secret'},
+            json={'username':'employee','password':'employee-secret'},
         )
         checked=await client.get('/api/admin/session')
         submitted=await client.post(
@@ -5572,15 +5579,16 @@ async def test_reviewer_admin_can_submit_reviews_but_cannot_change_settings(tmp_
             headers={'origin':'https://admin.adchecked.com'},
         )
 
+    assert client_admin_rejected.status_code == 401
     assert signed_in.status_code == 200
     assert signed_in.json() == {
         'authorized':True,
         'can_manage_settings':False,
-        'role':'reviewer',
-        'username':'review-admin',
+        'role':'employee',
+        'username':'employee',
     }
     assert checked.status_code == 200
-    assert checked.json()['role'] == 'reviewer'
+    assert checked.json()['role'] == 'employee'
     assert submitted.status_code == 200
     assert submitted.json()['has_ad_copy'] is True
     assert settings_change.status_code == 403
