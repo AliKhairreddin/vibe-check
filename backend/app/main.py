@@ -783,7 +783,7 @@ def current_admin_credential_fingerprint(session:dict)->str:
     if role == 'owner':
         return credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
     if role == 'employee':
-        username=os.getenv('EMPLOYEE_ADMIN_USERNAME','employee').strip() or 'employee'
+        username=os.getenv('EMPLOYEE_ADMIN_USERNAME','isham').strip() or 'isham'
         return credential_fingerprint(username,os.getenv('EMPLOYEE_ADMIN_PASSWORD',''))
     return ''
 
@@ -938,7 +938,7 @@ def require_automation_secret(request:Request)->None:
 @app.post('/api/admin/session')
 async def create_admin_session(request:Request):
     owner_password=os.getenv('ADMIN_PASSWORD','')
-    employee_username=os.getenv('EMPLOYEE_ADMIN_USERNAME','employee').strip() or 'employee'
+    employee_username=os.getenv('EMPLOYEE_ADMIN_USERNAME','isham').strip() or 'isham'
     employee_password=os.getenv('EMPLOYEE_ADMIN_PASSWORD','')
     if not owner_password:
         raise HTTPException(503,'Admin access is not configured.')
