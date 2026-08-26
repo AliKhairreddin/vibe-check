@@ -7,6 +7,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
+import { Menu } from '@base-ui/react/menu';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import {
@@ -25,6 +26,8 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Layers3,
+  SlidersHorizontal,
   X,
   XCircle,
 } from 'lucide-react';
@@ -43,6 +46,24 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar';
 import { Textarea } from '@/components/ui/textarea';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import {
@@ -68,6 +89,7 @@ import {
 import { cn } from '@/lib/utils';
 
 const SELECTED_CLIENT_KEY = 'vibe-check-selected-client';
+const CLIENT_SIDEBAR_OPEN_KEY = 'vibe-check-client-sidebar-open';
 
 type ReviewGroup = {
   createdAt: number;
@@ -412,8 +434,8 @@ function ClientDashboard() {
   return (
     <ClientPortalFrame activeClientId={selectedPortal?.client_id} counts={portalCounts} onSelectClient={selectClient}>
       {selectedPortal ? (
-        <div className="grid gap-5">
-          <section className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="grid gap-4">
+          <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Your creative reviews</p>
               <h1 className="font-heading text-3xl font-semibold tracking-tight">{selectedPortal.display_name}</h1>
@@ -422,29 +444,49 @@ function ClientDashboard() {
               <MetricBadge label="total" value={reviews.length} />
               <MetricBadge label="flagged" tone="warning" value={flaggedCount} />
               <MetricBadge label="clean" tone="success" value={cleanCount} />
-              <Button type="button" size="sm" variant="outline" disabled={selectedQuery?.isFetching} onClick={() => void selectedQuery?.refetch()}>
-                <RefreshCw className={cn(selectedQuery?.isFetching && 'animate-spin')} />
-                Refresh
-              </Button>
             </div>
           </section>
 
-          <section className="grid gap-4">
-            <div className="relative max-w-2xl">
+          <section aria-label="Review filters" className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 shadow-xs">
+            <div className="relative min-w-56 flex-[1_1_24rem]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input className="pl-9" value={search} placeholder="Search creatives by filename or review summary…" onChange={(event) => setSearch(event.currentTarget.value)} />
+              <Input className="h-9 border-0 bg-muted/45 pl-9 shadow-none focus-visible:bg-background" value={search} placeholder="Search creatives by filename or review summary…" onChange={(event) => setSearch(event.currentTarget.value)} />
             </div>
-            <FilterRow label="Status">
-              <FilterButton active={statusFilter === 'all'} onClick={() => setStatusFilter('all')}>All <FilterCount>{counts.all}</FilterCount></FilterButton>
-              <FilterButton active={statusFilter === 'pending'} onClick={() => setStatusFilter('pending')}>Pending <FilterCount>{counts.pending}</FilterCount></FilterButton>
-              <FilterButton active={statusFilter === 'approved'} onClick={() => setStatusFilter('approved')}>Approved <FilterCount>{counts.approved}</FilterCount></FilterButton>
-              <FilterButton active={statusFilter === 'disapproved'} onClick={() => setStatusFilter('disapproved')}>Disapproved <FilterCount>{counts.disapproved}</FilterCount></FilterButton>
-            </FilterRow>
-            <FilterRow label="Batches">
-              <FilterButton active={batchFilter === 'all'} onClick={() => setBatchFilter('all')}>All batches</FilterButton>
-              <FilterButton active={batchFilter === 'unchecked'} onClick={() => setBatchFilter('unchecked')}>Needs review <FilterCount>{uncheckedBatches}</FilterCount></FilterButton>
-              <FilterButton active={batchFilter === 'checked'} onClick={() => setBatchFilter('checked')}>Reviewed <FilterCount>{checkedBatches}</FilterCount></FilterButton>
-            </FilterRow>
+            <CompactFilterMenu
+              icon={<SlidersHorizontal />}
+              label="Status"
+              onChange={setStatusFilter}
+              options={[
+                { count: counts.all, label: 'All', value: 'all' },
+                { count: counts.pending, label: 'Pending', value: 'pending' },
+                { count: counts.approved, label: 'Approved', value: 'approved' },
+                { count: counts.disapproved, label: 'Disapproved', value: 'disapproved' },
+              ]}
+              value={statusFilter}
+            />
+            <CompactFilterMenu
+              icon={<Layers3 />}
+              label="Batches"
+              onChange={setBatchFilter}
+              options={[
+                { count: allGroups.length, label: 'All batches', value: 'all' },
+                { count: uncheckedBatches, label: 'Needs review', value: 'unchecked' },
+                { count: checkedBatches, label: 'Reviewed', value: 'checked' },
+              ]}
+              value={batchFilter}
+            />
+            {(search || statusFilter !== 'all' || batchFilter !== 'all') ? (
+              <Button type="button" size="icon-sm" variant="ghost" aria-label="Clear filters" title="Clear filters" onClick={() => {
+                setSearch('');
+                setStatusFilter('all');
+                setBatchFilter('all');
+              }}>
+                <X />
+              </Button>
+            ) : null}
+            <Button type="button" size="icon-sm" variant="ghost" aria-label="Refresh reviews" title="Refresh reviews" disabled={selectedQuery?.isFetching} onClick={() => void selectedQuery?.refetch()}>
+              <RefreshCw className={cn(selectedQuery?.isFetching && 'animate-spin')} />
+            </Button>
           </section>
 
           {selectedQuery?.error ? (
@@ -468,27 +510,27 @@ function ClientDashboard() {
                   .map((review) => review.job_id);
                 return (
                   <Card key={group.id} className="overflow-hidden py-0">
-                    <button type="button" className="flex w-full flex-col gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/35 sm:flex-row sm:items-center" aria-expanded={isExpanded} onClick={() => setExpandedGroups((current) => toggleSetValue(current, group.id))}>
-                      <span className="flex min-w-0 flex-1 items-center gap-3">
+                    <div className="flex flex-col gap-2 px-4 py-2.5 transition-colors hover:bg-muted/35 sm:flex-row sm:items-center">
+                      <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-expanded={isExpanded} onClick={() => setExpandedGroups((current) => toggleSetValue(current, group.id))}>
                         {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
                         <span className="min-w-0 truncate font-semibold">{formatBatchTitle(group)}</span>
                         <Badge variant="outline" className="hidden sm:inline-flex">{pending.length ? 'Needs review' : 'Reviewed'}</Badge>
-                      </span>
-                      <span className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
+                      </button>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-xs tabular-nums text-muted-foreground sm:pl-0">
                         <span>{group.reviews.length} total</span>
                         <span className="text-yellow-700 dark:text-yellow-300">{flagged} flagged</span>
                         <span className="text-emerald-700 dark:text-emerald-300">{clean} clean</span>
-                      </span>
-                    </button>
-                    {isExpanded ? (
-                      <CardContent className="border-t bg-muted/15 p-4">
-                        <div className="mb-4 flex justify-end">
-                          <Button type="button" size="sm" variant="outline" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
+                        {isExpanded ? (
+                          <Button type="button" size="xs" variant="outline" className="ml-1" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
                             {bulkMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
                             Approve recommendations ({recommendedPending.length})
                           </Button>
-                        </div>
-                        <div className="grid items-start gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        ) : null}
+                      </div>
+                    </div>
+                    {isExpanded ? (
+                      <CardContent className="border-t bg-muted/15 p-3">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(22rem,100%),1fr))] items-start gap-3">
                           {group.reviews.map((review) => (
                             <CreativeReviewCard
                               key={review.job_id}
@@ -535,6 +577,10 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
 }) {
   const { error, isSigningOut, logout, session } = useClientAuth();
   const navigate = useNavigate();
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
+  });
   const categories = useMemo(() => {
     const values = new Map<string, ClientPortalSummary[]>();
     for (const portal of session.portals) {
@@ -545,6 +591,10 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
     return [...values.entries()];
   }, [session.portals]);
 
+  useEffect(() => {
+    window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
+  }, [sidebarOpen]);
+
   function selectPortal(clientId: string) {
     window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId);
     if (onSelectClient) onSelectClient(clientId);
@@ -552,60 +602,97 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
   }
 
   return (
-    <div className="min-h-screen bg-muted/20 text-foreground lg:grid lg:grid-cols-[17rem_minmax(0,1fr)]">
-      <aside className="border-b bg-card lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r">
-        <div className="flex h-full flex-col gap-5 p-4 lg:p-5">
-          <Link to="/client" className="flex items-center gap-3">
-            <span className="grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground"><ShieldCheck className="size-4" /></span>
-            <span className="min-w-0">
-              <span className="block truncate font-heading font-semibold">AdChecked</span>
-              <span className="block text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Creative reviews</span>
-            </span>
-          </Link>
-          <nav className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:gap-5 lg:overflow-visible">
+    <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="bg-muted/20 text-foreground">
+      <Sidebar collapsible="icon">
+        <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
+          <div className="flex items-center gap-1">
+            <Link to="/client" className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><ShieldCheck className="size-4" /></span>
+              <span className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+                <span className="truncate font-heading text-sm font-semibold">AdChecked</span>
+                <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Creative reviews</span>
+              </span>
+            </Link>
+            <SidebarTrigger className="md:hidden" aria-label="Close navigation" title="Close navigation" />
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <nav aria-label="Client workspaces">
             {categories.map(([category, portals]) => (
-              <div key={category} className="grid shrink-0 gap-1.5 lg:shrink">
-                <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{category}</p>
-                <div className="flex gap-1.5 lg:grid">
+              <SidebarGroup key={category}>
+                <SidebarGroupLabel className="uppercase tracking-[0.12em]">{category}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
                   {portals.map((portal) => (
-                    <button
-                      key={portal.client_id}
-                      type="button"
-                      className={cn(
-                        'flex min-w-40 items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors lg:min-w-0',
-                        activeClientId === portal.client_id ? 'bg-accent text-accent-foreground ring-1 ring-border' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                      )}
-                      onClick={() => selectPortal(portal.client_id)}
-                    >
-                      <span className="truncate">{portal.display_name}</span>
-                      <Badge variant="secondary" className="h-5 px-1.5 text-[10px] tabular-nums">{counts?.get(portal.client_id) ?? '—'}</Badge>
-                    </button>
+                    <SidebarMenuItem key={portal.client_id}>
+                      <SidebarMenuButton
+                        isActive={activeClientId === portal.client_id}
+                        tooltip={portal.display_name}
+                        onClick={() => selectPortal(portal.client_id)}
+                      >
+                        <ShieldCheck />
+                        <span>{portal.display_name}</span>
+                      </SidebarMenuButton>
+                      <SidebarMenuBadge>{counts?.get(portal.client_id) ?? '—'}</SidebarMenuBadge>
+                    </SidebarMenuItem>
                   ))}
-                </div>
-              </div>
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
             ))}
           </nav>
-          <div className="ml-auto lg:mt-auto lg:ml-0">
-            <div className="hidden rounded-lg border bg-muted/25 p-3 lg:block">
-              <p className="text-xs font-medium">Signed in as {session.username}</p>
-            </div>
-            <Button
-              type="button"
-              className="mt-2 w-full"
-              variant="ghost"
-              size="sm"
-              disabled={isSigningOut}
-              onClick={() => void logout()}
-            >
-              {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
-              {isSigningOut ? 'Signing out' : 'Sign out'}
-            </Button>
-            {error ? <p role="alert" className="mt-2 max-w-60 text-xs text-destructive">{error}</p> : null}
+        </SidebarContent>
+        <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
+          <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
+            <p className="font-medium">Signed in as {session.username}</p>
+            <p className="text-muted-foreground">Client view</p>
           </div>
-        </div>
-      </aside>
-      <main className="min-w-0 p-4 sm:p-6 xl:p-8">{children}</main>
-    </div>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Sign out" disabled={isSigningOut} onClick={() => void logout()}>
+              {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
+                <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+          {error ? <p role="alert" className="max-w-60 text-xs text-destructive group-data-[collapsible=icon]:hidden">{error}</p> : null}
+        </SidebarFooter>
+        <ClientSidebarBorderTrigger />
+        <SidebarRail />
+      </Sidebar>
+      <SidebarInset className="min-w-0 bg-muted/20">
+        <ClientMobileHeader />
+        <main className="min-w-0 p-4 sm:p-5 xl:p-6">{children}</main>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+function ClientMobileHeader() {
+  const { openMobile } = useSidebar();
+  const label = openMobile ? 'Close navigation' : 'Open navigation';
+
+  return (
+    <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur md:hidden">
+      <SidebarTrigger className="-ml-1" aria-label={label} title={label} />
+      <Link to="/client" className="flex items-center gap-2 font-heading text-sm font-semibold">
+        <ShieldCheck className="size-4" />
+        AdChecked
+      </Link>
+    </header>
+  );
+}
+
+function ClientSidebarBorderTrigger() {
+  const { open } = useSidebar();
+  const label = open ? 'Collapse navigation' : 'Expand navigation';
+
+  return (
+    <SidebarTrigger
+      className="absolute top-5 -right-3.5 z-30 hidden size-7 rounded-full border border-sidebar-border bg-background shadow-sm hover:bg-muted md:inline-flex"
+      aria-label={label}
+      title={`${label} (Ctrl+B)`}
+    />
   );
 }
 
@@ -921,16 +1008,48 @@ function ClientPdfDownloadButton({ clientId, jobId }: { clientId: string; jobId:
   return <div className="grid gap-1"><Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing report' : 'Download report'}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
 }
 
-function FilterRow({ children, label }: { children: ReactNode; label: string }) {
-  return <div className="flex flex-col gap-2 sm:flex-row sm:items-center"><p className="w-20 shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</p><div className="flex flex-wrap gap-2">{children}</div></div>;
-}
+function CompactFilterMenu<T extends string>({ icon, label, onChange, options, value }: {
+  icon: ReactNode;
+  label: string;
+  onChange: (value: T) => void;
+  options: { count: number; label: string; value: T }[];
+  value: T;
+}) {
+  const selected = options.find((option) => option.value === value) ?? options[0];
 
-function FilterButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
-  return <Button type="button" size="sm" variant={active ? 'secondary' : 'outline'} aria-pressed={active} onClick={onClick}>{children}</Button>;
-}
-
-function FilterCount({ children }: { children: ReactNode }) {
-  return <span className="text-xs tabular-nums text-muted-foreground">{children}</span>;
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        className={cn(buttonVariants({ size: 'sm', variant: value === options[0]?.value ? 'outline' : 'secondary' }), 'shrink-0')}
+        aria-label={`${label}: ${selected?.label ?? ''}`}
+      >
+        {icon}
+        <span className="hidden text-muted-foreground xl:inline">{label}</span>
+        <span>{selected?.label}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{selected?.count}</span>
+        <ChevronDown />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner sideOffset={6} align="end" className="z-50 outline-none">
+          <Menu.Popup className="min-w-52 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
+            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Filter by {label.toLocaleLowerCase()}</div>
+            {options.map((option) => (
+              <Menu.Item
+                key={option.value}
+                closeOnClick
+                className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                onClick={() => onChange(option.value)}
+              >
+                <span className="flex-1 font-medium">{option.label}</span>
+                <span className="text-xs tabular-nums text-muted-foreground">{option.count}</span>
+                <Check className={cn('size-4 text-primary', option.value === value ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
+              </Menu.Item>
+            ))}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
 }
 
 function MetricBadge({ label, tone = 'neutral', value }: { label: string; tone?: 'neutral' | 'success' | 'warning'; value: number }) {
