@@ -73,7 +73,7 @@ const router = createRouter({
 let clientRoot: Root | undefined;
 
 export function mountClientApp(element: HTMLElement) {
-  document.title = 'Client sign in · AdChecked';
+  document.title = 'Sign in · AdChecked';
   clientRoot ??= createRoot(element);
   clientRoot.render(
     <TooltipProvider>

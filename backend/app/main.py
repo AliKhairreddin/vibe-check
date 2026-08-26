@@ -690,7 +690,7 @@ async def owned_api_review(principal:ApiPrincipal, job_id:str)->dict:
 def client_portal(client_id:str)->dict[str, str]:
     config=CLIENT_PORTALS.get(client_id)
     if config is None:
-        raise HTTPException(404, 'Client portal not found.')
+        raise HTTPException(404, 'Workspace not found.')
     return config
 
 
@@ -843,7 +843,7 @@ def clear_session_cookie(response:Response, request:Request, name:str)->None:
 def authenticate_client_credentials(username:str,password:str)->dict:
     username=username.strip()
     if not username or not password:
-        raise HTTPException(401, 'Invalid or missing client credentials.')
+        raise HTTPException(401, 'The username or password is incorrect.')
 
     admin_username=os.getenv('CLIENT_ADMIN_USERNAME', 'admin').strip() or 'admin'
     admin_password=os.getenv('CLIENT_ADMIN_PASSWORD', '')
@@ -874,7 +874,7 @@ def authenticate_client_credentials(username:str,password:str)->dict:
                 'username':expected_username,
                 'portal_ids':[client_id],
             }
-    raise HTTPException(401, 'Invalid or missing client credentials.')
+    raise HTTPException(401, 'The username or password is incorrect.')
 
 
 def client_cookie_session(request:Request)->dict|None:
@@ -924,7 +924,7 @@ def require_client(request:Request, client_id:str)->dict[str, str]:
     config=client_portal(client_id)
     session=authenticate_client(request)
     if client_id not in session['portal_ids']:
-        raise HTTPException(404, 'Client portal not found.')
+        raise HTTPException(404, 'Workspace not found.')
     return config
 
 
@@ -1224,7 +1224,7 @@ def client_reviews(client_id:str, request:Request, limit:int=1000):
 def client_review_detail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     fast_detail=get_client_review_detail(client_id, config['offer_id'], job_id)
     if fast_detail:
         return {
@@ -1243,7 +1243,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
         }
     report=get_client_review_report(client_id, config['offer_id'], job_id)
     if report is None:
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     matching=next((
         review for review in list_client_reviews(client_id, config['offer_id'], 1000)
         if review.get('jobId') == job_id
@@ -1251,7 +1251,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
     try:
         status=get_status(job_id)
     except FileNotFoundError:
-        raise HTTPException(404, 'Client review not found') from None
+        raise HTTPException(404, 'Review not found.') from None
     return {
         'client_id':client_id,
         'display_name':config['display_name'],
@@ -1288,15 +1288,15 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
 def client_review_pdf(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     if get_client_review_report(client_id, config['offer_id'], job_id) is None:
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     try:
         return pdf_artifact_response(ensure_review_pdf(job_id, config['offer_id']))
     except FileNotFoundError:
-        raise HTTPException(404, 'Report not ready') from None
+        raise HTTPException(404, 'Report not ready.') from None
     except KeyError:
-        raise HTTPException(404, 'Offer report not found') from None
+        raise HTTPException(404, 'Report not ready.') from None
 
 
 @app.put('/api/client/{client_id}/reviews/{job_id}/decision')
@@ -1308,12 +1308,12 @@ def decide_client_review(
 ):
     config=require_client(request, client_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     if payload.decision == 'pending':
         try:
             clear_client_review_decision(client_id, config['offer_id'], job_id)
         except FileNotFoundError:
-            raise HTTPException(404, 'Client review not found') from None
+            raise HTTPException(404, 'Review not found.') from None
         return None
     try:
         value=set_client_review_decision(
@@ -1325,7 +1325,7 @@ def decide_client_review(
             payload.feedback_note,
         )
     except FileNotFoundError:
-        raise HTTPException(404, 'Client review not found') from None
+        raise HTTPException(404, 'Review not found.') from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     return {
@@ -1340,7 +1340,7 @@ def decide_client_review(
 def client_review_thumbnail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
     if not client_review_exists(config['offer_id'], job_id):
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     frames=list_review_evidence_frames(job_id)
     if not frames:
         raise HTTPException(404, 'Creative thumbnail not found')
@@ -1351,7 +1351,7 @@ def client_review_thumbnail(client_id:str, job_id:str, request:Request):
 def client_review_frame(client_id:str, job_id:str, filename:str, request:Request):
     config=require_client(request, client_id)
     if not client_review_exists(config['offer_id'], job_id):
-        raise HTTPException(404, 'Client review not found')
+        raise HTTPException(404, 'Review not found.')
     return evidence_frame_response(job_id, filename)
 
 

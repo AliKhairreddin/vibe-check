@@ -146,10 +146,10 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isChecking) return;
     document.title = !session
-      ? 'Client sign in · AdChecked'
+      ? 'Sign in · AdChecked'
       : pathname.includes('/reviews/')
         ? 'Creative review · AdChecked'
-        : 'Client dashboard · AdChecked';
+        : 'Creative reviews · AdChecked';
   }, [isChecking,pathname,session]);
 
   async function unlock(event: FormEvent<HTMLFormElement>) {
@@ -212,7 +212,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
             </span>
             <CardTitle as="h1" className="text-2xl">Sign in to AdChecked</CardTitle>
             <CardDescription>
-              Sign in to open your client review dashboard. Your account controls which creatives you can access.
+              Sign in to review your creatives and share your decisions.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -241,13 +241,13 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
               </div>
               <Button type="submit" size="lg" disabled={isChecking || !username.trim() || !password}>
                 {isChecking ? <LoaderCircle className="animate-spin" /> : <KeyRound />}
-                {isChecking ? 'Signing in' : 'Open client dashboard'}
+                {isChecking ? 'Signing in' : 'Sign in'}
               </Button>
             </form>
             {error ? (
               <Alert variant="destructive" className="mt-4">
                 <AlertCircle />
-                <AlertTitle>Access unavailable</AlertTitle>
+                <AlertTitle>Sign-in unsuccessful</AlertTitle>
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             ) : null}
@@ -415,7 +415,7 @@ function ClientDashboard() {
         <div className="grid gap-5">
           <section className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Creative review dashboard</p>
+              <p className="text-sm font-medium text-muted-foreground">Your creative reviews</p>
               <h1 className="font-heading text-3xl font-semibold tracking-tight">{selectedPortal.display_name}</h1>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -442,8 +442,8 @@ function ClientDashboard() {
             </FilterRow>
             <FilterRow label="Batches">
               <FilterButton active={batchFilter === 'all'} onClick={() => setBatchFilter('all')}>All batches</FilterButton>
-              <FilterButton active={batchFilter === 'unchecked'} onClick={() => setBatchFilter('unchecked')}>Unchecked <FilterCount>{uncheckedBatches}</FilterCount></FilterButton>
-              <FilterButton active={batchFilter === 'checked'} onClick={() => setBatchFilter('checked')}>Checked <FilterCount>{checkedBatches}</FilterCount></FilterButton>
+              <FilterButton active={batchFilter === 'unchecked'} onClick={() => setBatchFilter('unchecked')}>Needs review <FilterCount>{uncheckedBatches}</FilterCount></FilterButton>
+              <FilterButton active={batchFilter === 'checked'} onClick={() => setBatchFilter('checked')}>Reviewed <FilterCount>{checkedBatches}</FilterCount></FilterButton>
             </FilterRow>
           </section>
 
@@ -472,7 +472,7 @@ function ClientDashboard() {
                       <span className="flex min-w-0 flex-1 items-center gap-3">
                         {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
                         <span className="min-w-0 truncate font-semibold">{formatBatchTitle(group)}</span>
-                        <Badge variant="outline" className="hidden sm:inline-flex">{pending.length ? 'Unchecked' : 'Checked'}</Badge>
+                        <Badge variant="outline" className="hidden sm:inline-flex">{pending.length ? 'Needs review' : 'Reviewed'}</Badge>
                       </span>
                       <span className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
                         <span>{group.reviews.length} total</span>
@@ -516,7 +516,7 @@ function ClientDashboard() {
               <div className="grid max-w-sm gap-2">
                 <FileText className="mx-auto size-7 text-muted-foreground" />
                 <p className="font-medium">No creatives match the current filters</p>
-                <p className="text-sm text-muted-foreground">Try another client, status, batch state, or search.</p>
+                <p className="text-sm text-muted-foreground">Try changing the status, review state, or search.</p>
               </div>
             </div>
           )}
@@ -559,7 +559,7 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
             <span className="grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground"><ShieldCheck className="size-4" /></span>
             <span className="min-w-0">
               <span className="block truncate font-heading font-semibold">AdChecked</span>
-              <span className="block text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Client review dashboard</span>
+              <span className="block text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Creative reviews</span>
             </span>
           </Link>
           <nav className="flex gap-2 overflow-x-auto pb-1 lg:grid lg:gap-5 lg:overflow-visible">
@@ -588,7 +588,6 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
           <div className="ml-auto lg:mt-auto lg:ml-0">
             <div className="hidden rounded-lg border bg-muted/25 p-3 lg:block">
               <p className="text-xs font-medium">Signed in as {session.username}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{session.role === 'admin' ? 'Admin view · all clients' : 'Client view'}</p>
             </div>
             <Button
               type="button"
@@ -678,9 +677,9 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
     <div className="grid gap-4 border-t bg-muted/10 p-3">
       <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-64 w-full rounded-lg" clientId={clientId} jobId={review.job_id} />
       <div className="grid gap-2">
-        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge>{isCalibrationFeedback(review) ? <Badge variant="secondary">Calibrates future reviews</Badge> : null}</div>
+        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge></div>
         <p className="text-sm leading-6 text-muted-foreground">{preview.summary}</p>
-        {review.decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5"><span className="font-semibold">Client feedback:</span> {review.decision.feedback_note}</p> : null}
+        {review.decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5"><span className="font-semibold">Your note:</span> {review.decision.feedback_note}</p> : null}
       </div>
       <div className="grid gap-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flags</p>
@@ -726,7 +725,7 @@ function ClientReviewDetail() {
   if (!portal) {
     return (
       <ClientPortalFrame activeClientId={clientId}>
-        <Alert variant="destructive"><LockKeyhole /><AlertTitle>Client access unavailable</AlertTitle><AlertDescription>Your account does not have access to this client.</AlertDescription><AlertAction><Link to="/client" className={buttonVariants({ variant: 'outline', size: 'xs' })}>Back to dashboard</Link></AlertAction></Alert>
+        <Alert variant="destructive"><LockKeyhole /><AlertTitle>Review unavailable</AlertTitle><AlertDescription>You do not have access to this workspace.</AlertDescription><AlertAction><Link to="/client" className={buttonVariants({ variant: 'outline', size: 'xs' })}>Back to reviews</Link></AlertAction></Alert>
       </ClientPortalFrame>
     );
   }
@@ -758,10 +757,10 @@ function ClientReviewDetail() {
             <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-36 w-28 sm:h-40 sm:w-32" clientId={clientId} jobId={review.job_id} />
             <div className="grid content-start gap-3">
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{report.summary}</p>
-              <div className="flex flex-wrap gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Client override</Badge> : null}</div>
+              <div className="flex flex-wrap gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
               <div className="flex flex-wrap items-center gap-2">
-                <ClientPdfDownloadButton clientId={clientId} displayName={portal.display_name} jobId={jobId} />
-                {googleDriveUrl ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={googleDriveUrl} target="_blank" rel="noreferrer"><ExternalLink />Open in Google Drive</a> : <span className="text-xs text-muted-foreground">Google Drive link unavailable for this upload.</span>}
+                <ClientPdfDownloadButton clientId={clientId} jobId={jobId} />
+                {googleDriveUrl ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={googleDriveUrl} target="_blank" rel="noreferrer"><ExternalLink />Open in Google Drive</a> : null}
               </div>
             </div>
           </CardContent>
@@ -808,8 +807,7 @@ function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
   const [reason, setReason] = useState<ClientFeedbackReason | ''>('');
   const [note, setNote] = useState('');
   const options = feedbackReasonOptions(decision);
-  const canCalibrate = reason ? isCalibrationReason(reason) : false;
-  const noteRequired = canCalibrate;
+  const noteRequired = reason ? isCalibrationReason(reason) : false;
   const canSubmit = Boolean(reason) && (!noteRequired || note.trim().length >= 3);
 
   useEffect(() => {
@@ -827,8 +825,8 @@ function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
       }}
     >
       <div className="grid gap-1">
-        <p className="text-sm font-semibold">Why does your decision differ?</p>
-        <p className="text-xs leading-5 text-muted-foreground">Reusable policy feedback can calibrate future {review.ai_status === 'red' ? 'flags' : 'reviews'} for this partner. One-off and business decisions stay excluded.</p>
+        <p className="text-sm font-semibold">Why are you choosing a different decision?</p>
+        <p className="text-xs leading-5 text-muted-foreground">Choose the reason that best matches your decision.</p>
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor={`feedback-reason-${review.job_id}`}>Reason</Label>
@@ -843,16 +841,15 @@ function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
         </select>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'What should AdChecked learn?' : 'Optional note'}</Label>
+        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'Additional details' : 'Additional details (optional)'}</Label>
         <Textarea
           id={`feedback-note-${review.job_id}`}
           maxLength={1000}
-          placeholder={noteRequired ? 'Describe the rule or distinction to apply next time.' : 'Add context for the AdChecked team.'}
+          placeholder={noteRequired ? 'Tell us what should be considered for this creative.' : 'Share any helpful context.'}
           value={note}
           onChange={(event) => setNote(event.currentTarget.value)}
         />
       </div>
-      {canCalibrate ? <p className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300"><ShieldCheck className="size-3.5" />This will become a guarded precedent for future reviews.</p> : null}
       <div className="flex justify-end gap-2">
         <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={onCancel}>Cancel</Button>
         <Button type="submit" size="xs" disabled={isSaving || !canSubmit}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Save decision</Button>
@@ -879,8 +876,7 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
         <Button type="button" size="xs" variant={review.decision?.decision === 'approved' ? 'default' : 'outline'} disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
         <Button type="button" size="xs" variant={review.decision?.decision === 'disapproved' ? 'destructive' : 'outline'} disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X /> Disapprove</Button>
         {review.decision ? <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => onDecide({ decision: 'pending' })}>Reset to pending</Button> : null}
-        {isClientOverride(review) ? <Badge variant="secondary">Override</Badge> : null}
-        {isCalibrationFeedback(review) ? <Badge variant="outline">Learning signal</Badge> : null}
+        {isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}
       </div>
       {draftDecision ? (
         <FeedbackForm
@@ -898,7 +894,7 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
   );
 }
 
-function ClientPdfDownloadButton({ clientId, displayName, jobId }: { clientId: string; displayName: string; jobId: string }) {
+function ClientPdfDownloadButton({ clientId, jobId }: { clientId: string; jobId: string }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState('');
   async function download() {
@@ -922,7 +918,7 @@ function ClientPdfDownloadButton({ clientId, displayName, jobId }: { clientId: s
       setIsDownloading(false);
     }
   }
-  return <div className="grid gap-1"><Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing PDF' : `Download ${displayName} PDF`}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
+  return <div className="grid gap-1"><Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing report' : 'Download report'}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
 }
 
 function FilterRow({ children, label }: { children: ReactNode; label: string }) {
@@ -1009,24 +1005,19 @@ function isCalibrationReason(reason: ClientFeedbackReason) {
   return reason === 'false_positive' || reason === 'missed_policy_issue' || reason === 'partner_preference';
 }
 
-function isCalibrationFeedback(review: ClientReviewItem) {
-  const reason = review.decision?.feedback_reason;
-  return Boolean(reason && isCalibrationReason(reason));
-}
-
 function feedbackReasonOptions(decision: Exclude<ClientDecisionValue, 'pending'>): { label: string; value: ClientFeedbackReason }[] {
   if (decision === 'approved') {
     return [
       { label: 'AdChecked was too strict', value: 'false_positive' },
-      { label: 'Partner preference to reuse', value: 'partner_preference' },
-      { label: 'One-off exception', value: 'one_off_exception' },
-      { label: 'Business decision, not policy', value: 'business_decision' },
+      { label: 'Use this preference for similar creatives', value: 'partner_preference' },
+      { label: 'Approve this creative as an exception', value: 'one_off_exception' },
+      { label: 'Business decision', value: 'business_decision' },
     ];
   }
   return [
     { label: 'AdChecked missed a policy issue', value: 'missed_policy_issue' },
-    { label: 'Partner preference to reuse', value: 'partner_preference' },
-    { label: 'Business decision, not policy', value: 'business_decision' },
+    { label: 'Use this preference for similar creatives', value: 'partner_preference' },
+    { label: 'Business decision', value: 'business_decision' },
   ];
 }
 
