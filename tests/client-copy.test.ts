@@ -27,3 +27,11 @@ test('uses direct customer-facing sign-in and decision copy', () => {
   assert.match(clientDashboardSource, /Why are you choosing a different decision\?/);
   assert.match(clientDashboardSource, /Different from recommendation/);
 });
+
+test('keeps red, yellow, and green review counts separate', () => {
+  assert.match(clientDashboardSource, /label="red" tone="danger" value=\{statusCounts\.red\}/);
+  assert.match(clientDashboardSource, /label="yellow" tone="warning" value=\{statusCounts\.yellow\}/);
+  assert.match(clientDashboardSource, /label="green" tone="success" value=\{statusCounts\.green\}/);
+  assert.doesNotMatch(clientDashboardSource, /ai_status !== 'green'/);
+  assert.doesNotMatch(clientDashboardSource, /label="flagged"/);
+});

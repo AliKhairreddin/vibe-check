@@ -405,8 +405,11 @@ function ClientDashboard() {
   }), [reviews]);
   const checkedBatches = allGroups.filter((group) => group.reviews.every((review) => Boolean(review.decision))).length;
   const uncheckedBatches = allGroups.length - checkedBatches;
-  const flaggedCount = reviews.filter((review) => review.ai_status !== 'green').length;
-  const cleanCount = reviews.length - flaggedCount;
+  const statusCounts = {
+    green: reviews.filter((review) => review.ai_status === 'green').length,
+    yellow: reviews.filter((review) => review.ai_status === 'yellow').length,
+    red: reviews.filter((review) => review.ai_status === 'red').length,
+  };
   const portalCounts = new Map(session.portals.map((portal, index) => [
     portal.client_id,
     queries[index]?.data?.reviews.length,
@@ -442,8 +445,9 @@ function ClientDashboard() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <MetricBadge label="total" value={reviews.length} />
-              <MetricBadge label="flagged" tone="warning" value={flaggedCount} />
-              <MetricBadge label="clean" tone="success" value={cleanCount} />
+              <MetricBadge label="red" tone="danger" value={statusCounts.red} />
+              <MetricBadge label="yellow" tone="warning" value={statusCounts.yellow} />
+              <MetricBadge label="green" tone="success" value={statusCounts.green} />
             </div>
           </section>
 
@@ -502,8 +506,9 @@ function ClientDashboard() {
             <div className="grid gap-3">
               {visibleGroups.map((group) => {
                 const isExpanded = expandedGroups.has(group.id);
-                const flagged = group.reviews.filter((review) => review.ai_status !== 'green').length;
-                const clean = group.reviews.length - flagged;
+                const red = group.reviews.filter((review) => review.ai_status === 'red').length;
+                const yellow = group.reviews.filter((review) => review.ai_status === 'yellow').length;
+                const green = group.reviews.filter((review) => review.ai_status === 'green').length;
                 const pending = group.reviews.filter((review) => !review.decision).map((review) => review.job_id);
                 const recommendedPending = group.reviews
                   .filter((review) => !review.decision && aiDecision(review) === 'approved')
@@ -518,8 +523,9 @@ function ClientDashboard() {
                       </button>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-xs tabular-nums text-muted-foreground sm:pl-0">
                         <span>{group.reviews.length} total</span>
-                        <span className="text-yellow-700 dark:text-yellow-300">{flagged} flagged</span>
-                        <span className="text-emerald-700 dark:text-emerald-300">{clean} clean</span>
+                        <span className="text-red-700 dark:text-red-300">{red} red</span>
+                        <span className="text-yellow-700 dark:text-yellow-300">{yellow} yellow</span>
+                        <span className="text-emerald-700 dark:text-emerald-300">{green} green</span>
                         {isExpanded ? (
                           <Button type="button" size="xs" variant="outline" className="ml-1" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
                             {bulkMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
@@ -718,7 +724,7 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
   }
 
   return (
-    <article className={cn('self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors', review.ai_status !== 'green' && 'border-yellow-600/45', isExpanded && 'ring-1 ring-ring/30')} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
+    <article className={cn('self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors', review.ai_status === 'yellow' && 'border-yellow-600/45', review.ai_status === 'red' && 'border-red-600/45', isExpanded && 'ring-1 ring-ring/30')} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
       <div className="flex items-center gap-2 p-3">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={isExpanded} onClick={onToggle}>
           {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
@@ -1052,8 +1058,8 @@ function CompactFilterMenu<T extends string>({ icon, label, onChange, options, v
   );
 }
 
-function MetricBadge({ label, tone = 'neutral', value }: { label: string; tone?: 'neutral' | 'success' | 'warning'; value: number }) {
-  return <Badge variant="outline" className={cn('px-2.5 py-1 tabular-nums', tone === 'warning' && 'border-yellow-600/35 bg-yellow-400/10 text-yellow-700 dark:text-yellow-300', tone === 'success' && 'border-emerald-600/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300')}>{value} {label}</Badge>;
+function MetricBadge({ label, tone = 'neutral', value }: { label: string; tone?: 'danger' | 'neutral' | 'success' | 'warning'; value: number }) {
+  return <Badge variant="outline" className={cn('px-2.5 py-1 tabular-nums', tone === 'danger' && 'border-red-600/35 bg-red-500/10 text-red-700 dark:text-red-300', tone === 'warning' && 'border-yellow-600/35 bg-yellow-400/10 text-yellow-700 dark:text-yellow-300', tone === 'success' && 'border-emerald-600/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300')}>{value} {label}</Badge>;
 }
 
 function AiRecommendation({ status }: { status: OverallStatus }) {
@@ -1164,9 +1170,9 @@ function mediaLabel(value: ClientReviewItem['media_kind']) {
 }
 
 function statusLabel(status: OverallStatus) {
-  if (status === 'green') return 'Clean';
-  if (status === 'yellow') return 'Flagged';
-  return 'Critical';
+  if (status === 'green') return 'Green';
+  if (status === 'yellow') return 'Yellow';
+  return 'Red';
 }
 
 function sourceLabel(source: Finding['source']) {
