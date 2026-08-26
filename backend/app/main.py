@@ -783,8 +783,7 @@ def current_admin_credential_fingerprint(session:dict)->str:
     if role == 'owner':
         return credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
     if role == 'employee':
-        username=os.getenv('EMPLOYEE_ADMIN_USERNAME','isham').strip() or 'isham'
-        return credential_fingerprint(username,os.getenv('EMPLOYEE_ADMIN_PASSWORD',''))
+        return credential_fingerprint('employee',os.getenv('EMPLOYEE_ADMIN_PASSWORD',''))
     return ''
 
 
@@ -938,7 +937,6 @@ def require_automation_secret(request:Request)->None:
 @app.post('/api/admin/session')
 async def create_admin_session(request:Request):
     owner_password=os.getenv('ADMIN_PASSWORD','')
-    employee_username=os.getenv('EMPLOYEE_ADMIN_USERNAME','isham').strip() or 'isham'
     employee_password=os.getenv('EMPLOYEE_ADMIN_PASSWORD','')
     if not owner_password:
         raise HTTPException(503,'Admin access is not configured.')
@@ -946,7 +944,6 @@ async def create_admin_session(request:Request):
         payload=await request.json()
     except (ValueError,json.JSONDecodeError):
         raise HTTPException(400,'Provide a JSON password.') from None
-    username=str(payload.get('username') or '').strip() if isinstance(payload,dict) else ''
     password=str(payload.get('password') or '') if isinstance(payload,dict) else ''
     if password and secrets.compare_digest(password,owner_password):
         role='owner'
@@ -954,12 +951,11 @@ async def create_admin_session(request:Request):
         fingerprint=credential_fingerprint('admin',owner_password)
     elif (
         employee_password
-        and secrets.compare_digest(username,employee_username)
         and password
         and secrets.compare_digest(password,employee_password)
     ):
         role='employee'
-        username=employee_username
+        username='employee'
         fingerprint=credential_fingerprint(username,employee_password)
     else:
         raise HTTPException(401,'Invalid or missing admin password.')

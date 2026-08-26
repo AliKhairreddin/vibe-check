@@ -33,11 +33,9 @@ type AdminAccessValue = {
   isChecking: boolean;
   isSigningOut: boolean;
   isUnlocked: boolean;
-  loginUsername: string;
   lock: () => Promise<void>;
   password: string;
   role: AdminSession['role'] | null;
-  setLoginUsername: (value: string) => void;
   setPassword: (value: string) => void;
   unlock: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   username: string;
@@ -52,7 +50,6 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [error, setError] = useState('');
-  const [loginUsername, setLoginUsernameState] = useState('');
   const [role, setRole] = useState<AdminSession['role'] | null>(null);
   const [username, setUsername] = useState('');
 
@@ -82,11 +79,6 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
     if (error) setError('');
   }
 
-  function setLoginUsername(value: string) {
-    setLoginUsernameState(value);
-    if (error) setError('');
-  }
-
   async function unlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const candidate = password.trim();
@@ -97,9 +89,8 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
     setIsChecking(true);
     setError('');
     try {
-      const session = await verifyAdminPassword(candidate, loginUsername.trim());
+      const session = await verifyAdminPassword(candidate);
       setPasswordState('');
-      setLoginUsernameState('');
       applySession(session);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['offer-profiles'] }),
@@ -124,7 +115,6 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
       return;
     }
     setPasswordState('');
-    setLoginUsernameState('');
     setIsUnlocked(false);
     setRole(null);
     setUsername('');
@@ -139,11 +129,9 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
       isChecking,
       isSigningOut,
       isUnlocked,
-      loginUsername,
       lock,
       password,
       role,
-      setLoginUsername,
       setPassword,
       unlock,
       username,
@@ -192,9 +180,7 @@ function AdminLoginCard({ compact = false }: { compact?: boolean }) {
   const {
     error,
     isChecking,
-    loginUsername,
     password,
-    setLoginUsername,
     setPassword,
     unlock,
   } = useAdminAccess();
@@ -209,23 +195,11 @@ function AdminLoginCard({ compact = false }: { compact?: boolean }) {
           Admin sign in
         </CardTitle>
         <CardDescription>
-          The existing owner password keeps full access. Employees sign in with their username and can work with reviews without changing settings.
+          The existing owner password keeps full access. The separate employee password opens review tools without settings access.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form className="grid gap-4" onSubmit={unlock}>
-          <div className="grid gap-2">
-            <Label htmlFor={compact ? 'inline-admin-username' : 'admin-username'}>Employee username</Label>
-            <Input
-              id={compact ? 'inline-admin-username' : 'admin-username'}
-              value={loginUsername}
-              autoComplete="username"
-              autoFocus={!compact}
-              disabled={isChecking}
-              placeholder="Leave blank for owner access"
-              onChange={(event) => setLoginUsername(event.currentTarget.value)}
-            />
-          </div>
           <div className="grid gap-2">
             <Label htmlFor={compact ? 'inline-admin-password' : 'admin-password'}>Password</Label>
             <Input
@@ -233,6 +207,7 @@ function AdminLoginCard({ compact = false }: { compact?: boolean }) {
               type="password"
               value={password}
               autoComplete="current-password"
+              autoFocus={!compact}
               disabled={isChecking}
               onChange={(event) => setPassword(event.currentTarget.value)}
             />

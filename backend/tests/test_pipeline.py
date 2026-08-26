@@ -5526,7 +5526,6 @@ async def test_employee_admin_can_submit_reviews_but_cannot_change_settings(tmp_
     monkeypatch.setenv('ADMIN_PASSWORD','owner-secret')
     monkeypatch.setenv('CLIENT_ADMIN_USERNAME','client-admin')
     monkeypatch.setenv('CLIENT_ADMIN_PASSWORD','client-admin-secret')
-    monkeypatch.setenv('EMPLOYEE_ADMIN_USERNAME','employee')
     monkeypatch.setenv('EMPLOYEE_ADMIN_PASSWORD','employee-secret')
     monkeypatch.setenv('SESSION_SECRET','session-secret-for-tests')
     profile=OfferProfile(
@@ -5562,7 +5561,7 @@ async def test_employee_admin_can_submit_reviews_but_cannot_change_settings(tmp_
         signed_in=await client.post(
             '/api/admin/session',
             headers={'origin':'https://admin.adchecked.com'},
-            json={'username':'employee','password':'employee-secret'},
+            json={'password':'employee-secret'},
         )
         checked=await client.get('/api/admin/session')
         submitted=await client.post(

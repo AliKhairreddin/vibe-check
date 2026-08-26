@@ -154,8 +154,8 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
   role-scoped client review portal. Usernames default to `admin`, `kissterra`,
   `acp`, `lead-economy`, and `smart-financial` and can be overridden with the
   matching `*_CLIENT_USERNAME` variables;
-- `EMPLOYEE_ADMIN_USERNAME` and `EMPLOYEE_ADMIN_PASSWORD` for the separate
-  employee admin-console login. Employees can submit and inspect reviews but
+- `EMPLOYEE_ADMIN_PASSWORD` for the separate password-only employee
+  admin-console login. Employees can submit and inspect reviews but
   cannot change settings, offers, integrations, or automations;
 - `MAX_UPLOAD_MB`, `JOB_WORKER_CONCURRENCY`, and `REVIEW_BACKEND_SHARDS` for resource limits and container distribution.
 

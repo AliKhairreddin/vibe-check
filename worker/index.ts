@@ -26,7 +26,6 @@ type OptionalSecrets = Env & {
   CLIENT_ADMIN_PASSWORD?: string;
   CLIENT_ADMIN_USERNAME?: string;
   EMPLOYEE_ADMIN_PASSWORD?: string;
-  EMPLOYEE_ADMIN_USERNAME?: string;
   KISSTERRA_CLIENT_PASSWORD?: string;
   KISSTERRA_CLIENT_USERNAME?: string;
   LEAD_ECONOMY_CLIENT_PASSWORD?: string;
@@ -287,7 +286,6 @@ export class ReviewBackend extends Container<Env> {
       CLIENT_ADMIN_PASSWORD: optionalSecrets.CLIENT_ADMIN_PASSWORD ?? "",
       CLIENT_ADMIN_USERNAME: optionalSecrets.CLIENT_ADMIN_USERNAME ?? "admin",
       EMPLOYEE_ADMIN_PASSWORD: optionalSecrets.EMPLOYEE_ADMIN_PASSWORD ?? "",
-      EMPLOYEE_ADMIN_USERNAME: optionalSecrets.EMPLOYEE_ADMIN_USERNAME ?? "isham",
       CONVEX_HTTP_SECRET: env.CONVEX_HTTP_SECRET,
       CONVEX_URL: env.CONVEX_URL,
       CORS_ALLOWED_ORIGINS: env.CORS_ALLOWED_ORIGINS,

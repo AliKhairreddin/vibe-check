@@ -776,14 +776,11 @@ export async function deleteReview(id: string): Promise<DeletedReview> {
   });
 }
 
-export async function verifyAdminPassword(
-  password: string,
-  username = ''
-): Promise<AdminSession> {
+export async function verifyAdminPassword(password: string): Promise<AdminSession> {
   return requestJson<AdminSession>('/api/admin/session', {
     method: 'POST',
     headers: adminHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ password, username }),
+    body: JSON.stringify({ password }),
   });
 }
 
