@@ -25,7 +25,7 @@ from app.review_pipeline import vision as review_vision
 from app.review_pipeline.models import ComplianceReport, CreateBatchItem, JobRecord, JobStatus, OfferOutcome, OfferOverride, OfferProfile, OfferProfileInput, ReviewAutomation, ReviewAutomationInput, ReviewBatch, ReviewBatchItem, ReviewRequestMeta, ReviewSource, ReviewStats
 from app.review_pipeline.automations import due_schedule_key, rendered_file_pattern
 from app.review_pipeline.audio import extract_audio_command, transcribe
-from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, escape_drive_query_value
+from app.review_pipeline.drive import DriveFile, DriveLookupError, GoogleDriveClient, configured_drive_options, escape_drive_query_value
 from app.review_pipeline.evidence_frames import persist_review_evidence_frames
 from app.review_pipeline.guidelines import build_internal_override_context, build_policy_context, load_default_guidelines
 from app.review_pipeline.jobs import build_review_evidence, process_job
@@ -656,6 +656,30 @@ async def test_chunked_upload_reassembles_and_enqueues_large_creative(tmp_path, 
 def test_drive_query_escaping_handles_apostrophes_and_backslashes():
     assert escape_drive_query_value("quinn's paper\\essay.mp4") == "quinn\\'s paper\\\\essay.mp4"
 
+def test_drive_configuration_adds_named_folder_roots(monkeypatch):
+    monkeypatch.setenv('GOOGLE_DRIVE_FOLDER_ID', 'primary-root')
+    monkeypatch.setenv('GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON', json.dumps({
+        'kissterra': {
+            'name': 'Kissterra',
+            'folder_id': 'kissterra-root',
+        },
+    }))
+
+    assert [
+        (option.drive_id, option.name, option.folder_id)
+        for option in configured_drive_options()
+    ] == [
+        ('default', 'Google Drive', 'primary-root'),
+        ('kissterra', 'Kissterra', 'kissterra-root'),
+    ]
+
+def test_drive_configuration_rejects_invalid_named_folder_roots(monkeypatch):
+    monkeypatch.setenv('GOOGLE_DRIVE_FOLDER_ID', 'primary-root')
+    monkeypatch.setenv('GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON', '{"kissterra": []}')
+
+    with pytest.raises(DriveLookupError, match='folder options are invalid'):
+        configured_drive_options()
+
 def test_drive_search_keeps_only_files_inside_configured_root(monkeypatch):
     client=object.__new__(GoogleDriveClient)
     client.root_folder_id='root-folder'
@@ -941,11 +965,16 @@ async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monk
         })
         return set_status(job_id, JobStatus.queued, 0, 'Queued', file_name, file_size, has_ad_copy=meta.has_ad_copy)
 
-    monkeypatch.setattr('app.main.get_google_drive_client', lambda: FakeDrive())
+    def fake_drive_client(drive_id='default'):
+        assert drive_id == 'kissterra'
+        return FakeDrive()
+
+    monkeypatch.setattr('app.main.get_google_drive_client', fake_drive_client)
     monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
     transport=httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
         response=await client.post('/api/drive/reviews', json={
+            'drive_id':'kissterra',
             'file_id':'drive-file-id',
             'ad_copy':'Caption text',
             'model':'example/model',
@@ -1666,7 +1695,7 @@ def test_offer_profiles_persist_guidelines_and_offer_scoped_overrides(tmp_path, 
     assert get_offer_profile_revision('acp', 2).official_guidelines == 'Updated ACP official policy.'
 
 
-def test_review_eligibility_is_server_owned_and_snapshots_na_states(tmp_path, monkeypatch):
+def test_review_offer_selection_uses_only_requested_eligible_offers(tmp_path, monkeypatch):
     monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
     monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
@@ -1677,18 +1706,20 @@ def test_review_eligibility_is_server_owned_and_snapshots_na_states(tmp_path, mo
     ))
 
     meta=review_meta('', '', '', '', '', 1.0, False, '', '', ['acp'])
-    assert [profile.offer_id for profile in meta.offer_profiles] == ['acp', 'kissterra']
-    assert [outcome.evaluation_state for outcome in meta.offer_outcomes] == [
-        'evaluated',
-        'evaluated',
-        'missing_guidelines',
-        'missing_guidelines',
-    ]
+    assert [profile.offer_id for profile in meta.offer_profiles] == ['acp']
+    assert [outcome.offer_id for outcome in meta.offer_outcomes] == ['acp']
+    assert meta.offer_outcomes[0].evaluation_state == 'evaluated'
+
+    combined=review_meta('', '', '', '', '', 1.0, False, '', '', ['kissterra', 'acp'])
+    assert [profile.offer_id for profile in combined.offer_profiles] == ['kissterra', 'acp']
+    assert [outcome.offer_id for outcome in combined.offer_outcomes] == ['kissterra', 'acp']
 
     disable_offer_profile('acp')
     assert [profile.offer_id for profile in resolve_active_offer_profiles()] == ['kissterra']
     acp_outcome=next(outcome for outcome in current_offer_outcomes() if outcome.offer_id == 'acp')
     assert acp_outcome.evaluation_state == 'disabled'
+    with pytest.raises(HTTPException, match='selected offers are unavailable'):
+        review_meta('', '', '', '', '', 1.0, False, '', '', ['acp'])
 
 
 def test_disabled_offer_can_be_blank_but_enabled_offer_requires_guidelines():
@@ -5487,6 +5518,74 @@ async def test_admin_browser_session_invalidates_when_password_rotates(monkeypat
     assert 'secure' in cookie
     assert checked.status_code == 200
     assert after_rotation.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_reviewer_admin_can_submit_reviews_but_cannot_change_settings(tmp_path,monkeypatch):
+    monkeypatch.setattr(review_storage,'JOB_DATA_DIR',tmp_path)
+    monkeypatch.setenv('ADMIN_PASSWORD','owner-secret')
+    monkeypatch.setenv('CLIENT_ADMIN_USERNAME','review-admin')
+    monkeypatch.setenv('CLIENT_ADMIN_PASSWORD','reviewer-secret')
+    monkeypatch.setenv('SESSION_SECRET','session-secret-for-tests')
+    profile=OfferProfile(
+        offer_id='acp',
+        display_name='ACP',
+        official_guidelines='Review this creative.',
+        is_default=True,
+    )
+    outcome=OfferOutcome(
+        offer_id='acp',
+        offer_name='ACP',
+        evaluation_state='evaluated',
+    )
+    monkeypatch.setattr('app.main.resolve_review_offer_snapshot',lambda:([profile],[outcome]))
+
+    async def fake_enqueue(job_id,_media_path,_media_kind,meta,file_name,**_kwargs):
+        return JobRecord(
+            job_id=job_id,
+            file_name=file_name,
+            has_creative=False,
+            has_ad_copy=meta.has_ad_copy,
+        )
+
+    monkeypatch.setattr('app.main.enqueue_job',fake_enqueue)
+    transport=httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport,base_url='https://admin.adchecked.com') as client:
+        signed_in=await client.post(
+            '/api/admin/session',
+            headers={'origin':'https://admin.adchecked.com'},
+            json={'password':'reviewer-secret'},
+        )
+        checked=await client.get('/api/admin/session')
+        submitted=await client.post(
+            '/api/reviews',
+            headers={'origin':'https://admin.adchecked.com'},
+            data={'ad_copy':'Save on auto insurance today.'},
+        )
+        settings_change=await client.delete(
+            '/api/offers/acp',
+            headers={'origin':'https://admin.adchecked.com'},
+        )
+        automation_change=await client.delete(
+            '/api/automations/daily-review',
+            headers={'origin':'https://admin.adchecked.com'},
+        )
+
+    assert signed_in.status_code == 200
+    assert signed_in.json() == {
+        'authorized':True,
+        'can_manage_settings':False,
+        'role':'reviewer',
+        'username':'review-admin',
+    }
+    assert checked.status_code == 200
+    assert checked.json()['role'] == 'reviewer'
+    assert submitted.status_code == 200
+    assert submitted.json()['has_ad_copy'] is True
+    assert settings_change.status_code == 403
+    assert settings_change.json()['detail'] == 'Owner access is required to change settings.'
+    assert automation_change.status_code == 403
 
 
 @pytest.mark.anyio

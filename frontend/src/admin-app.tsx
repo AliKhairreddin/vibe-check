@@ -352,7 +352,7 @@ function AppSidebar({
   onToggleTheme: () => void;
   theme: Theme;
 }) {
-  const { error, isSigningOut, lock } = useAdminAccess();
+  const { canManageSettings, error, isSigningOut, lock, role, username } = useAdminAccess();
 
   return (
     <Sidebar collapsible="icon">
@@ -384,9 +384,13 @@ function AppSidebar({
               <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
               <ShellLink to="/history" label="History" icon={<History />} />
               <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
-              <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
+              {canManageSettings ? (
+                <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
+              ) : null}
               <ShellLink to="/developers/api" label="API docs" icon={<Code2 />} />
-              <ShellLink to="/settings" label="Settings" icon={<Settings />} />
+              {canManageSettings ? (
+                <ShellLink to="/settings" label="Settings" icon={<Settings />} />
+              ) : null}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -398,7 +402,11 @@ function AppSidebar({
           </p>
         ) : null}
         <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 text-muted-foreground group-data-[collapsible=icon]:hidden">
-          Results reflect effective policy, with approved internal exceptions identified separately.
+          {role === 'reviewer' ? (
+            <><span className="font-medium text-foreground">{username || 'Reviewer'} access</span> · Review submission and results only. Settings are locked.</>
+          ) : (
+            'Results reflect effective policy, with approved internal exceptions identified separately.'
+          )}
         </div>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -490,8 +498,10 @@ function ReviewWorkspace() {
   const [sceneDetection, setSceneDetection] = useState(false);
   const [creativeSource, setCreativeSource] = useState<CreativeSource>('drive');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedDriveId, setSelectedDriveId] = useState('default');
   const [selectedDriveFolders, setSelectedDriveFolders] = useState<Map<string, string>>(new Map());
   const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<Set<string>>(new Set());
+  const [selectedOfferIds, setSelectedOfferIds] = useState<Set<string> | null>(null);
   const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -507,8 +517,8 @@ function ReviewWorkspace() {
     [selectedDriveFileIds]
   );
   const driveSelectionQuery = useQuery({
-    queryKey: ['drive', 'selection', selectedFolderList, selectedFileList],
-    queryFn: () => resolveDriveSelection(selectedFolderList, selectedFileList),
+    queryKey: ['drive', selectedDriveId, 'selection', selectedFolderList, selectedFileList],
+    queryFn: () => resolveDriveSelection(selectedDriveId, selectedFolderList, selectedFileList),
     enabled:
       creativeSource === 'drive' &&
       (selectedFolderList.length > 0 || selectedFileList.length > 0),
@@ -522,6 +532,16 @@ function ReviewWorkspace() {
   const eligibleOffers = useMemo(
     () => (offersQuery.data ?? []).filter((offer) => offer.enabled && offer.configured),
     [offersQuery.data]
+  );
+  const selectedOffers = useMemo(
+    () => eligibleOffers.filter(
+      (offer) => selectedOfferIds === null || selectedOfferIds.has(offer.offer_id)
+    ),
+    [eligibleOffers, selectedOfferIds]
+  );
+  const effectiveSelectedOfferIds = useMemo(
+    () => new Set(selectedOffers.map((offer) => offer.offer_id)),
+    [selectedOffers]
   );
 
   const selectedDriveFiles = driveSelectionQuery.data?.files ?? [];
@@ -582,6 +602,17 @@ function ReviewWorkspace() {
     );
   }
 
+  function toggleOffer(offerId: string) {
+    setSelectedOfferIds((current) => {
+      const next = new Set(
+        current ?? eligibleOffers.map((offer) => offer.offer_id)
+      );
+      if (next.has(offerId)) next.delete(offerId);
+      else next.add(offerId);
+      return next;
+    });
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitError('');
@@ -617,7 +648,11 @@ function ReviewWorkspace() {
       setSubmitError('Turn on at least one offer with saved guidelines before starting a review.');
       return;
     }
-    if (eligibleOffers.length > MAX_OFFERS_PER_REVIEW) {
+    if (!selectedOffers.length) {
+      setSubmitError('Select at least one offer to include in this review.');
+      return;
+    }
+    if (selectedOffers.length > MAX_OFFERS_PER_REVIEW) {
       setSubmitError(`No more than ${MAX_OFFERS_PER_REVIEW} offers can be active for a review.`);
       return;
     }
@@ -633,7 +668,7 @@ function ReviewWorkspace() {
 
     const sharedFields = new FormData(form);
     sharedFields.set('model', loadOpenRouterModel());
-    sharedFields.set('offer_ids', JSON.stringify(eligibleOffers.map((offer) => offer.offer_id)));
+    sharedFields.set('offer_ids', JSON.stringify(selectedOffers.map((offer) => offer.offer_id)));
     const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
     const batchSourceLabel = creativeSource === 'drive' && creatives.length
       ? driveBatchSourceLabel(selectedDriveFolders, selectedDriveFileIds.size)
@@ -670,6 +705,7 @@ function ReviewWorkspace() {
       if (batchId) {
         await createReviewBatch({
           batch_id: batchId,
+          offer_ids: selectedOffers.map((offer) => offer.offer_id),
           ...(batchSourceLabel ? { source_label: batchSourceLabel } : {}),
           items: nextItems.map((item) => ({
             item_id: item.id,
@@ -690,6 +726,7 @@ function ReviewWorkspace() {
           const status = driveFile
             ? await createDriveReview(buildDriveReviewInput(
                 sharedFields,
+                selectedDriveId,
                 driveFile.file_id,
                 sceneDetection,
                 batchId,
@@ -764,9 +801,9 @@ function ReviewWorkspace() {
           <form onSubmit={submit} className="grid gap-5">
             <div className="grid gap-3">
               <div className="flex items-center justify-between gap-3">
-                <Label>Offer eligibility</Label>
+                <Label>Offers to review</Label>
                 <Badge variant="outline">
-                  {eligibleOffers.length} will review
+                  {selectedOffers.length} selected
                 </Badge>
               </div>
               {offersQuery.isLoading ? (
@@ -778,10 +815,14 @@ function ReviewWorkspace() {
                   <AlertDescription>{errorMessage(offersQuery.error)}</AlertDescription>
                 </Alert>
               ) : (
-                <OfferEligibilityGrid offers={offersQuery.data ?? []} />
+                <OfferEligibilityGrid
+                  offers={offersQuery.data ?? []}
+                  selectedOfferIds={effectiveSelectedOfferIds}
+                  onToggle={toggleOffer}
+                />
               )}
               <p className="text-xs leading-5 text-muted-foreground">
-                Evidence is extracted once. Every active offer with saved guidelines is evaluated automatically; all others are recorded as N/A.
+                Check the offers to include. Evidence is extracted once and evaluated against only the selected saved guidelines.
               </p>
             </div>
 
@@ -818,8 +859,14 @@ function ReviewWorkspace() {
               {creativeSource === 'drive' ? (
                 <div>
                   <DriveBrowser
+                    driveId={selectedDriveId}
                     selectedFolders={selectedDriveFolders}
                     selectedFileIds={selectedDriveFileIds}
+                    onDriveChange={(driveId) => {
+                      setSelectedDriveId(driveId);
+                      setSelectedDriveFolders(new Map());
+                      setSelectedDriveFileIds(new Set());
+                    }}
                     onSelectionChange={(folders, files) => {
                       setSelectedDriveFolders(folders);
                       setSelectedDriveFileIds(files);
@@ -1204,6 +1251,7 @@ function HistoryCard({
   reviews: ReviewHistoryItem[];
 }) {
   const navigate = useNavigate();
+  const { canManageSettings } = useAdminAccess();
   const [searchQuery, setSearchQuery] = useState('');
   const [offerFilter, setOfferFilter] = useState('all');
   const [resultFilter, setResultFilter] = useState<HistoryResultFilter>('all');
@@ -1388,9 +1436,13 @@ function HistoryCard({
               <AlertTitle>Could not remove every review</AlertTitle>
               <AlertDescription>
                 {deleteError}{' '}
-                <Link to="/settings" className="font-medium underline underline-offset-4">
-                  Check admin access in Settings.
-                </Link>
+                {canManageSettings ? (
+                  <Link to="/settings" className="font-medium underline underline-offset-4">
+                    Check admin access in Settings.
+                  </Link>
+                ) : (
+                  'Try again or ask an owner for help.'
+                )}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -3004,8 +3056,11 @@ function RuntimeSettingsPanel() {
 }
 
 function SettingsPage() {
+  const { canManageSettings } = useAdminAccess();
   const { view } = settingsRoute.useSearch();
   const navigate = settingsRoute.useNavigate();
+
+  if (!canManageSettings) return <OwnerAccessRequired section="Settings" />;
 
   function changeView(nextView: SettingsView) {
     void navigate({
@@ -3131,10 +3186,35 @@ function ApiHubPage() {
 }
 
 function AutomationsRoutePage() {
+  const { canManageSettings } = useAdminAccess();
+  if (!canManageSettings) return <OwnerAccessRequired section="Automations" />;
   return (
     <AdminAccessGate>
       <AutomationsPage />
     </AdminAccessGate>
+  );
+}
+
+function OwnerAccessRequired({ section }: { section: string }) {
+  return (
+    <div className="mx-auto grid max-w-xl gap-4">
+      <Card>
+        <CardHeader>
+          <span className="mb-2 grid size-10 place-items-center rounded-xl bg-secondary text-secondary-foreground">
+            <Settings className="size-4" />
+          </span>
+          <CardTitle as="h1" className="text-xl">Owner access required</CardTitle>
+          <CardDescription>
+            {section} can change workspace configuration and is not available to reviewer accounts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link to="/reviews/new" className={buttonVariants()}>
+            <Plus /> Start a review
+          </Link>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -3323,6 +3403,7 @@ function buildReviewForm(
 
 function buildDriveReviewInput(
   source: FormData,
+  driveId: string,
   fileId: string,
   sceneDetection: boolean,
   batchId?: string,
@@ -3343,6 +3424,7 @@ function buildDriveReviewInput(
     // The backend also defaults legacy submissions to ACP.
   }
   return {
+    drive_id: driveId,
     file_id: fileId,
     ad_copy: value('ad_copy'),
     policy_text: value('policy_text'),

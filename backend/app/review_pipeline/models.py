@@ -463,12 +463,21 @@ class DriveFolder(BaseModel):
     name: str
     web_view_link: str
 
+class DriveOption(BaseModel):
+    drive_id: str
+    name: str
+
+class DriveOptionList(BaseModel):
+    default_drive_id: str = 'default'
+    options: list[DriveOption] = Field(default_factory=list)
+
 class DriveBrowserList(BaseModel):
     current_folder: DriveFolder
     items: list[DriveBrowserItem] = Field(default_factory=list)
     max_selection: int = 100
 
 class ResolveDriveSelection(BaseModel):
+    drive_id: str = Field(default='default', min_length=1, max_length=100)
     folder_ids: list[str] = Field(default_factory=list, max_length=100)
     file_ids: list[str] = Field(default_factory=list, max_length=100)
 
@@ -480,6 +489,7 @@ class DriveCreativeList(BaseModel):
     files: list[DriveCreativeFile] = Field(default_factory=list)
 
 class CreateDriveReview(BaseModel):
+    drive_id: str = Field(default='default', min_length=1, max_length=100)
     file_id: str = Field(min_length=1, max_length=512)
     ad_copy: str = ''
     policy_text: str = ''
@@ -490,7 +500,7 @@ class CreateDriveReview(BaseModel):
     scene_detection: bool = False
     batch_id: str | None = None
     batch_item_id: str | None = None
-    offer_ids: list[str] = Field(default_factory=lambda: ['acp'], min_length=1, max_length=10)
+    offer_ids: list[str] | None = Field(default=None, max_length=10)
 
 class ReviewOutcomeCounts(BaseModel):
     green: int = 0
@@ -525,6 +535,7 @@ class CreateBatchItem(BaseModel):
 
 class CreateReviewBatch(BaseModel):
     batch_id: str
+    offer_ids: list[str] = Field(default_factory=list, max_length=10)
     source_label: str | None = Field(default=None, max_length=500)
     items: list[CreateBatchItem]
 

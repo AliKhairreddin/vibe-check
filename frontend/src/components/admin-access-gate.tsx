@@ -20,17 +20,25 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { clearAdminSession, getAdminSession, verifyAdminPassword } from '@/lib/api';
+import {
+  clearAdminSession,
+  getAdminSession,
+  verifyAdminPassword,
+  type AdminSession,
+} from '@/lib/api';
 
 type AdminAccessValue = {
+  canManageSettings: boolean;
   error: string;
   isChecking: boolean;
   isSigningOut: boolean;
   isUnlocked: boolean;
   lock: () => Promise<void>;
   password: string;
+  role: AdminSession['role'] | null;
   setPassword: (value: string) => void;
   unlock: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  username: string;
 };
 
 const AdminAccessContext = createContext<AdminAccessValue | null>(null);
@@ -42,12 +50,20 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [error, setError] = useState('');
+  const [role, setRole] = useState<AdminSession['role'] | null>(null);
+  const [username, setUsername] = useState('');
+
+  function applySession(session: AdminSession) {
+    setIsUnlocked(true);
+    setRole(session.role);
+    setUsername(session.username);
+  }
 
   useEffect(() => {
     let active = true;
     void getAdminSession()
-      .then(() => {
-        if (active) setIsUnlocked(true);
+      .then((session) => {
+        if (active) applySession(session);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -73,9 +89,9 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
     setIsChecking(true);
     setError('');
     try {
-      await verifyAdminPassword(candidate);
+      const session = await verifyAdminPassword(candidate);
       setPasswordState('');
-      setIsUnlocked(true);
+      applySession(session);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['offer-profiles'] }),
         queryClient.invalidateQueries({ queryKey: ['automations'] }),
@@ -100,20 +116,25 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
     }
     setPasswordState('');
     setIsUnlocked(false);
+    setRole(null);
+    setUsername('');
     queryClient.clear();
     setIsSigningOut(false);
   }
 
   return (
     <AdminAccessContext.Provider value={{
+      canManageSettings: role === 'owner',
       error,
       isChecking,
       isSigningOut,
       isUnlocked,
       lock,
       password,
+      role,
       setPassword,
       unlock,
+      username,
     }}>
       {children}
     </AdminAccessContext.Provider>
@@ -136,7 +157,7 @@ export function AdminPortalGate({ children }: { children: ReactNode }) {
         </a>
         <AdminLoginCard />
         <p className="text-center text-xs text-muted-foreground">
-          Owner console · <a className="underline underline-offset-4" href="https://app.adchecked.com/login">Client sign in</a>
+          Owner and reviewer console · <a className="underline underline-offset-4" href="https://app.adchecked.com/login">Client sign in</a>
         </p>
       </div>
     </main>
@@ -168,13 +189,13 @@ function AdminLoginCard({ compact = false }: { compact?: boolean }) {
           Admin sign in
         </CardTitle>
         <CardDescription>
-          Open the private workspace for policies, creative reviews, automations, integrations, and client access.
+          Owners can manage the full workspace. Reviewers can submit and inspect reviews without changing settings.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form className="grid gap-4" onSubmit={unlock}>
           <div className="grid gap-2">
-            <Label htmlFor={compact ? 'inline-admin-password' : 'admin-password'}>Admin password</Label>
+            <Label htmlFor={compact ? 'inline-admin-password' : 'admin-password'}>Owner or reviewer password</Label>
             <Input
               id={compact ? 'inline-admin-password' : 'admin-password'}
               type="password"

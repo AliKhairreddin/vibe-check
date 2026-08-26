@@ -168,7 +168,7 @@ function MarketingApp() {
                 </div>
                 <div className="mt-5 grid gap-3">
                   <AccessRow name="Client portal" detail="Assigned offers only" status="Scoped" />
-                  <AccessRow name="Owner console" detail="Policies, automation, settings" status="Admin" />
+                  <AccessRow name="Admin console" detail="Owner settings, reviewer submissions" status="Scoped" />
                   <AccessRow name="Partner API" detail="Key scopes and usage limits" status="Token" />
                 </div>
               </div>

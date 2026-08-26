@@ -20,10 +20,18 @@ DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 MAX_DRIVE_SELECTION_FILES = 100
 MAX_DRIVE_SELECTION_FOLDERS = 1000
+DEFAULT_DRIVE_ID = 'default'
 
 
 class DriveLookupError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class DriveOption:
+    drive_id: str
+    name: str
+    folder_id: str
 
 
 @dataclass(frozen=True)
@@ -40,6 +48,50 @@ class DriveFile:
 
 def escape_drive_query_value(value: str) -> str:
     return value.replace('\\', '\\\\').replace("'", "\\'")
+
+
+def configured_drive_options() -> tuple[DriveOption, ...]:
+    default_folder_id = os.getenv('GOOGLE_DRIVE_FOLDER_ID', '').strip()
+    if not default_folder_id:
+        raise DriveLookupError('Google Drive is not configured.')
+
+    options = [DriveOption(DEFAULT_DRIVE_ID, 'Google Drive', default_folder_id)]
+    raw_options = os.getenv('GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON', '').strip()
+    if not raw_options:
+        return tuple(options)
+    try:
+        parsed_options = json.loads(raw_options)
+    except json.JSONDecodeError as exc:
+        raise DriveLookupError('Google Drive folder options are invalid.') from exc
+    if not isinstance(parsed_options, dict):
+        raise DriveLookupError('Google Drive folder options are invalid.')
+
+    for drive_id, raw_option in parsed_options.items():
+        if (
+            not isinstance(drive_id, str)
+            or not drive_id
+            or drive_id == DEFAULT_DRIVE_ID
+            or not isinstance(raw_option, dict)
+        ):
+            raise DriveLookupError('Google Drive folder options are invalid.')
+        name = raw_option.get('name')
+        folder_id = raw_option.get('folder_id')
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(folder_id, str)
+            or not folder_id.strip()
+        ):
+            raise DriveLookupError('Google Drive folder options are invalid.')
+        options.append(DriveOption(drive_id, name.strip(), folder_id.strip()))
+    return tuple(options)
+
+
+def configured_drive_option(drive_id: str = DEFAULT_DRIVE_ID) -> DriveOption:
+    for option in configured_drive_options():
+        if option.drive_id == drive_id:
+            return option
+    raise DriveLookupError('The selected Google Drive is not configured.')
 
 
 class GoogleDriveClient:
@@ -418,16 +470,16 @@ class GoogleDriveClient:
         )
 
 
-@lru_cache(maxsize=1)
-def get_google_drive_client() -> GoogleDriveClient:
+@lru_cache(maxsize=16)
+def get_google_drive_client(drive_id: str = DEFAULT_DRIVE_ID) -> GoogleDriveClient:
     raw_credentials = os.getenv('GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON', '')
-    root_folder_id = os.getenv('GOOGLE_DRIVE_FOLDER_ID', '')
-    if not raw_credentials or not root_folder_id:
+    if not raw_credentials:
         raise DriveLookupError('Google Drive is not configured.')
+    option = configured_drive_option(drive_id)
     try:
         credential_info = json.loads(raw_credentials)
     except json.JSONDecodeError as exc:
         raise DriveLookupError('Google Drive credentials are invalid.') from exc
     if not isinstance(credential_info, dict):
         raise DriveLookupError('Google Drive credentials are invalid.')
-    return GoogleDriveClient(credential_info, root_folder_id)
+    return GoogleDriveClient(credential_info, option.folder_id)

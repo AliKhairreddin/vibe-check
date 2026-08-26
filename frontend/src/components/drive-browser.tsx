@@ -17,18 +17,27 @@ import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { browseDriveFolder, type DriveBrowserItem, type DriveFolder } from '@/lib/api';
+import {
+  browseDriveFolder,
+  listDriveOptions,
+  type DriveBrowserItem,
+  type DriveFolder,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export type DriveBrowserProps = {
+  driveId: string;
   selectedFolders: Map<string, string>;
   selectedFileIds: Set<string>;
+  onDriveChange: (driveId: string) => void;
   onSelectionChange: (folders: Map<string, string>, files: Set<string>) => void;
 };
 
 export function DriveBrowser({
+  driveId,
   selectedFolders,
   selectedFileIds,
+  onDriveChange,
   onSelectionChange,
 }: DriveBrowserProps) {
   const [folderPath, setFolderPath] = useState<DriveFolder[]>([]);
@@ -36,9 +45,14 @@ export function DriveBrowser({
   const searchId = useId();
   const currentFolderId = folderPath[folderPath.length - 1]?.folder_id;
 
+  const optionsQuery = useQuery({
+    queryKey: ['drive', 'options'],
+    queryFn: listDriveOptions,
+    staleTime: 5 * 60_000,
+  });
   const folderQuery = useQuery({
-    queryKey: ['drive', 'browse', currentFolderId ?? 'root'],
-    queryFn: () => browseDriveFolder(currentFolderId),
+    queryKey: ['drive', driveId, 'browse', currentFolderId ?? 'root'],
+    queryFn: () => browseDriveFolder(driveId, currentFolderId),
     staleTime: 60_000,
   });
 
@@ -98,6 +112,13 @@ export function DriveBrowser({
     onSelectionChange(new Map(), new Set());
   }
 
+  function changeDrive(nextDriveId: string) {
+    if (nextDriveId === driveId) return;
+    setFolderPath([]);
+    setSearch('');
+    onDriveChange(nextDriveId);
+  }
+
   const selectedCount = selectedFolders.size + selectedFileIds.size;
   const selectionLabel = [
     selectedFolders.size ? `${selectedFolders.size} ${pluralize('folder', selectedFolders.size)}` : '',
@@ -110,6 +131,27 @@ export function DriveBrowser({
       aria-label="Google Drive folder browser"
       aria-busy={folderQuery.isLoading || folderQuery.isFetching}
     >
+      {(optionsQuery.data?.options.length ?? 0) > 1 ? (
+        <div className="grid gap-1.5">
+          <Label className="text-xs text-muted-foreground">Drive</Label>
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Google Drive option">
+            {optionsQuery.data?.options.map((option) => (
+              <Button
+                key={option.drive_id}
+                type="button"
+                size="sm"
+                variant={driveId === option.drive_id ? 'secondary' : 'ghost'}
+                aria-pressed={driveId === option.drive_id}
+                onClick={() => changeDrive(option.drive_id)}
+              >
+                <FolderOpen />
+                {option.name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1" aria-label="Current Google Drive path">
           {visiblePath.length ? (

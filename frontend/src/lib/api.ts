@@ -51,6 +51,16 @@ export type DriveFolder = {
   web_view_link: string;
 };
 
+export type DriveOption = {
+  drive_id: string;
+  name: string;
+};
+
+export type DriveOptionList = {
+  default_drive_id: string;
+  options: DriveOption[];
+};
+
 export type DriveBrowserResult = {
   current_folder: DriveFolder;
   items: DriveBrowserItem[];
@@ -63,6 +73,7 @@ export type DriveSelectionResult = {
 };
 
 export type CreateDriveReviewInput = {
+  drive_id: string;
   file_id: string;
   ad_copy: string;
   policy_text: string;
@@ -242,6 +253,13 @@ export type ClientSession = {
   username: string;
 };
 
+export type AdminSession = {
+  authorized: true;
+  can_manage_settings: boolean;
+  role: 'owner' | 'reviewer';
+  username: string;
+};
+
 export type ClientReviewDetail = {
   client_id: string;
   display_name: string;
@@ -288,6 +306,7 @@ export type ReviewBatch = {
 
 export type CreateReviewBatchInput = {
   batch_id: string;
+  offer_ids: string[];
   source_label?: string;
   items: Array<Pick<ReviewBatchItem, 'item_id' | 'file_name' | 'media_kind'>>;
 };
@@ -618,26 +637,31 @@ export async function createReview(
   });
 }
 
-export async function listDriveCreatives(): Promise<DriveCreativeFile[]> {
-  const response = await requestJson<{ files: DriveCreativeFile[] }>('/api/drive/files');
+export async function listDriveOptions(): Promise<DriveOptionList> {
+  return requestJson<DriveOptionList>('/api/drive/options');
+}
+
+export async function listDriveCreatives(driveId = 'default'): Promise<DriveCreativeFile[]> {
+  const params = new URLSearchParams({ drive_id: driveId });
+  const response = await requestJson<{ files: DriveCreativeFile[] }>(`/api/drive/files?${params}`);
   return response.files;
 }
 
-export async function browseDriveFolder(folderId?: string): Promise<DriveBrowserResult> {
-  const params = new URLSearchParams();
+export async function browseDriveFolder(driveId: string, folderId?: string): Promise<DriveBrowserResult> {
+  const params = new URLSearchParams({ drive_id: driveId });
   if (folderId) params.set('folder_id', folderId);
-  const query = params.toString();
-  return requestJson<DriveBrowserResult>(`/api/drive/browse${query ? `?${query}` : ''}`);
+  return requestJson<DriveBrowserResult>(`/api/drive/browse?${params}`);
 }
 
 export async function resolveDriveSelection(
+  driveId: string,
   folderIds: string[],
   fileIds: string[]
 ): Promise<DriveSelectionResult> {
   return requestJson<DriveSelectionResult>('/api/drive/selection/resolve', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ folder_ids: folderIds, file_ids: fileIds }),
+    body: JSON.stringify({ drive_id: driveId, folder_ids: folderIds, file_ids: fileIds }),
   });
 }
 
@@ -752,16 +776,16 @@ export async function deleteReview(id: string): Promise<DeletedReview> {
   });
 }
 
-export async function verifyAdminPassword(password: string): Promise<void> {
-  await requestJson<{ authorized: boolean }>('/api/admin/session', {
+export async function verifyAdminPassword(password: string): Promise<AdminSession> {
+  return requestJson<AdminSession>('/api/admin/session', {
     method: 'POST',
     headers: adminHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ password }),
   });
 }
 
-export async function getAdminSession(): Promise<void> {
-  await requestJson<{ authorized: boolean }>('/api/admin/session');
+export async function getAdminSession(): Promise<AdminSession> {
+  return requestJson<AdminSession>('/api/admin/session');
 }
 
 export async function clearAdminSession(): Promise<void> {

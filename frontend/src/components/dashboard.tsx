@@ -42,6 +42,7 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { CreativeThumbnail } from '@/components/creative-media';
+import { useAdminAccess } from '@/components/admin-access-gate';
 import {
   getOfferColumns,
   OfferOutcomeCell,
@@ -85,6 +86,7 @@ const RESULT_META: Record<OverallStatus, {
 };
 
 export function DashboardPage() {
+  const { canManageSettings } = useAdminAccess();
   const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>([]);
   const offersQuery = useQuery({
     queryKey: ['offers'],
@@ -172,13 +174,17 @@ export function DashboardPage() {
           <Layers3 />
           <AlertTitle>No review-ready offer profiles</AlertTitle>
           <AlertDescription>
-            Enable an offer with saved guidelines in Settings before starting a review.
+            {canManageSettings
+              ? 'Enable an offer with saved guidelines in Settings before starting a review.'
+              : 'An owner must enable an offer with saved guidelines before reviews can be submitted.'}
           </AlertDescription>
-          <AlertAction>
-            <Link to="/settings" className={buttonVariants({ variant: 'outline', size: 'xs' })}>
-              Settings
-            </Link>
-          </AlertAction>
+          {canManageSettings ? (
+            <AlertAction>
+              <Link to="/settings" className={buttonVariants({ variant: 'outline', size: 'xs' })}>
+                Settings
+              </Link>
+            </AlertAction>
+          ) : null}
         </Alert>
       ) : null}
 

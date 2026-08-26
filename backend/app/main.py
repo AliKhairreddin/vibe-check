@@ -24,6 +24,8 @@ from .review_pipeline.models import (
     DriveCreativeFile,
     DriveCreativeList,
     DriveFolder,
+    DriveOption,
+    DriveOptionList,
     DriveSelectionResult,
     JobRecord,
     JobStatus,
@@ -86,6 +88,7 @@ from .review_pipeline.drive import (
     FOLDER_MIME_TYPE,
     MAX_DRIVE_SELECTION_FILES,
     DriveLookupError,
+    configured_drive_options,
     get_google_drive_client,
 )
 from .review_pipeline.source_links import resolve_review_sources
@@ -282,15 +285,37 @@ def review_meta(
     if not 0.25 <= frame_interval_seconds <= 30:
         raise HTTPException(400, 'frame_interval_seconds must be between 0.25 and 30.')
     validate_review_text(ad_copy,policy_text,notes,manual_transcript)
-    # Offer eligibility is server-owned. The legacy offer_ids input remains accepted
-    # for backwards compatibility, but a caller cannot force a disabled/unconfigured
-    # offer to run or omit an eligible one.
     offer_profiles,offer_outcomes=resolve_review_offer_snapshot()
     if not offer_profiles:
         raise HTTPException(
             409,
             'No offers are available for review. Save official guidelines and enable at least one offer in Settings.',
         )
+    if offer_ids is not None:
+        requested_offer_ids=list(dict.fromkeys(
+            offer_id.strip().lower()
+            for offer_id in offer_ids
+            if offer_id.strip()
+        ))
+        if not requested_offer_ids:
+            raise HTTPException(400, 'Select at least one offer to include in the review.')
+        profiles_by_id={profile.offer_id:profile for profile in offer_profiles}
+        unavailable=[
+            offer_id for offer_id in requested_offer_ids
+            if offer_id not in profiles_by_id
+        ]
+        if unavailable:
+            raise HTTPException(
+                409,
+                f'The selected offers are unavailable for review: {", ".join(unavailable)}.',
+            )
+        outcomes_by_id={outcome.offer_id:outcome for outcome in offer_outcomes}
+        offer_profiles=[profiles_by_id[offer_id] for offer_id in requested_offer_ids]
+        offer_outcomes=[
+            outcomes_by_id[offer_id]
+            for offer_id in requested_offer_ids
+            if offer_id in outcomes_by_id
+        ]
     return ReviewRequestMeta(
         ad_copy=ad_copy.strip(),
         policy_text=policy_text,
@@ -306,17 +331,20 @@ def review_meta(
     )
 
 
-def parse_offer_ids(value:str)->list[str]:
+def parse_offer_ids(value:str)->list[str]|None:
     value=value.strip()
     if not value:
-        return ['acp']
+        return None
     try:
         parsed=json.loads(value)
     except json.JSONDecodeError:
         parsed=[part.strip() for part in value.split(',')]
     if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
         raise HTTPException(400, 'offer_ids must be a JSON array of offer IDs.')
-    return list(dict.fromkeys(item.strip().lower() for item in parsed if item.strip())) or ['acp']
+    offer_ids=list(dict.fromkeys(item.strip().lower() for item in parsed if item.strip()))
+    if not offer_ids:
+        raise HTTPException(400, 'Select at least one offer to include in the review.')
+    return offer_ids
 
 
 def live_scan_request_meta(
@@ -519,7 +547,7 @@ async def optional_password_gate(request: Request, call_next):
     return response
 
 
-def require_admin(request:Request)->None:
+def require_admin(request:Request)->dict:
     expected=os.getenv('ADMIN_PASSWORD','')
     if not expected:
         raise HTTPException(
@@ -528,9 +556,19 @@ def require_admin(request:Request)->None:
         )
     provided=request.headers.get(ADMIN_PASSWORD_HEADER,'')
     has_password=bool(provided) and secrets.compare_digest(provided, expected)
-    has_session=read_session_cookie(request, ADMIN_SESSION_COOKIE, 'admin') is not None
-    if not has_password and not has_session:
+    if has_password:
+        return {'role':'owner'}
+    session=read_session_cookie(request, ADMIN_SESSION_COOKIE, 'admin')
+    if session is None:
         raise HTTPException(401, 'Invalid or missing admin password.')
+    return session
+
+
+def require_settings_admin(request:Request)->dict:
+    session=require_admin(request)
+    if session.get('role','owner') != 'owner':
+        raise HTTPException(403, 'Owner access is required to change settings.')
+    return session
 
 
 async def require_api_principal(request:Request, scope:str)->ApiPrincipal:
@@ -740,13 +778,23 @@ def current_client_credential_fingerprint(session:dict)->str:
     return credential_fingerprint(username,os.getenv(config['password_env'],''))
 
 
+def current_admin_credential_fingerprint(session:dict)->str:
+    role=str(session.get('role') or 'owner')
+    if role == 'owner':
+        return credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
+    if role == 'reviewer':
+        username=os.getenv('CLIENT_ADMIN_USERNAME','admin').strip() or 'admin'
+        return credential_fingerprint(username,os.getenv('CLIENT_ADMIN_PASSWORD',''))
+    return ''
+
+
 def read_session_cookie(request:Request, cookie_name:str, kind:str)->dict|None:
     session=decode_session_token(request.cookies.get(cookie_name,''),kind)
     if session is None:
         return None
     fingerprint=str(session.get('credential_fingerprint') or '')
     if kind == 'admin':
-        expected=credential_fingerprint('admin',os.getenv('ADMIN_PASSWORD',''))
+        expected=current_admin_credential_fingerprint(session)
     else:
         expected=current_client_credential_fingerprint(session)
     if not fingerprint or not expected or not secrets.compare_digest(fingerprint,expected):
@@ -889,20 +937,36 @@ def require_automation_secret(request:Request)->None:
 
 @app.post('/api/admin/session')
 async def create_admin_session(request:Request):
-    expected=os.getenv('ADMIN_PASSWORD','')
-    if not expected:
+    owner_password=os.getenv('ADMIN_PASSWORD','')
+    reviewer_password=os.getenv('CLIENT_ADMIN_PASSWORD','')
+    if not owner_password:
         raise HTTPException(503,'Admin access is not configured.')
     try:
         payload=await request.json()
     except (ValueError,json.JSONDecodeError):
         raise HTTPException(400,'Provide a JSON password.') from None
     password=str(payload.get('password') or '') if isinstance(payload,dict) else ''
-    if not password or not secrets.compare_digest(password,expected):
+    if password and secrets.compare_digest(password,owner_password):
+        role='owner'
+        username='owner'
+        fingerprint=credential_fingerprint('admin',owner_password)
+    elif reviewer_password and password and secrets.compare_digest(password,reviewer_password):
+        role='reviewer'
+        username=os.getenv('CLIENT_ADMIN_USERNAME','admin').strip() or 'admin'
+        fingerprint=credential_fingerprint(username,reviewer_password)
+    else:
         raise HTTPException(401,'Invalid or missing admin password.')
     token=encode_session_token('admin',{
-        'credential_fingerprint':credential_fingerprint('admin',expected),
+        'credential_fingerprint':fingerprint,
+        'role':role,
+        'username':username,
     })
-    response=JSONResponse({'authorized':True})
+    response=JSONResponse({
+        'authorized':True,
+        'can_manage_settings':role == 'owner',
+        'role':role,
+        'username':username,
+    })
     set_session_cookie(response,request,ADMIN_SESSION_COOKIE,token)
     response.headers['cache-control']='no-store'
     return response
@@ -933,9 +997,16 @@ async def create_scanner_session(request:Request):
 
 @app.get('/api/admin/session')
 def get_admin_session(request:Request):
-    if read_session_cookie(request,ADMIN_SESSION_COOKIE,'admin') is None:
+    session=read_session_cookie(request,ADMIN_SESSION_COOKIE,'admin')
+    if session is None:
         raise HTTPException(401,'Sign in to continue.')
-    return {'authorized':True}
+    role=str(session.get('role') or 'owner')
+    return {
+        'authorized':True,
+        'can_manage_settings':role == 'owner',
+        'role':role,
+        'username':str(session.get('username') or role),
+    }
 
 
 @app.delete('/api/admin/session')
@@ -948,8 +1019,13 @@ def delete_admin_session(request:Request):
 
 @app.get('/api/admin/check')
 def admin_check(request:Request):
-    require_admin(request)
-    return {'authorized':True}
+    session=require_admin(request)
+    role=str(session.get('role') or 'owner')
+    return {
+        'authorized':True,
+        'can_manage_settings':role == 'owner',
+        'role':role,
+    }
 
 
 @app.get('/api/admin/api/partners')
@@ -968,7 +1044,7 @@ def api_partner_list(request:Request):
 
 @app.post('/api/admin/api/partners', status_code=201)
 def api_partner_create(payload:ApiPartnerInput, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     try:
         return create_api_partner(payload)
     except Exception as exc:
@@ -977,7 +1053,7 @@ def api_partner_create(payload:ApiPartnerInput, request:Request):
 
 @app.put('/api/admin/api/partners/{partner_id}')
 def api_partner_save(partner_id:str, payload:ApiPartnerInput, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     if not PARTNER_ID_PATTERN.fullmatch(partner_id):
         raise HTTPException(404, 'API partner not found.')
     try:
@@ -988,7 +1064,7 @@ def api_partner_save(partner_id:str, payload:ApiPartnerInput, request:Request):
 
 @app.post('/api/admin/api/partners/{partner_id}/keys', status_code=201)
 def api_key_issue(partner_id:str, payload:ApiKeyInput, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     if not PARTNER_ID_PATTERN.fullmatch(partner_id):
         raise HTTPException(404, 'API partner not found.')
     if payload.expires_at is not None and payload.expires_at <= now_ms():
@@ -1001,7 +1077,7 @@ def api_key_issue(partner_id:str, payload:ApiKeyInput, request:Request):
 
 @app.delete('/api/admin/api/partners/{partner_id}/keys/{key_id}')
 def api_key_revoke(partner_id:str, key_id:str, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     if not PARTNER_ID_PATTERN.fullmatch(partner_id) or not API_KEY_ID_PATTERN.fullmatch(key_id):
         raise HTTPException(404, 'API key not found.')
     try:
@@ -1012,7 +1088,7 @@ def api_key_revoke(partner_id:str, key_id:str, request:Request):
 
 @app.post('/api/admin/api/partners/{partner_id}/webhook-secret')
 def api_webhook_secret_rotate(partner_id:str, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     if not PARTNER_ID_PATTERN.fullmatch(partner_id):
         raise HTTPException(404, 'API partner not found.')
     try:
@@ -2354,7 +2430,7 @@ def save_review_automation(
     payload:ReviewAutomationInput,
     request:Request,
 ):
-    require_admin(request)
+    require_settings_admin(request)
     normalized=automation_id.strip().lower()
     if not OFFER_ID_PATTERN.fullmatch(normalized):
         raise HTTPException(400, 'Automation ID must be a lowercase slug.')
@@ -2375,7 +2451,7 @@ def save_review_automation(
 
 @app.delete('/api/automations/{automation_id}')
 def remove_review_automation(automation_id:str, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     normalized=automation_id.strip().lower()
     if not OFFER_ID_PATTERN.fullmatch(normalized):
         raise HTTPException(404, 'Review automation not found')
@@ -2401,7 +2477,7 @@ async def run_saved_review_automation(automation_id:str, request:Request):
     return await run_review_automation(automation, manual=True)
 
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form('["acp"]')):
+async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form('')):
     upload=creative or video
     meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
     if upload is None:
@@ -2737,10 +2813,22 @@ def drive_creative_model(file)->DriveCreativeFile:
     )
 
 
-@app.get('/api/drive/browse', response_model=DriveBrowserList)
-def browse_drive(folder_id:str|None=None):
+@app.get('/api/drive/options', response_model=DriveOptionList)
+def drive_options():
     try:
-        drive=get_google_drive_client()
+        options=configured_drive_options()
+    except DriveLookupError as exc:
+        raise HTTPException(503, str(exc)) from None
+    return DriveOptionList(options=[
+        DriveOption(drive_id=option.drive_id, name=option.name)
+        for option in options
+    ])
+
+
+@app.get('/api/drive/browse', response_model=DriveBrowserList)
+def browse_drive(folder_id:str|None=None, drive_id:str='default'):
+    try:
+        drive=get_google_drive_client(drive_id)
         current=drive.get_file(folder_id or drive.root_folder_id)
         children=drive.list_folder_children(current.file_id)
     except DriveLookupError as exc:
@@ -2773,7 +2861,7 @@ def resolve_drive_selection(payload:ResolveDriveSelection):
         raise HTTPException(400, 'Select at least one Google Drive folder or creative.')
     max_bytes=int(os.getenv('MAX_UPLOAD_MB','400')) * 1024 * 1024
     try:
-        files=get_google_drive_client().resolve_selection(
+        files=get_google_drive_client(payload.drive_id).resolve_selection(
             payload.folder_ids,
             payload.file_ids,
             max_file_size=max_bytes,
@@ -2789,9 +2877,9 @@ def resolve_drive_selection(payload:ResolveDriveSelection):
 
 
 @app.get('/api/drive/files', response_model=DriveCreativeList)
-def drive_creatives():
+def drive_creatives(drive_id:str='default'):
     try:
-        files = get_google_drive_client().list_creative_files()
+        files = get_google_drive_client(drive_id).list_creative_files()
     except DriveLookupError as exc:
         raise HTTPException(503, str(exc)) from None
     return DriveCreativeList(files=[
@@ -2803,7 +2891,10 @@ def drive_creatives():
 @app.post('/api/drive/reviews', response_model=JobRecord)
 async def create_drive_review(payload: CreateDriveReview):
     try:
-        drive_file = await asyncio.to_thread(get_google_drive_client().get_file, payload.file_id)
+        drive_file = await asyncio.to_thread(
+            get_google_drive_client(payload.drive_id).get_file,
+            payload.file_id,
+        )
     except DriveLookupError as exc:
         raise HTTPException(400, str(exc)) from None
 
@@ -2943,7 +3034,7 @@ async def complete_chunked_upload(
     scene_detection: bool = Form(False),
     batch_id: str = Form(''),
     batch_item_id: str = Form(''),
-    offer_ids: str = Form('["acp"]'),
+    offer_ids: str = Form(''),
 ):
     upload_dir, metadata = read_upload_metadata(upload_id)
     if metadata.get('completed') or (upload_dir / 'status.json').exists():
@@ -2995,9 +3086,13 @@ def create_review_batch(payload:CreateReviewBatch):
         raise HTTPException(400, 'Batch item ids must be unique.')
     if any(not BATCH_ID_PATTERN.fullmatch(item.item_id) for item in payload.items):
         raise HTTPException(400, 'Invalid batch item id')
+    offer_snapshot=review_meta(
+        '', '', '', '', '', 1.0, False, '', '', payload.offer_ids or None
+    )
     return create_batch(
         payload.batch_id,
         payload.items,
+        offer_snapshot.offer_outcomes,
         source_label=payload.source_label,
     )
 
@@ -3107,7 +3202,7 @@ def offer_profile_revision(offer_id:str, version:int, request:Request):
 
 @app.put('/api/offers/{offer_id}', response_model=OfferProfile)
 def save_offer_profile(offer_id:str, payload:OfferProfileInput, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     normalized=offer_id.strip().lower()
     if not OFFER_ID_PATTERN.fullmatch(normalized):
         raise HTTPException(400, 'Offer ID must be a lowercase slug using letters, numbers, hyphens, or underscores.')
@@ -3119,7 +3214,7 @@ def save_offer_profile(offer_id:str, payload:OfferProfileInput, request:Request)
 
 @app.delete('/api/offers/{offer_id}', response_model=OfferProfile)
 def disable_offer(offer_id:str, request:Request):
-    require_admin(request)
+    require_settings_admin(request)
     normalized=offer_id.strip().lower()
     if not OFFER_ID_PATTERN.fullmatch(normalized):
         raise HTTPException(404, 'Offer profile not found')

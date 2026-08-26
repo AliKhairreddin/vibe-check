@@ -1,5 +1,5 @@
 import { Popover } from '@base-ui/react/popover';
-import { ShieldCheck } from 'lucide-react';
+import { Check, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import { Cell, Pie, PieChart } from 'recharts';
 
@@ -469,30 +469,54 @@ function OfferResultsRail({
   );
 }
 
-export function OfferEligibilityGrid({ offers }: { offers: OfferCatalogItem[] }) {
+export function OfferEligibilityGrid({
+  offers,
+  selectedOfferIds,
+  onToggle,
+}: {
+  offers: OfferCatalogItem[];
+  selectedOfferIds: Set<string>;
+  onToggle: (offerId: string) => void;
+}) {
   const columns = getOfferColumns(offers);
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {columns.map((column) => {
         const offer = offers.find((candidate) => candidate.offer_id === column.offer_id);
         const eligible = Boolean(offer?.enabled && offer.configured);
+        const selected = eligible && selectedOfferIds.has(column.offer_id);
         const message = eligibilityMessage(offer);
         return (
-          <div
+          <button
             key={column.offer_id}
+            type="button"
+            disabled={!eligible}
+            aria-pressed={selected}
+            aria-label={`${selected ? 'Exclude' : 'Include'} ${column.offer_name} in this review`}
+            onClick={() => onToggle(column.offer_id)}
             className={cn(
-              'flex items-center justify-between gap-3 rounded-lg border bg-background p-3',
-              eligible && 'border-primary/40 bg-primary/5'
+              'flex items-center justify-between gap-3 rounded-lg border bg-background p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50',
+              eligible && 'cursor-pointer hover:bg-accent/50',
+              selected && 'border-primary/50 bg-primary/5',
+              !eligible && 'cursor-not-allowed opacity-60'
             )}
           >
-            <span className="min-w-0">
+            <span className="flex min-w-0 items-start gap-2.5">
+              <span className={cn(
+                'mt-0.5 grid size-5 shrink-0 place-items-center rounded border',
+                selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background'
+              )} aria-hidden="true">
+                {selected ? <Check className="size-3.5" /> : null}
+              </span>
+              <span className="min-w-0">
               <span className="block truncate text-sm font-medium">{column.offer_name}</span>
               <span className="block text-xs leading-5 text-muted-foreground">{message}</span>
+              </span>
             </span>
-            <Badge variant={eligible ? 'secondary' : 'outline'} className="shrink-0">
-              {eligible ? 'Will review' : 'N/A'}
+            <Badge variant={selected ? 'secondary' : 'outline'} className="shrink-0">
+              {selected ? 'Included' : eligible ? 'Excluded' : 'N/A'}
             </Badge>
-          </div>
+          </button>
         );
       })}
     </div>

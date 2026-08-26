@@ -137,7 +137,7 @@ uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev
 ```
 
-The frontend creates one review job per selected creative. With no creative selected, every non-empty ad-copy line becomes a separate job. Offer selection is server-owned: every enabled profile with non-empty official guidelines is evaluated, and callers cannot force disabled offers to run or omit eligible offers.
+The frontend creates one review job per selected creative. With no creative selected, every non-empty ad-copy line becomes a separate job. Operators can quickly include or exclude enabled, configured offers for each review; the server rejects disabled or unconfigured selections.
 
 ## Configuration
 
@@ -145,21 +145,24 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
 
 - `OPENROUTER_*` for final analysis, vision, speech-to-text, throughput-first provider routing, and per-request ZDR/data-collection enforcement on chat and vision calls;
 - `CONVEX_URL`, `CONVEX_DEPLOYMENT`, and `CONVEX_HTTP_SECRET` for durable state;
-- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` and `GOOGLE_DRIVE_FOLDER_ID` for folder-scoped import;
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID`, and optional named roots in `GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON` for folder-scoped import;
 - `TELEGRAM_*` for batch completion notifications;
-- `ADMIN_PASSWORD` for protected guideline, internal-rule, revision, and history-removal actions;
+- `ADMIN_PASSWORD` for full owner access to protected guideline, internal-rule,
+  revision, automation, integration, and history-removal actions;
 - `CLIENT_ADMIN_PASSWORD`, `KISSTERRA_CLIENT_PASSWORD`, `ACP_CLIENT_PASSWORD`,
   `LEAD_ECONOMY_CLIENT_PASSWORD`, and `SMART_FINANCIAL_CLIENT_PASSWORD` for the
   role-scoped client review portal. Usernames default to `admin`, `kissterra`,
   `acp`, `lead-economy`, and `smart-financial` and can be overridden with the
-  matching `*_CLIENT_USERNAME` variables;
+  matching `*_CLIENT_USERNAME` variables. `CLIENT_ADMIN_PASSWORD` also signs in
+  to the admin console as a reviewer who can submit and inspect reviews but
+  cannot change settings, offers, integrations, or automations;
 - `MAX_UPLOAD_MB`, `JOB_WORKER_CONCURRENCY`, and `REVIEW_BACKEND_SHARDS` for resource limits and container distribution.
 
 Each review writes its latest processing-attempt timing to one `reviewProcessingMetrics` document after it finishes. The document separates queue wait from per-stage time and supports overlapping stages, so p50/p90 measurements can distinguish Cloudflare CPU work, OpenRouter calls, Convex persistence, and report-artifact generation without adding a Convex mutation at every progress update. Keep OpenRouter's account-wide ZDR setting enabled as well: its transcription endpoint does not currently accept the same per-request provider-routing controls as chat and vision.
 
 Secrets belong in Convex or Cloudflare runtime configuration, never in the browser bundle or repository. Browser sign-in exchanges a password for a signed, host-only, HttpOnly, `SameSite=Strict` session cookie; passwords are not retained in browser storage or replayed on API calls. Credential fingerprints invalidate existing sessions when a password is rotated. Configure `ADMIN_PASSWORD`, `CLIENT_ADMIN_PASSWORD`, the individual client passwords, and `SESSION_SECRET` as Cloudflare Worker secrets.
 
-Production uses separate SaaS surfaces: `adchecked.com` for the public product site, `app.adchecked.com` for shared client sign-in and offer-scoped dashboards, `admin.adchecked.com` for the private owner console, and `api.adchecked.com` for server-to-server integrations. The client admin account can switch between Kissterra, ACP, Lead Economy, and Smart Financial, while each client account is enforced server-side to its own offer. Client approve/disapprove decisions remain separate from the automated verdict. When a client overrides AdChecked, the portal captures a structured reason and note. Reusable policy disagreements become same-offer historical precedents for future reviews; one-off exceptions and non-policy business choices remain auditable but are excluded from calibration. Existing automated verdicts are never rewritten. The former `vibe-check.thatcanadian.dev` and `/kissterra` entry points redirect into the appropriate new surface.
+Production uses separate SaaS surfaces: `adchecked.com` for the public product site, `app.adchecked.com` for shared client sign-in and offer-scoped dashboards, `admin.adchecked.com` for the private admin console, and `api.adchecked.com` for server-to-server integrations. `ADMIN_PASSWORD` opens the full owner workspace. The client admin credential can also open the admin console with reviewer access: review submission, history, reports, and live scans remain available, while settings and automation configuration are hidden in the UI and rejected server-side. In the client portal, the client admin account can switch between Kissterra, ACP, Lead Economy, and Smart Financial, while each client account is enforced server-side to its own offer. Client approve/disapprove decisions remain separate from the automated verdict. When a client overrides AdChecked, the portal captures a structured reason and note. Reusable policy disagreements become same-offer historical precedents for future reviews; one-off exceptions and non-policy business choices remain auditable but are excluded from calibration. Existing automated verdicts are never rewritten. The former `vibe-check.thatcanadian.dev` and `/kissterra` entry points redirect into the appropriate new surface.
 
 ## API Overview
 
