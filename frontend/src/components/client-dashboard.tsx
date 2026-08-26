@@ -24,6 +24,7 @@ import {
   LockKeyhole,
   LogOut,
   RefreshCw,
+  ScanSearch,
   Search,
   ShieldCheck,
   Layers3,
@@ -230,7 +231,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
         <Card className="w-full max-w-md shadow-lg">
           <CardHeader>
             <span className="mb-2 grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <ShieldCheck className="size-5" />
+              <ScanSearch className="size-5" strokeWidth={2.2} />
             </span>
             <CardTitle as="h1" className="text-2xl">Sign in to AdChecked</CardTitle>
             <CardDescription>
@@ -612,8 +613,8 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
       <Sidebar collapsible="icon">
         <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
           <div className="flex items-center gap-1">
-            <Link to="/client" className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring">
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><ShieldCheck className="size-4" /></span>
+            <Link to="/client" className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-[color,background-color,opacity] hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:opacity-0">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><ScanSearch className="size-4" strokeWidth={2.2} /></span>
               <span className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
                 <span className="truncate font-heading text-sm font-semibold">AdChecked</span>
                 <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Creative reviews</span>
@@ -682,7 +683,7 @@ function ClientMobileHeader() {
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur md:hidden">
       <SidebarTrigger className="-ml-1" aria-label={label} title={label} />
       <Link to="/client" className="flex items-center gap-2 font-heading text-sm font-semibold">
-        <ShieldCheck className="size-4" />
+        <ScanSearch className="size-4" strokeWidth={2.2} />
         AdChecked
       </Link>
     </header>

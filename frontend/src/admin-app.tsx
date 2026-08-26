@@ -43,6 +43,7 @@ import {
   LogOut,
   Moon,
   RefreshCw,
+  ScanSearch,
   Search,
   Settings,
   SlidersHorizontal,
@@ -328,7 +329,7 @@ function AppHeader({
       />
       <Separator orientation="vertical" className="h-4" />
       <Link to="/" className="flex items-center gap-2 font-heading text-sm font-semibold">
-        <FileImage className="size-4" />
+        <ScanSearch className="size-4" strokeWidth={2.2} />
         AdChecked
       </Link>
       <Button
@@ -363,7 +364,7 @@ function AppSidebar({
             className="flex h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1.5 text-sidebar-foreground outline-none transition-[color,background-color,opacity] hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:opacity-0"
           >
             <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-sidebar-border bg-card shadow-sm">
-              <FileImage className="size-4" />
+              <ScanSearch className="size-4" strokeWidth={2.2} />
             </span>
             <span className="truncate font-heading text-base font-semibold group-data-[collapsible=icon]:hidden">
               AdChecked

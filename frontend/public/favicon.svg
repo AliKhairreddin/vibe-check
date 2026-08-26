@@ -1,11 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-labelledby="title desc">
   <title id="title">AdChecked favicon</title>
-  <desc id="desc">A rounded app icon with a creative file and check mark.</desc>
-  <rect width="64" height="64" rx="14" fill="#09090b"/>
-  <path d="M20 15h18l9 9v25H20z" fill="#fff"/>
-  <path d="M38 15v10h9" fill="#d4d4d8"/>
-  <path d="M25 42l7-8 5 5 4-5 5 8z" fill="#18181b"/>
-  <circle cx="28" cy="27" r="4" fill="#18181b"/>
-  <circle cx="47" cy="46" r="11" fill="#22c55e"/>
-  <path d="M42 46.5l3.5 3.5 6.5-8" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <desc id="desc">A scan frame surrounding a magnifying glass.</desc>
+  <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+  <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+  <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+  <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+  <circle cx="12" cy="12" r="3"/>
+  <path d="m16 16-1.9-1.9"/>
 </svg>

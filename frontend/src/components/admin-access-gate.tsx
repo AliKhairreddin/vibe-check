@@ -151,7 +151,7 @@ export function AdminPortalGate({ children }: { children: ReactNode }) {
       <div className="relative grid w-full max-w-md gap-5">
         <a className="mx-auto inline-flex items-center gap-2.5 text-lg font-semibold tracking-[-0.03em]" href="https://adchecked.com">
           <span className="grid size-9 place-items-center rounded-xl bg-zinc-950 text-white">
-            <ScanSearch className="size-4" />
+            <ScanSearch className="size-4" strokeWidth={2.2} />
           </span>
           AdChecked
         </a>
