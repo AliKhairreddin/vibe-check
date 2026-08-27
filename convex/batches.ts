@@ -430,6 +430,30 @@ export const getBatch = query({
   },
 });
 
+export const backfillReviewContext = mutation({
+  args: {
+    secret: v.string(),
+    batchId: v.string(),
+    reviewContext: batchReviewContextValidator,
+  },
+  returns: publicBatchValidator,
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const batch = await findBatch(ctx, args.batchId);
+    if (!batch) throw new Error("Review batch not found");
+    if (!batch.reviewContext) {
+      await ctx.db.patch(batch._id, {
+        reviewContext: args.reviewContext,
+        updatedAt: Date.now(),
+      });
+    }
+    const updated = await findBatch(ctx, args.batchId);
+    if (!updated) throw new Error("Review batch not found");
+    const items = await hydrateBatchItems(ctx, updated.batchId, updated.items);
+    return publicBatch({ ...updated, items });
+  },
+});
+
 export const getBatches = query({
   args: {
     secret: v.string(),
