@@ -302,6 +302,7 @@ async def enqueue_job(
         offer_ids=meta.offer_ids,
         primary_offer_id=meta.primary_offer_id,
         automation_run_id=meta.automation_run_id,
+        vertical=meta.vertical,
     )
     _register_automation_heartbeat(job_id, meta)
     try:

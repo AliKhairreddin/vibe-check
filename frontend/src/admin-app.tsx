@@ -26,6 +26,7 @@ import {
   AlertCircle,
   BookOpen,
   CalendarClock,
+  CarFront,
   ChevronDown,
   Check,
   CheckCircle2,
@@ -36,6 +37,7 @@ import {
   FileJson,
   HardDrive,
   History,
+  House,
   Laptop,
   LayoutDashboard,
   Layers3,
@@ -174,6 +176,7 @@ type BatchItem = {
   batchId?: string;
   mediaKind: 'video' | 'image' | 'copy_only';
   driveFileId?: string;
+  vertical?: ReviewVertical;
   jobId?: string;
   error?: string;
 };
@@ -505,6 +508,7 @@ function ReviewWorkspace() {
   const [selectedDriveFolders, setSelectedDriveFolders] = useState<Map<string, string>>(new Map());
   const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<Set<string>>(new Set());
   const [selectedOfferIds, setSelectedOfferIds] = useState<Set<string> | null>(null);
+  const [selectedVertical, setSelectedVertical] = useState<ReviewVertical>('auto-insurance');
   const [adCopyText, setAdCopyText] = useState('');
   const [batchItems, setBatchItems] = useState<BatchItem[]>(loadActiveBatch);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -672,6 +676,7 @@ function ReviewWorkspace() {
     const sharedFields = new FormData(form);
     sharedFields.set('model', loadOpenRouterModel());
     sharedFields.set('offer_ids', JSON.stringify(selectedOffers.map((offer) => offer.offer_id)));
+    sharedFields.set('vertical', selectedVertical);
     const batchId = (copyOnly ? adCopyLines.length : creatives.length) > 1 ? randomId() : undefined;
     const batchSourceLabel = creativeSource === 'drive' && creatives.length
       ? driveBatchSourceLabel(selectedDriveFolders, selectedDriveFileIds.size)
@@ -686,6 +691,7 @@ function ReviewWorkspace() {
           size: new Blob([copy]).size,
           uploadProgress: 0,
           phase: 'pending' as const,
+          vertical: selectedVertical,
         }))
       : creatives.map((file) => ({
           id: randomId(),
@@ -699,6 +705,7 @@ function ReviewWorkspace() {
           uploadProgress: 0,
           phase: 'pending' as const,
           driveFileId: 'file_id' in file ? file.file_id : undefined,
+          vertical: selectedVertical,
         }));
 
     setBatchItems(nextItems);
@@ -724,6 +731,7 @@ function ReviewWorkspace() {
               drive_id: selectedDriveId,
               drive_file_id: item.driveFileId,
             } : {}),
+            ...(item.vertical ? { vertical: item.vertical } : {}),
           })),
         });
       }
@@ -797,7 +805,7 @@ function ReviewWorkspace() {
 
   return (
     <div className="grid gap-4">
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
+      <div className="grid gap-4">
         <Card>
         <CardHeader>
           <CardTitle as="h1" className="text-xl">New review</CardTitle>
@@ -840,6 +848,33 @@ function ReviewWorkspace() {
             </div>
 
             <div className="grid gap-3">
+              <Label>Creative vertical</Label>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative vertical">
+                <Button
+                  type="button"
+                  variant={selectedVertical === 'auto-insurance' ? 'secondary' : 'ghost'}
+                  aria-pressed={selectedVertical === 'auto-insurance'}
+                  onClick={() => setSelectedVertical('auto-insurance')}
+                >
+                  <CarFront />
+                  Auto Insurance
+                </Button>
+                <Button
+                  type="button"
+                  variant={selectedVertical === 'home-insurance' ? 'secondary' : 'ghost'}
+                  aria-pressed={selectedVertical === 'home-insurance'}
+                  onClick={() => setSelectedVertical('home-insurance')}
+                >
+                  <House />
+                  Home Insurance
+                </Button>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                Applies to every creative in this selected folder or group and controls where it appears in client and admin views.
+              </p>
+            </div>
+
+            <div className="grid gap-3">
               <Label>Ad creatives</Label>
               <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative source">
                 <Button
@@ -877,6 +912,8 @@ function ReviewWorkspace() {
                     selectedFileIds={selectedDriveFileIds}
                     onDriveChange={(driveId) => {
                       setSelectedDriveId(driveId);
+                      if (driveId === 'kissterra-home') setSelectedVertical('home-insurance');
+                      else if (driveId === 'kissterra') setSelectedVertical('auto-insurance');
                       setSelectedDriveFolders(new Map());
                       setSelectedDriveFileIds(new Set());
                     }}
@@ -1093,17 +1130,30 @@ function ReviewWorkspace() {
                     </AlertDescription>
                   </Alert>
                 ) : null}
-                <Separator />
-                <div className="grid max-h-[38rem] gap-3 overflow-y-auto pr-1">
-                  {rows.map(({ item, queryError, retry, status }) => (
-                    <BatchRow
-                      key={item.id}
-                      item={item}
-                      status={status}
-                      queryError={queryError}
-                      onRetry={retry ? () => void retry() : undefined}
-                    />
-                  ))}
+                <div className="max-h-[38rem] overflow-auto rounded-lg border">
+                  <Table>
+                    <TableHeader className="sticky top-0 z-10 bg-card">
+                      <TableRow>
+                        <TableHead>Creative</TableHead>
+                        <TableHead className="w-36">Vertical</TableHead>
+                        <TableHead className="w-28">Type</TableHead>
+                        <TableHead className="w-36">Status</TableHead>
+                        <TableHead className="min-w-72">Progress</TableHead>
+                        <TableHead className="w-32 text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rows.map(({ item, queryError, retry, status }) => (
+                        <BatchRow
+                          key={item.id}
+                          item={item}
+                          status={status}
+                          queryError={queryError}
+                          onRetry={retry ? () => void retry() : undefined}
+                        />
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
               </>
             ) : (
@@ -1171,54 +1221,58 @@ function BatchRow({
     (queryError ? 'Status temporarily unavailable' : phaseMessage(item.phase, item.kind));
 
   return (
-    <div className="grid gap-3 rounded-lg border bg-card/60 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium">{item.fileName}</p>
-          <p className="text-xs text-muted-foreground">
-            {item.kind === 'ad_copy' ? 'Ad copy only' : formatBytes(item.size)}
+    <TableRow>
+      <TableCell className="max-w-0">
+        <p className="truncate text-sm font-medium" title={item.fileName}>{item.fileName}</p>
+        {queryError ? (
+          <p className="truncate text-xs text-destructive" title={errorMessage(queryError)}>
+            Status refresh unavailable
           </p>
-        </div>
-        <StatusBadge status={displayStatus} />
-      </div>
-      <Progress value={progress}>
-        <ProgressLabel className="truncate">{message}</ProgressLabel>
-        <ProgressValue />
-      </Progress>
-      {queryError ? (
-        <Alert>
-          <AlertCircle />
-          <AlertTitle>Could not refresh this job</AlertTitle>
-          <AlertDescription>{errorMessage(queryError)}</AlertDescription>
-          {onRetry ? (
-            <AlertAction>
-              <Button type="button" variant="outline" size="xs" onClick={onRetry}>
-                <RefreshCw />
-                Retry
-              </Button>
-            </AlertAction>
-          ) : null}
-        </Alert>
-      ) : null}
-      {status?.report_ready ? (
-        <Link
-          to="/reviews/$jobId/report"
-          params={{ jobId: status.job_id }}
-          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'justify-self-start')}
-        >
-          <FileJson data-icon="inline-start" />
-          Open report
-        </Link>
-      ) : item.jobId ? (
-        <Link
-          to="/reviews/$jobId"
-          params={{ jobId: item.jobId }}
-          className="w-fit text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-        >
-          View job
-        </Link>
-      ) : null}
-    </div>
+        ) : null}
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline" className="text-[10px]">
+          {historyVerticalLabel(item.vertical ?? status?.vertical ?? 'auto-insurance')}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground">
+        {item.kind === 'ad_copy' ? 'Ad copy' : formatBytes(item.size)}
+      </TableCell>
+      <TableCell><StatusBadge status={displayStatus} /></TableCell>
+      <TableCell>
+        <Progress value={progress}>
+          <ProgressLabel className="truncate">{message}</ProgressLabel>
+          <ProgressValue />
+        </Progress>
+      </TableCell>
+      <TableCell className="text-right">
+        {queryError && onRetry ? (
+          <Button type="button" variant="outline" size="xs" onClick={onRetry}>
+            <RefreshCw />
+            Retry
+          </Button>
+        ) : status?.report_ready ? (
+          <Link
+            to="/reviews/$jobId/report"
+            params={{ jobId: status.job_id }}
+            className={buttonVariants({ variant: 'outline', size: 'xs' })}
+          >
+            <FileJson data-icon="inline-start" />
+            Report
+          </Link>
+        ) : item.jobId ? (
+          <Link
+            to="/reviews/$jobId"
+            params={{ jobId: item.jobId }}
+            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+          >
+            View job
+          </Link>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -1598,6 +1652,7 @@ function HistoryCard({
                   <col className="w-8" />
                   <col className="w-14" />
                   <col />
+                  <col className="w-36" />
                   <col className="w-28" />
                   <col className="w-44" />
                   <col className="w-[clamp(20rem,24vw,28rem)]" />
@@ -1616,6 +1671,7 @@ function HistoryCard({
                     </TableHead>
                     <TableHead className="h-11 px-2 text-xs text-muted-foreground">Creative</TableHead>
                     <TableHead className="h-11 text-xs text-muted-foreground">Upload</TableHead>
+                    <TableHead className="h-11 text-xs text-muted-foreground">Vertical</TableHead>
                     <TableHead className="h-11 text-xs text-muted-foreground">Uploaded</TableHead>
                     <TableHead className="h-11 text-xs text-muted-foreground">Status</TableHead>
                     <TableHead className="h-11 text-xs text-muted-foreground">
@@ -1633,6 +1689,7 @@ function HistoryCard({
                       entryIds.some((jobId) => selectedReviewIds.has(jobId));
                     const label = historyEntryLabel(entry);
                     const subtitle = historyEntrySubtitle(entry);
+                    const verticals = historyEntryVerticals(entry);
                     return (
                       <TableRow
                         key={entry.entryKey}
@@ -1682,6 +1739,15 @@ function HistoryCard({
                                 </span>
                               ) : null}
                             </span>
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-2 py-1.5">
+                          <span className="flex flex-wrap gap-1">
+                            {verticals.map((vertical) => (
+                              <Badge key={vertical} variant="outline" className="text-[10px]">
+                                {historyVerticalLabel(vertical)}
+                              </Badge>
+                            ))}
                           </span>
                         </TableCell>
                         <TableCell
@@ -1961,7 +2027,29 @@ function historyEntryBatchItems(entry: Extract<HistoryEntry, { kind: 'batch' }>)
     offer_outcomes: review.offer_outcomes,
     result: normalizeResultStatus(review.overall_status),
     status: review.status,
+    vertical: review.vertical,
   }));
+}
+
+function historyEntryVerticals(entry: HistoryEntry): ReviewVertical[] {
+  if (entry.kind === 'review') return [reviewVertical(entry.review)];
+  const verticals = new Set<ReviewVertical>();
+  for (const review of entry.reviews) verticals.add(reviewVertical(review));
+  for (const item of historyEntryBatchItems(entry)) {
+    if (item.vertical) verticals.add(item.vertical);
+  }
+  return Array.from(verticals).sort();
+}
+
+function reviewVertical(review: ReviewHistoryItem): ReviewVertical {
+  if (review.vertical) return review.vertical;
+  return /(^|[^a-z0-9])home([^a-z0-9]|$)/i.test(review.file_name)
+    ? 'home-insurance'
+    : 'auto-insurance';
+}
+
+function historyVerticalLabel(vertical: ReviewVertical) {
+  return vertical === 'home-insurance' ? 'Home Insurance' : 'Auto Insurance';
 }
 
 function historyEntryItemCount(entry: Extract<HistoryEntry, { kind: 'batch' }>) {
@@ -3473,6 +3561,7 @@ function buildReviewForm(
     'manual_transcript',
     'model',
     'offer_ids',
+    'vertical',
     'frame_interval_seconds',
   ]) {
     if (key === 'ad_copy' && adCopyOverride !== undefined) {
@@ -3524,6 +3613,7 @@ function buildDriveReviewInput(
     frame_interval_seconds: Number.isFinite(frameInterval) ? frameInterval : 1,
     scene_detection: sceneDetection,
     offer_ids: offerIds,
+    vertical: value('vertical') === 'home-insurance' ? 'home-insurance' as const : 'auto-insurance' as const,
     ...(batchId && batchItemId ? { batch_id: batchId, batch_item_id: batchItemId } : {}),
   };
 }

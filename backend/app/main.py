@@ -88,6 +88,7 @@ from .review_pipeline.queue import (
     stop_job_workers,
 )
 from .review_pipeline.media import detect_media_kind
+from .review_pipeline.verticals import classify_review_vertical
 from .review_pipeline.drive import (
     FOLDER_MIME_TYPE,
     MAX_DRIVE_SELECTION_FILES,
@@ -350,6 +351,13 @@ def parse_offer_ids(value:str)->list[str]|None:
     if not offer_ids:
         raise HTTPException(400, 'Select at least one offer to include in the review.')
     return offer_ids
+
+
+def parse_review_vertical(value:str):
+    normalized=value.strip().lower()
+    if normalized not in REVIEW_VERTICALS:
+        raise HTTPException(400,'Select Auto Insurance or Home Insurance for this review.')
+    return normalized
 
 
 def live_scan_request_meta(
@@ -2487,9 +2495,10 @@ async def run_saved_review_automation(automation_id:str, request:Request):
     return await run_review_automation(automation, manual=True)
 
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form('')):
+async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form(''), vertical:str=Form('auto-insurance')):
     upload=creative or video
     meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
+    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical)})
     if upload is None:
         if not meta.has_ad_copy:
             raise HTTPException(400, 'Choose a creative file or enter ad copy to review.')
@@ -2900,9 +2909,10 @@ def drive_creatives(drive_id:str='default'):
 
 @app.post('/api/drive/reviews', response_model=JobRecord)
 async def create_drive_review(payload: CreateDriveReview):
+    drive=get_google_drive_client(payload.drive_id)
     try:
         drive_file = await asyncio.to_thread(
-            get_google_drive_client(payload.drive_id).get_file,
+            drive.get_file,
             payload.file_id,
         )
     except DriveLookupError as exc:
@@ -2931,6 +2941,7 @@ async def create_drive_review(payload: CreateDriveReview):
         payload.batch_item_id or '',
         payload.offer_ids,
     )
+    meta=meta.model_copy(update={'vertical':payload.vertical})
     job_id = uuid.uuid4().hex
     jd = job_dir(job_id)
     media_path = jd / file_name
@@ -3045,6 +3056,7 @@ async def complete_chunked_upload(
     batch_id: str = Form(''),
     batch_item_id: str = Form(''),
     offer_ids: str = Form(''),
+    vertical: str = Form('auto-insurance'),
 ):
     upload_dir, metadata = read_upload_metadata(upload_id)
     if metadata.get('completed') or (upload_dir / 'status.json').exists():
@@ -3058,6 +3070,7 @@ async def complete_chunked_upload(
         raise HTTPException(409, 'Upload size does not match; restart this upload.')
 
     meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
+    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical)})
     media_path = upload_dir / str(metadata['file_name'])
     enqueued = False
     try:
@@ -3180,9 +3193,10 @@ async def resolve_retry_drive_file(item, payload:RetryBatchItem):
     selected_drive_id=item.drive_id or payload.drive_id
     selected_file_id=item.drive_file_id or payload.file_id
     if selected_drive_id and selected_file_id:
+        drive=get_google_drive_client(selected_drive_id)
         try:
             return selected_drive_id, await asyncio.to_thread(
-                get_google_drive_client(selected_drive_id).get_file,
+                drive.get_file,
                 selected_file_id,
             )
         except DriveLookupError as exc:
@@ -3275,6 +3289,9 @@ async def retry_batch_drive_item(
         item_id,
         offer_ids,
     )
+    meta=meta.model_copy(update={
+        'vertical':item.vertical or classify_review_vertical(file_name),
+    })
     try:
         claimed=await asyncio.to_thread(claim_batch_item_retry,batch_id,item_id)
     except (FileNotFoundError,KeyError):

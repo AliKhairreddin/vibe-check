@@ -40,6 +40,7 @@ type ReviewForStats = {
   sourceStatus?: string;
   sourceUrl?: string;
   status: string;
+  vertical?: "auto-insurance" | "home-insurance";
 };
 
 type OfferReportForStorage = {
@@ -64,6 +65,10 @@ const statusArgs = {
   progress: v.number(),
   reportReady: v.boolean(),
   status: v.string(),
+  vertical: v.optional(v.union(
+    v.literal("auto-insurance"),
+    v.literal("home-insurance"),
+  )),
 };
 
 function requireSecret(secret: string) {
@@ -372,7 +377,7 @@ async function syncReviewOfferStats(
       sourceUrl: review.sourceUrl,
       status: review.status,
       updatedAt,
-      vertical: classifyReviewVertical(review.fileName ?? ""),
+      vertical: review.vertical ?? classifyReviewVertical(review.fileName ?? ""),
     };
     const existing = rowsByOfferId.get(offerId);
     if (existing) await ctx.db.patch(existing._id, value);
@@ -595,6 +600,7 @@ function publicReview(review: {
   sourceStatus?: string;
   sourceUrl?: string;
   updatedAt: number;
+  vertical?: "auto-insurance" | "home-insurance";
 }, clientDecisions: ClientDecisionRow[] = []) {
   const hasAdCopy = review.hasAdCopy ?? true;
   const hasCreative = review.hasCreative ?? true;
@@ -627,7 +633,7 @@ function publicReview(review: {
     source_status: review.sourceStatus ?? null,
     source_url: review.sourceUrl ?? null,
     updated_at: review.updatedAt,
-    vertical: classifyReviewVertical(review.fileName),
+    vertical: review.vertical ?? classifyReviewVertical(review.fileName),
   };
 }
 
@@ -689,6 +695,9 @@ export const upsertStatus = mutation({
       reportReady: args.reportReady,
       status: args.status,
       updatedAt: now,
+      vertical: args.vertical ?? existing?.vertical ?? classifyReviewVertical(
+        args.fileName ?? existing?.fileName ?? "",
+      ),
     };
 
     const review = {
@@ -1104,7 +1113,7 @@ export const backfillOfferStats = mutation({
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const migrationKey = "reviewOfferStatsV3Vertical";
+    const migrationKey = "reviewOfferStatsV4StoredVertical";
     const state = await ctx.db
       .query("maintenanceState")
       .withIndex("by_key", (query) => query.eq("key", migrationKey))

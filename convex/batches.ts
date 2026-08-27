@@ -23,6 +23,7 @@ type BatchItem = {
   message: string;
   result?: string;
   status: string;
+  vertical?: "auto-insurance" | "home-insurance";
 };
 
 type BatchReviewContext = {
@@ -96,6 +97,11 @@ const publicBatchValidator = v.object({
     offer_outcomes: v.array(publicOfferOutcomeValidator),
     result: v.union(v.string(), v.null()),
     status: v.string(),
+    vertical: v.union(
+      v.literal("auto-insurance"),
+      v.literal("home-insurance"),
+      v.null(),
+    ),
   })),
   review_context: v.union(publicBatchReviewContextValidator, v.null()),
   notification_claim_id: v.union(v.string(), v.null()),
@@ -231,6 +237,7 @@ function publicBatch(batch: {
       })),
       result: item.result ?? null,
       status: item.status,
+      vertical: item.vertical ?? null,
     })),
     notification_claim_id: batch.notificationClaimId ?? null,
     notification_status: batch.notificationStatus,
@@ -385,6 +392,10 @@ export const createBatch = mutation({
       fileName: v.string(),
       itemId: v.string(),
       mediaKind: v.string(),
+      vertical: v.optional(v.union(
+        v.literal("auto-insurance"),
+        v.literal("home-insurance"),
+      )),
       offerOutcomes: v.optional(v.array(v.object({
         adCopyResult: v.optional(v.string()),
         creativeResult: v.optional(v.string()),

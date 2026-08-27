@@ -673,8 +673,12 @@ def test_drive_configuration_adds_named_folder_roots(monkeypatch):
     monkeypatch.setenv('GOOGLE_DRIVE_FOLDER_ID', 'primary-root')
     monkeypatch.setenv('GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON', json.dumps({
         'kissterra': {
-            'name': 'Kissterra',
+            'name': 'Kissterra Auto',
             'folder_id': 'kissterra-root',
+        },
+        'kissterra-home': {
+            'name': 'Kissterra Home',
+            'folder_id': 'kissterra-home-root',
         },
     }))
 
@@ -683,7 +687,8 @@ def test_drive_configuration_adds_named_folder_roots(monkeypatch):
         for option in configured_drive_options()
     ] == [
         ('default', 'Google Drive', 'primary-root'),
-        ('kissterra', 'Kissterra', 'kissterra-root'),
+        ('kissterra', 'Kissterra Auto', 'kissterra-root'),
+        ('kissterra-home', 'Kissterra Home', 'kissterra-home-root'),
     ]
 
 def test_drive_configuration_rejects_invalid_named_folder_roots(monkeypatch):
@@ -975,6 +980,7 @@ async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monk
             'file_name':file_name,
             'file_size':file_size,
             'drive_file':drive_file,
+            'vertical':meta.vertical,
         })
         return set_status(job_id, JobStatus.queued, 0, 'Queued', file_name, file_size, has_ad_copy=meta.has_ad_copy)
 
@@ -992,6 +998,7 @@ async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monk
             'ad_copy':'Caption text',
             'model':'example/model',
             'frame_interval_seconds':1,
+            'vertical':'home-insurance',
         })
 
     assert response.status_code == 200
@@ -999,6 +1006,7 @@ async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monk
     assert enqueued['drive_file'] == selected
     assert enqueued['media_kind'] == 'video'
     assert enqueued['ad_copy'] == 'Caption text'
+    assert enqueued['vertical'] == 'home-insurance'
     assert enqueued['media_path'].name == 'selected creative.mp4'
     assert body['source_file_id'] == 'drive-file-id'
     assert body['source_url'] == selected.web_view_link

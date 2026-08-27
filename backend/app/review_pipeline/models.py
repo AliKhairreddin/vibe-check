@@ -305,6 +305,7 @@ class ReviewRequestMeta(BaseModel):
     scene_detection: bool = False
     batch_id: str | None = None
     batch_item_id: str | None = None
+    vertical: ReviewVertical | None = None
     offer_profiles: list[OfferProfile] = Field(default_factory=list)
     offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
     automation_id: str | None = None
@@ -515,6 +516,7 @@ class CreateDriveReview(BaseModel):
     batch_id: str | None = None
     batch_item_id: str | None = None
     offer_ids: list[str] | None = Field(default=None, max_length=10)
+    vertical: ReviewVertical = 'auto-insurance'
 
 class ReviewOutcomeCounts(BaseModel):
     green: int = 0
@@ -550,6 +552,7 @@ class CreateBatchItem(BaseModel):
     media_kind: Literal['video','image','copy_only']
     drive_id: str | None = Field(default=None, max_length=100)
     drive_file_id: str | None = Field(default=None, max_length=512)
+    vertical: ReviewVertical | None = None
 
 
 class BatchReviewContext(BaseModel):

@@ -88,6 +88,7 @@ export type CreateDriveReviewInput = {
   batch_id?: string;
   batch_item_id?: string;
   offer_ids: string[];
+  vertical: ReviewVertical;
 };
 
 export type OfferOverride = {
@@ -312,6 +313,7 @@ export type ReviewBatchItem = {
   result?: OverallStatus | null;
   offer_outcomes?: OfferOutcome[];
   message: string;
+  vertical?: ReviewVertical | null;
 };
 
 export type BatchReviewContext = {
@@ -344,7 +346,7 @@ export type CreateReviewBatchInput = {
   review_context?: BatchReviewContext;
   items: Array<Pick<
     ReviewBatchItem,
-    'item_id' | 'file_name' | 'media_kind' | 'drive_id' | 'drive_file_id'
+    'item_id' | 'file_name' | 'media_kind' | 'drive_id' | 'drive_file_id' | 'vertical'
   >>;
 };
 

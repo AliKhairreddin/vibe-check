@@ -14,6 +14,7 @@ from . import storage
 from .drive import DriveFile
 from .media import MediaKind, detect_media_kind
 from .models import ReviewRequestMeta
+from .verticals import ReviewVertical, classify_review_vertical
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class InterruptedReview:
     batch_item_id: str | None
     offer_ids: tuple[str, ...]
     has_ad_copy: bool
+    vertical: ReviewVertical = 'auto-insurance'
 
 
 def _upload_blob(value: bytes | Path, content_type: str) -> str:
@@ -218,6 +220,11 @@ def list_interrupted_reviews(limit: int = 500) -> list[InterruptedReview]:
             ),
             offer_ids=offer_ids or ('acp',),
             has_ad_copy=bool(row.get('hasAdCopy')),
+            vertical=(
+                row['vertical']
+                if row.get('vertical') in {'auto-insurance', 'home-insurance'}
+                else classify_review_vertical(str(row.get('fileName') or ''))
+            ),
         ))
     return interrupted
 
@@ -252,6 +259,7 @@ def reconstruct_drive_payloads(
             meta = ReviewRequestMeta(
                 batch_id=review.batch_id,
                 batch_item_id=review.batch_item_id,
+                vertical=review.vertical,
                 offer_profiles=offer_profiles,
                 offer_outcomes=[
                     outcome.model_copy(deep=True)

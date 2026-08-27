@@ -172,6 +172,10 @@ export default defineSchema({
     sourceStatus: v.optional(v.string()),
     sourceUrl: v.optional(v.string()),
     updatedAt: v.number(),
+    vertical: v.optional(v.union(
+      v.literal("auto-insurance"),
+      v.literal("home-insurance")
+    )),
   })
     .index("by_job_id", ["jobId"])
     .index("by_batch_id", ["batchId"])
@@ -263,6 +267,10 @@ export default defineSchema({
       message: v.string(),
       result: v.optional(v.string()),
       status: v.string(),
+      vertical: v.optional(v.union(
+        v.literal("auto-insurance"),
+        v.literal("home-insurance")
+      )),
     })),
     reviewContext: v.optional(v.object({
       adCopy: v.string(),

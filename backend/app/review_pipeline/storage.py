@@ -192,7 +192,7 @@ def _convex_call_with_retry(kind:str, path:str, args:dict[str, Any])->Any:
         time.sleep(CONVEX_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
     raise RuntimeError('Convex retry loop exited unexpectedly.')
 
-def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None, automation_run_id:str|None=None)->JobRecord:
+def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None, automation_run_id:str|None=None, vertical:ReviewVertical|None=None)->JobRecord:
     current_file_name=file_name
     current_file_size=file_size
     current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
@@ -201,6 +201,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
     current_batch_item_id=batch_item_id
     current_offer_ids=offer_ids or ['acp']
     current_primary_offer_id=primary_offer_id or current_offer_ids[0]
+    current_vertical=vertical or classify_review_vertical(current_file_name)
     source_values:dict[str, Any]={}
     local_path=job_dir(job_id)/'status.json'
     created_at=now_ms()
@@ -222,6 +223,8 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
             current_offer_ids=current.offer_ids
         if primary_offer_id is None:
             current_primary_offer_id=current.primary_offer_id
+        if vertical is None:
+            current_vertical=current.vertical
         source_values={
             'source_kind':current.source_kind,
             'source_status':current.source_status,
@@ -232,7 +235,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         }
         created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,offer_ids=current_offer_ids,primary_offer_id=current_primary_offer_id,created_at=created_at,updated_at=now_ms(),**source_values)
+    rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,offer_ids=current_offer_ids,primary_offer_id=current_primary_offer_id,created_at=created_at,updated_at=now_ms(),vertical=current_vertical,**source_values)
     write_json(local_path, rec.model_dump(mode='json'))
     review_args = {
         'fileName': rec.file_name,
@@ -243,6 +246,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         'progress': rec.progress,
         'reportReady': rec.report_ready,
         'status': rec.status.value,
+        'vertical': rec.vertical,
         'offerIds': rec.offer_ids,
         'primaryOfferId': rec.primary_offer_id,
     }
@@ -435,6 +439,7 @@ def create_batch(
                 'mediaKind': item.media_kind,
                 **({'driveId': item.drive_id} if item.drive_id else {}),
                 **({'driveFileId': item.drive_file_id} if item.drive_file_id else {}),
+                **({'vertical': item.vertical} if item.vertical else {}),
                 'offerOutcomes': [
                     {
                         'offerId':outcome.offer_id,
@@ -808,7 +813,7 @@ def _local_reviews()->list[ReviewHistoryItem]:
                     data['overall_status']=effective_status
             offer_outcomes.append(outcome.model_dump(mode='json'))
         data['offer_outcomes']=offer_outcomes
-        data['vertical']=classify_review_vertical(rec.file_name)
+        data['vertical']=rec.vertical
         items.append(ReviewHistoryItem(**data))
 
     items.sort(key=lambda item: item.created_at or 0, reverse=True)
@@ -984,7 +989,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
             'jobId':review.job_id,
             'mediaKind':media_kind,
             'preview':_client_review_preview(report, outcome.overall_status, review),
-            'vertical':classify_review_vertical(review.file_name),
+            'vertical':review.vertical,
         })
     return reviews
 
@@ -1462,7 +1467,7 @@ def get_review_stats(
             record=JobRecord.model_validate(read_json(status_path))
         except (OSError, ValueError):
             continue
-        if vertical and classify_review_vertical(record.file_name) != vertical:
+        if vertical and record.vertical != vertical:
             continue
         matched_offer_ids=[offer_id for offer_id in normalized_offer_ids if offer_id in record.offer_ids]
         if not matched_offer_ids:
