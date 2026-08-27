@@ -10,7 +10,9 @@ import {
   hostSurface,
   isAdminPagePath,
   isAdminSessionPath,
+  isContainerUnavailableMessage,
   isClientPagePath,
+  isDriveReviewSubmission,
   isStaticAssetPath,
   legacyDestination,
   shouldRedirectAdminPathToClient,
@@ -45,6 +47,7 @@ const API_ORIGIN = `https://${API_HOST}`;
 const CLIENT_ORIGIN = `https://${CLIENT_HOST}`;
 const PUBLIC_ORIGIN = `https://${PUBLIC_HOST}`;
 const MAX_BACKEND_SHARDS = 50;
+const DRIVE_REVIEW_CAPACITY_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000] as const;
 
 const DOCUMENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -169,6 +172,62 @@ function requestShardKey(request: Request): string {
     }
   }
   return "default";
+}
+
+async function isContainerUnavailableResponse(response: Response): Promise<boolean> {
+  if (response.status < 500) return false;
+  try {
+    return isContainerUnavailableMessage(await response.clone().text());
+  } catch {
+    return false;
+  }
+}
+
+async function fetchBackend(env: Env, request: Request): Promise<Response> {
+  const primaryName = backendName(env, requestShardKey(request));
+  if (!isDriveReviewSubmission(request)) {
+    return env.REVIEW_BACKEND.getByName(primaryName).fetch(request);
+  }
+
+  // The cron-maintenance shard is normally already provisioned. If Cloudflare
+  // cannot start a newly selected shard, send the small, retry-safe Drive
+  // submission there so it can enter that container's internal job queue.
+  const warmFallbackName = backendName(env);
+  let targetName = primaryName;
+  let lastError: unknown;
+  let lastResponse: Response | undefined;
+
+  for (let attempt = 0; attempt <= DRIVE_REVIEW_CAPACITY_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(
+        resolve,
+        DRIVE_REVIEW_CAPACITY_RETRY_DELAYS_MS[attempt - 1],
+      ));
+      targetName = warmFallbackName;
+    }
+
+    try {
+      const response = await env.REVIEW_BACKEND.getByName(targetName).fetch(request.clone());
+      if (!await isContainerUnavailableResponse(response)) {
+        if (attempt > 0) {
+          console.warn(JSON.stringify({
+            event: "drive_review_capacity_fallback",
+            attempts: attempt + 1,
+            primaryBackend: primaryName,
+            fallbackBackend: targetName,
+          }));
+        }
+        return response;
+      }
+      lastResponse = response;
+    } catch (error) {
+      if (!isContainerUnavailableMessage(error)) throw error;
+      lastError = error;
+    }
+  }
+
+  if (lastResponse) return lastResponse;
+  throw lastError;
 }
 
 async function stopInactiveBackends(env: Env): Promise<void> {
@@ -454,10 +513,7 @@ export default {
         });
         if (!success) return secureResponse(rateLimitedResponse(), surface);
       }
-      const backend = env.REVIEW_BACKEND.getByName(
-        backendName(env, requestShardKey(request)),
-      );
-      const response = await backend.fetch(request);
+      const response = await fetchBackend(env, request);
       if (
         (surface === "admin" || isLegacyScannerRequest)
         && response.status === 401

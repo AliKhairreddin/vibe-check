@@ -4495,6 +4495,107 @@ async def test_batch_api_registers_pending_uploads_before_reviews_start(tmp_path
     assert fetched.json()['expected_count'] == 2
     assert fetched.json()['source_label'] == 'Summer campaign'
 
+
+@pytest.mark.anyio
+async def test_failed_drive_item_retries_in_place_with_saved_batch_context(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    batch_id='d' * 32
+    item_ids=['e' * 32, 'f' * 32]
+    selected=DriveFile(
+        'drive-file-id',
+        'one.mp4',
+        'video/mp4',
+        ('root-folder',),
+        'https://drive.google.com/file/d/drive-file-id/view',
+        123,
+    )
+    enqueued={}
+
+    class FakeDrive:
+        def get_file(self,file_id):
+            assert file_id == selected.file_id
+            return selected
+
+    async def fake_enqueue(job_id,media_path,media_kind,meta,file_name,file_size=None,drive_file=None):
+        enqueued.update({
+            'ad_copy':meta.ad_copy,
+            'batch_id':meta.batch_id,
+            'batch_item_id':meta.batch_item_id,
+            'drive_file':drive_file,
+            'offer_ids':meta.offer_ids,
+        })
+        return set_status(
+            job_id,
+            JobStatus.queued,
+            0,
+            'Queued for processing',
+            file_name,
+            file_size,
+            has_ad_copy=meta.has_ad_copy,
+            batch_id=meta.batch_id,
+            batch_item_id=meta.batch_item_id,
+            offer_ids=meta.offer_ids,
+            primary_offer_id=meta.primary_offer_id,
+        )
+
+    monkeypatch.setattr('app.main.get_google_drive_client',lambda drive_id='default':FakeDrive())
+    monkeypatch.setattr('app.main.enqueue_job',fake_enqueue)
+    transport=httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
+        created=await client.post('/api/batches',json={
+            'batch_id':batch_id,
+            'offer_ids':['acp'],
+            'review_context':{
+                'drive_id':'kissterra',
+                'ad_copy':'Save more today.',
+                'policy_text':'',
+                'notes':'',
+                'manual_transcript':'',
+                'model':'example/model',
+                'frame_interval_seconds':1,
+                'scene_detection':False,
+                'offer_ids':['acp'],
+            },
+            'items':[
+                {
+                    'item_id':item_ids[0],
+                    'file_name':selected.name,
+                    'media_kind':'video',
+                    'drive_id':'kissterra',
+                    'drive_file_id':selected.file_id,
+                },
+                {'item_id':item_ids[1],'file_name':'two.mp4','media_kind':'video'},
+            ],
+        })
+        failed=await client.post(
+            f'/api/batches/{batch_id}/items/{item_ids[0]}/failed',
+            json={'message':'No Container instance available'},
+        )
+        retried=await client.post(
+            f'/api/batches/{batch_id}/items/{item_ids[0]}/retry-drive',
+            json={},
+        )
+        fetched=await client.get(f'/api/batches/{batch_id}')
+
+    assert created.status_code == 200
+    assert failed.status_code == 200
+    assert retried.status_code == 200
+    assert retried.json()['status'] == 'queued'
+    assert enqueued == {
+        'ad_copy':'Save more today.',
+        'batch_id':batch_id,
+        'batch_item_id':item_ids[0],
+        'drive_file':selected,
+        'offer_ids':['acp'],
+    }
+    assert fetched.json()['expected_count'] == 2
+    assert len(fetched.json()['items']) == 2
+    assert fetched.json()['items'][0]['job_id'] == retried.json()['job_id']
+    assert fetched.json()['items'][0]['status'] == 'queued'
+
 @pytest.mark.anyio
 async def test_batch_api_bulk_loads_history_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)

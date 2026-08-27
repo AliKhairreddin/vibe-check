@@ -147,6 +147,7 @@ import {
   listReviewHistoryPage,
   resolveDriveSelection,
   reportBatchUploadFailure,
+  retryDriveBatchItem,
   type OverallStatus,
   type OfferOutcome,
   type OfferResult,
@@ -708,10 +709,20 @@ function ReviewWorkspace() {
           batch_id: batchId,
           offer_ids: selectedOffers.map((offer) => offer.offer_id),
           ...(batchSourceLabel ? { source_label: batchSourceLabel } : {}),
+          review_context: buildBatchReviewContext(
+            sharedFields,
+            creativeSource === 'drive' ? selectedDriveId : null,
+            sceneDetection,
+            selectedOffers.map((offer) => offer.offer_id)
+          ),
           items: nextItems.map((item) => ({
             item_id: item.id,
             file_name: item.fileName,
             media_kind: item.mediaKind,
+            ...(item.driveFileId ? {
+              drive_id: selectedDriveId,
+              drive_file_id: item.driveFileId,
+            } : {}),
           })),
         });
       }
@@ -1019,7 +1030,7 @@ function ReviewWorkspace() {
           <CardHeader>
             <CardTitle className="text-xl">Batch progress</CardTitle>
             <CardDescription>
-              Four jobs can start at once; Drive imports and local uploads advance automatically.
+              Up to {UPLOAD_CONCURRENCY} jobs submit at once; additional work waits automatically in the processing queue.
             </CardDescription>
             <CardAction>
               <div className="flex items-center gap-2">
@@ -1058,7 +1069,7 @@ function ReviewWorkspace() {
                         : `${overallProgress}%`}
                   </Badge>
                 ) : (
-                  <Badge variant="outline">5 review workers</Badge>
+                  <Badge variant="outline">{UPLOAD_CONCURRENCY} parallel submissions</Badge>
                 )}
               </div>
             </CardAction>
@@ -1131,7 +1142,7 @@ function EmptyBatchState() {
         </div>
         <p className="text-sm font-medium">No active batch</p>
         <p className="text-sm text-muted-foreground">
-          Start a review to watch up to four jobs process side by side.
+          Start a review to watch up to {MAX_BATCH_ITEMS} jobs move through the queue.
         </p>
       </div>
     </div>
@@ -2736,6 +2747,10 @@ function BatchPage() {
     queryFn: listOfferCatalog,
     staleTime: 60_000,
   });
+  const retryMutation = useMutation({
+    mutationFn: (itemId: string) => retryDriveBatchItem(batchId, itemId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['batch', batchId] }),
+  });
 
   if (query.isLoading) return <Skeleton className="h-72" />;
   if (!query.data) {
@@ -2803,6 +2818,13 @@ function BatchPage() {
           selectedOfferId={selectedOfferId}
           onOfferChange={setSelectedOfferId}
         />
+        {retryMutation.error ? (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle />
+            <AlertTitle>Retry could not start</AlertTitle>
+            <AlertDescription>{errorMessage(retryMutation.error)}</AlertDescription>
+          </Alert>
+        ) : null}
         <div className="mb-4 grid gap-1">
           <h2 className="text-sm font-medium">Individual creative results</h2>
           <p className="text-xs text-muted-foreground">
@@ -2871,7 +2893,22 @@ function BatchPage() {
                     <BatchOfferResultsRail item={item} offers={visibleOfferColumns} />
                   </TableCell>
                   <TableCell className="text-right">
-                    {item.status === 'complete' && item.job_id ? (
+                    {item.status === 'upload_failed' && !item.job_id ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={retryMutation.isPending}
+                        onClick={() => retryMutation.mutate(item.item_id)}
+                      >
+                        {retryMutation.isPending && retryMutation.variables === item.item_id ? (
+                          <LoaderCircle className="animate-spin" />
+                        ) : (
+                          <RefreshCw />
+                        )}
+                        Retry
+                      </Button>
+                    ) : item.status === 'complete' && item.job_id ? (
                       <Link
                         to="/reviews/$jobId/report"
                         params={{ jobId: item.job_id }}
@@ -3436,6 +3473,30 @@ function buildDriveReviewInput(
     scene_detection: sceneDetection,
     offer_ids: offerIds,
     ...(batchId && batchItemId ? { batch_id: batchId, batch_item_id: batchItemId } : {}),
+  };
+}
+
+function buildBatchReviewContext(
+  source: FormData,
+  driveId: string | null,
+  sceneDetection: boolean,
+  offerIds: string[]
+) {
+  const value = (key: string) => {
+    const field = source.get(key);
+    return typeof field === 'string' ? field : '';
+  };
+  const frameInterval = Number(value('frame_interval_seconds'));
+  return {
+    ...(driveId ? { drive_id: driveId } : {}),
+    ad_copy: value('ad_copy'),
+    policy_text: value('policy_text'),
+    notes: value('notes'),
+    manual_transcript: value('manual_transcript'),
+    model: value('model'),
+    frame_interval_seconds: Number.isFinite(frameInterval) ? frameInterval : 1,
+    scene_detection: sceneDetection,
+    offer_ids: offerIds,
   };
 }
 

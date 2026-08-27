@@ -532,11 +532,38 @@ class CreateBatchItem(BaseModel):
     item_id: str
     file_name: str
     media_kind: Literal['video','image','copy_only']
+    drive_id: str | None = Field(default=None, max_length=100)
+    drive_file_id: str | None = Field(default=None, max_length=512)
+
+
+class BatchReviewContext(BaseModel):
+    drive_id: str | None = Field(default=None, max_length=100)
+    ad_copy: str = ''
+    policy_text: str = ''
+    notes: str = ''
+    manual_transcript: str = ''
+    model: str | None = None
+    frame_interval_seconds: float = Field(default=1.0, ge=0.5, le=60)
+    scene_detection: bool = False
+    offer_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class RetryBatchItem(BaseModel):
+    drive_id: str | None = Field(default=None, max_length=100)
+    file_id: str | None = Field(default=None, max_length=512)
+    ad_copy: str = ''
+    policy_text: str = ''
+    notes: str = ''
+    manual_transcript: str = ''
+    model: str | None = None
+    frame_interval_seconds: float = Field(default=1.0, ge=0.5, le=60)
+    scene_detection: bool = False
 
 class CreateReviewBatch(BaseModel):
     batch_id: str
     offer_ids: list[str] = Field(default_factory=list, max_length=10)
     source_label: str | None = Field(default=None, max_length=500)
+    review_context: BatchReviewContext | None = None
     items: list[CreateBatchItem]
 
 class BatchFailure(BaseModel):
@@ -560,6 +587,7 @@ class ReviewBatch(BaseModel):
     updated_at: int
     expected_count: int
     source_label: str | None = None
+    review_context: BatchReviewContext | None = None
     items: list[ReviewBatchItem]
     notification_claim_id: str | None = None
     notification_status: str = 'pending'

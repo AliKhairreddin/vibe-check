@@ -287,11 +287,25 @@ export type ReviewBatchItem = {
   item_id: string;
   file_name: string;
   media_kind: 'video' | 'image' | 'copy_only';
+  drive_id?: string | null;
+  drive_file_id?: string | null;
   status: string;
   job_id?: string | null;
   result?: OverallStatus | null;
   offer_outcomes?: OfferOutcome[];
   message: string;
+};
+
+export type BatchReviewContext = {
+  drive_id?: string | null;
+  ad_copy: string;
+  policy_text: string;
+  notes: string;
+  manual_transcript: string;
+  model?: string | null;
+  frame_interval_seconds: number;
+  scene_detection: boolean;
+  offer_ids: string[];
 };
 
 export type ReviewBatch = {
@@ -300,6 +314,7 @@ export type ReviewBatch = {
   updated_at: number;
   expected_count: number;
   source_label?: string | null;
+  review_context?: BatchReviewContext | null;
   items: ReviewBatchItem[];
   notification_status: string;
 };
@@ -308,7 +323,11 @@ export type CreateReviewBatchInput = {
   batch_id: string;
   offer_ids: string[];
   source_label?: string;
-  items: Array<Pick<ReviewBatchItem, 'item_id' | 'file_name' | 'media_kind'>>;
+  review_context?: BatchReviewContext;
+  items: Array<Pick<
+    ReviewBatchItem,
+    'item_id' | 'file_name' | 'media_kind' | 'drive_id' | 'drive_file_id'
+  >>;
 };
 
 export type ReviewStats = {
@@ -953,6 +972,20 @@ export async function createReviewBatch(input: CreateReviewBatchInput): Promise<
 
 export async function getBatch(id: string): Promise<ReviewBatch> {
   return requestJson<ReviewBatch>(`/api/batches/${id}`);
+}
+
+export async function retryDriveBatchItem(
+  batchId: string,
+  itemId: string
+): Promise<Status> {
+  return requestJson<Status>(
+    `/api/batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}/retry-drive`,
+    {
+      method: 'POST',
+      headers: shardHeaders(itemId, { 'content-type': 'application/json' }),
+      body: '{}',
+    }
+  );
 }
 
 export async function getBatches(ids: string[]): Promise<ReviewBatch[]> {

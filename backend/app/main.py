@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from .review_pipeline.models import (
+    BatchReviewContext,
     BatchFailure,
     AutomationRunResult,
     ClientReviewDecisionInput,
@@ -46,11 +47,13 @@ from .review_pipeline.models import (
     ReviewHistoryPage,
     ReviewStats,
     ResolveDriveSelection,
+    RetryBatchItem,
     ReviewRequestMeta,
 )
 from .review_pipeline.storage import (
     backfill_review_offer_stats,
     clear_client_review_decision,
+    claim_batch_item_retry,
     create_batch,
     delete_review,
     disable_offer_profile,
@@ -75,6 +78,7 @@ from .review_pipeline.storage import (
     set_review_source,
     set_client_review_decision,
     upsert_offer_profile,
+    update_batch_item,
 )
 from .review_pipeline.queue import (
     enqueue_job,
@@ -3097,6 +3101,7 @@ def create_review_batch(payload:CreateReviewBatch):
         payload.items,
         offer_snapshot.offer_outcomes,
         source_label=payload.source_label,
+        review_context=payload.review_context,
     )
 
 @app.get('/api/batches', response_model=list[ReviewBatch])
@@ -3166,6 +3171,151 @@ def fail_batch_upload(batch_id:str, item_id:str, payload:BatchFailure):
         )
     except (FileNotFoundError, KeyError):
         raise HTTPException(404, 'Review batch item not found') from None
+
+
+async def resolve_retry_drive_file(item, payload:RetryBatchItem):
+    selected_drive_id=item.drive_id or payload.drive_id
+    selected_file_id=item.drive_file_id or payload.file_id
+    if selected_drive_id and selected_file_id:
+        try:
+            return selected_drive_id, await asyncio.to_thread(
+                get_google_drive_client(selected_drive_id).get_file,
+                selected_file_id,
+            )
+        except DriveLookupError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    try:
+        options=[
+            option
+            for option in configured_drive_options()
+            if not selected_drive_id or option.drive_id == selected_drive_id
+        ]
+    except DriveLookupError as exc:
+        raise HTTPException(503, str(exc)) from None
+    if not options:
+        raise HTTPException(409, 'The original Google Drive is no longer configured.')
+
+    matches=[]
+    for option in options:
+        try:
+            files=await asyncio.to_thread(
+                get_google_drive_client(option.drive_id).find_files_by_exact_name,
+                item.file_name,
+            )
+        except DriveLookupError as exc:
+            raise HTTPException(503, str(exc)) from None
+        matches.extend((option.drive_id, file) for file in files)
+    if not matches:
+        raise HTTPException(409, 'The original creative could not be found in the configured Drive folders.')
+    if len(matches) > 1:
+        raise HTTPException(409, 'More than one Drive creative has this name. Reopen the workspace and select the exact file.')
+    return matches[0]
+
+
+@app.post('/api/batches/{batch_id}/items/{item_id}/retry-drive', response_model=JobRecord)
+async def retry_batch_drive_item(
+    batch_id:str,
+    item_id:str,
+    payload:RetryBatchItem,
+):
+    if not BATCH_ID_PATTERN.fullmatch(batch_id) or not BATCH_ID_PATTERN.fullmatch(item_id):
+        raise HTTPException(404, 'Review batch item not found')
+    try:
+        batch=get_batch(batch_id)
+        item=next(value for value in batch.items if value.item_id == item_id)
+    except (FileNotFoundError, StopIteration):
+        raise HTTPException(404, 'Review batch item not found') from None
+    if item.status != 'upload_failed':
+        raise HTTPException(409, 'Only a Drive item that failed before processing can be retried.')
+    if item.media_kind == 'copy_only':
+        raise HTTPException(409, 'This batch item is not a Google Drive creative.')
+
+    drive_id,drive_file=await resolve_retry_drive_file(item,payload)
+    file_name=Path(drive_file.name).name or 'drive-creative'
+    try:
+        media_kind=detect_media_kind(file_name,drive_file.mime_type)
+    except ValueError as exc:
+        raise HTTPException(415,str(exc)) from None
+    max_bytes=int(os.getenv('MAX_UPLOAD_MB','400')) * 1024 * 1024
+    if not drive_file.can_download:
+        raise HTTPException(403,'This Google Drive file cannot be downloaded by the service account.')
+    if drive_file.size is not None and drive_file.size > max_bytes:
+        raise HTTPException(413,f'Max upload is {os.getenv("MAX_UPLOAD_MB","400")} MB')
+
+    context=batch.review_context or BatchReviewContext(
+        drive_id=drive_id,
+        ad_copy=payload.ad_copy,
+        policy_text=payload.policy_text,
+        notes=payload.notes,
+        manual_transcript=payload.manual_transcript,
+        model=payload.model,
+        frame_interval_seconds=payload.frame_interval_seconds,
+        scene_detection=payload.scene_detection,
+    )
+    offer_ids=context.offer_ids or [
+        outcome.offer_id
+        for outcome in item.offer_outcomes
+        if outcome.evaluation_state == 'evaluated'
+    ]
+    if not offer_ids:
+        raise HTTPException(409,'The original offer selection is unavailable. Resubmit this creative from the workspace.')
+    meta=review_meta(
+        context.ad_copy,
+        context.policy_text,
+        context.notes,
+        context.manual_transcript,
+        context.model or '',
+        context.frame_interval_seconds,
+        context.scene_detection,
+        batch_id,
+        item_id,
+        offer_ids,
+    )
+    try:
+        claimed=await asyncio.to_thread(claim_batch_item_retry,batch_id,item_id)
+    except (FileNotFoundError,KeyError):
+        raise HTTPException(404,'Review batch item not found') from None
+    if not claimed:
+        raise HTTPException(409,'This batch item has already been retried or is no longer failed.')
+
+    job_id=uuid.uuid4().hex
+    jd=job_dir(job_id)
+    media_path=jd/file_name
+    (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
+    try:
+        record=await enqueue_job(
+            job_id,
+            media_path,
+            media_kind,
+            meta,
+            file_name,
+            file_size=drive_file.size,
+            drive_file=drive_file,
+        )
+        set_review_source(job_id,ReviewSource(
+            kind='google_drive_file',
+            status='linked',
+            url=drive_file.web_view_link,
+            file_id=drive_file.file_id,
+            label='Open creative in Google Drive',
+            message=f'Retried “{file_name}” in its original batch.',
+            checked_at=now_ms(),
+        ))
+        return get_status(record.job_id)
+    except Exception as exc:
+        logger.exception('Could not retry Drive batch item %s/%s',batch_id,item_id)
+        try:
+            await asyncio.to_thread(
+                update_batch_item,
+                batch_id,
+                item_id,
+                status='upload_failed',
+                message=str(exc),
+            )
+        except Exception:
+            logger.exception('Could not restore failed batch status for %s/%s',batch_id,item_id)
+        raise
 
 
 @app.get('/api/offers/catalog')

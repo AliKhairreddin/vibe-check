@@ -7,6 +7,8 @@ import {
   hostSurface,
   isAdminPagePath,
   isAdminSessionPath,
+  isContainerUnavailableMessage,
+  isDriveReviewSubmission,
   legacyDestination,
   shouldRedirectAdminPathToClient,
 } from '../worker/routing.ts';
@@ -31,6 +33,40 @@ test('recognizes the two rate-limited owner credential exchange endpoints', () =
   assert.equal(isAdminSessionPath('/api/admin/session'), true);
   assert.equal(isAdminSessionPath('/api/scanner/session'), true);
   assert.equal(isAdminSessionPath('/api/admin/check'), false);
+});
+
+test('limits container-capacity fallback to retry-safe Drive review submissions', () => {
+  assert.equal(
+    isDriveReviewSubmission(new Request('https://admin.adchecked.com/api/drive/reviews', { method: 'POST' })),
+    true,
+  );
+  assert.equal(
+    isDriveReviewSubmission(new Request(
+      `https://admin.adchecked.com/api/batches/${'a'.repeat(32)}/items/${'b'.repeat(32)}/retry-drive`,
+      { method: 'POST' },
+    )),
+    true,
+  );
+  assert.equal(
+    isDriveReviewSubmission(new Request('https://admin.adchecked.com/api/drive/reviews')),
+    false,
+  );
+  assert.equal(
+    isDriveReviewSubmission(new Request('https://admin.adchecked.com/api/reviews', { method: 'POST' })),
+    false,
+  );
+});
+
+test('recognizes Cloudflare container-capacity failures without retrying unrelated errors', () => {
+  assert.equal(
+    isContainerUnavailableMessage('There is no Container instance available at this time.'),
+    true,
+  );
+  assert.equal(
+    isContainerUnavailableMessage(new Error('Reached your max concurrent instance count')),
+    true,
+  );
+  assert.equal(isContainerUnavailableMessage('Google Drive returned HTTP 403.'), false);
 });
 
 test('builds sign-in rate-limit keys without trusting caller-supplied hostnames', () => {

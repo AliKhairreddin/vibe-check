@@ -14,6 +14,8 @@ type BatchItem = {
     overallStatus?: string;
     withOverride?: boolean;
   }>;
+  driveFileId?: string;
+  driveId?: string;
   fileName: string;
   itemId: string;
   jobId?: string;
@@ -22,6 +24,42 @@ type BatchItem = {
   result?: string;
   status: string;
 };
+
+type BatchReviewContext = {
+  adCopy: string;
+  driveId?: string;
+  frameIntervalSeconds: number;
+  manualTranscript: string;
+  model?: string;
+  notes: string;
+  offerIds: string[];
+  policyText: string;
+  sceneDetection: boolean;
+};
+
+const batchReviewContextValidator = v.object({
+  adCopy: v.string(),
+  driveId: v.optional(v.string()),
+  frameIntervalSeconds: v.number(),
+  manualTranscript: v.string(),
+  model: v.optional(v.string()),
+  notes: v.string(),
+  offerIds: v.array(v.string()),
+  policyText: v.string(),
+  sceneDetection: v.boolean(),
+});
+
+const publicBatchReviewContextValidator = v.object({
+  ad_copy: v.string(),
+  drive_id: v.union(v.string(), v.null()),
+  frame_interval_seconds: v.number(),
+  manual_transcript: v.string(),
+  model: v.union(v.string(), v.null()),
+  notes: v.string(),
+  offer_ids: v.array(v.string()),
+  policy_text: v.string(),
+  scene_detection: v.boolean(),
+});
 
 type BatchReviewState = {
   batchItemId?: string;
@@ -48,6 +86,8 @@ const publicBatchValidator = v.object({
   expected_count: v.number(),
   source_label: v.union(v.string(), v.null()),
   items: v.array(v.object({
+    drive_file_id: v.union(v.string(), v.null()),
+    drive_id: v.union(v.string(), v.null()),
     file_name: v.string(),
     item_id: v.string(),
     job_id: v.union(v.string(), v.null()),
@@ -57,6 +97,7 @@ const publicBatchValidator = v.object({
     result: v.union(v.string(), v.null()),
     status: v.string(),
   })),
+  review_context: v.union(publicBatchReviewContextValidator, v.null()),
   notification_claim_id: v.union(v.string(), v.null()),
   notification_status: v.string(),
   updated_at: v.number(),
@@ -147,6 +188,7 @@ function publicBatch(batch: {
   batchId: string;
   createdAt: number;
   expectedCount: number;
+  reviewContext?: BatchReviewContext;
   sourceLabel?: string;
   items: BatchItem[];
   notificationClaimId?: string;
@@ -158,7 +200,20 @@ function publicBatch(batch: {
     created_at: batch.createdAt,
     expected_count: batch.expectedCount,
     source_label: batch.sourceLabel ?? null,
+    review_context: batch.reviewContext ? {
+      ad_copy: batch.reviewContext.adCopy,
+      drive_id: batch.reviewContext.driveId ?? null,
+      frame_interval_seconds: batch.reviewContext.frameIntervalSeconds,
+      manual_transcript: batch.reviewContext.manualTranscript,
+      model: batch.reviewContext.model ?? null,
+      notes: batch.reviewContext.notes,
+      offer_ids: batch.reviewContext.offerIds,
+      policy_text: batch.reviewContext.policyText,
+      scene_detection: batch.reviewContext.sceneDetection,
+    } : null,
     items: batch.items.map((item) => ({
+      drive_file_id: item.driveFileId ?? null,
+      drive_id: item.driveId ?? null,
       file_name: item.fileName,
       item_id: item.itemId,
       job_id: item.jobId ?? null,
@@ -323,7 +378,10 @@ export const createBatch = mutation({
     secret: v.string(),
     batchId: v.string(),
     sourceLabel: v.optional(v.string()),
+    reviewContext: v.optional(batchReviewContextValidator),
     items: v.array(v.object({
+      driveFileId: v.optional(v.string()),
+      driveId: v.optional(v.string()),
       fileName: v.string(),
       itemId: v.string(),
       mediaKind: v.string(),
@@ -349,6 +407,7 @@ export const createBatch = mutation({
       createdAt: now,
       expectedCount: args.items.length,
       sourceLabel: args.sourceLabel,
+      reviewContext: args.reviewContext,
       items: args.items.map((item) => ({ ...item, message: "", status: "pending" })),
       notificationStatus: "pending",
       notificationAttempts: 0,
@@ -550,6 +609,51 @@ export const updateItemStatus = mutation({
     );
     await ctx.db.patch(batch._id, { items, notificationReady, updatedAt });
     return publicBatch({ ...batch, items, updatedAt });
+  },
+});
+
+export const claimItemRetry = mutation({
+  args: {
+    secret: v.string(),
+    batchId: v.string(),
+    itemId: v.string(),
+  },
+  returns: v.object({
+    claimed: v.boolean(),
+    status: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const batch = await findBatch(ctx, args.batchId);
+    if (!batch) throw new Error("Review batch not found");
+    const target = batch.items.find((item) => item.itemId === args.itemId);
+    if (!target) throw new Error("Batch item not found");
+    if (target.status !== "upload_failed") {
+      return { claimed: false, status: target.status };
+    }
+    const items = batch.items.map((item) => item.itemId === args.itemId ? {
+      ...item,
+      jobId: undefined,
+      message: "Retrying Drive submission",
+      result: undefined,
+      status: "retrying",
+    } : item);
+    const staleArtifacts = await findArtifactsForOwner(ctx, "batch", args.batchId);
+    for (const artifact of staleArtifacts) {
+      await ctx.storage.delete(artifact.storageId);
+      await ctx.db.delete(artifact._id);
+    }
+    const updatedAt = Date.now();
+    await ctx.db.patch(batch._id, {
+      items,
+      notificationAttempts: 0,
+      notificationClaimId: undefined,
+      notificationLeaseExpiresAt: undefined,
+      notificationReady: false,
+      notificationStatus: "pending",
+      updatedAt,
+    });
+    return { claimed: true, status: "retrying" };
   },
 });
 

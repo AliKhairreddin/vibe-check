@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    BatchReviewContext,
     CreateBatchItem,
     DeletedReview,
     JobRecord,
@@ -386,6 +387,7 @@ def create_batch(
     offer_outcomes:list[OfferOutcome]|None=None,
     *,
     source_label:str|None=None,
+    review_context:BatchReviewContext|None=None,
 )->ReviewBatch:
     timestamp=now_ms()
     outcome_snapshot=(
@@ -399,6 +401,7 @@ def create_batch(
         updated_at=timestamp,
         expected_count=len(items),
         source_label=source_label,
+        review_context=review_context,
         items=[
             ReviewBatchItem(
                 **item.model_dump(),
@@ -411,11 +414,26 @@ def create_batch(
     remote=_convex_call('mutation', 'batches:createBatch', {
         'batchId': batch_id,
         **({'sourceLabel': source_label} if source_label else {}),
+        **({
+            'reviewContext': {
+                **({'driveId': review_context.drive_id} if review_context.drive_id else {}),
+                'adCopy': review_context.ad_copy,
+                'policyText': review_context.policy_text,
+                'notes': review_context.notes,
+                'manualTranscript': review_context.manual_transcript,
+                **({'model': review_context.model} if review_context.model else {}),
+                'frameIntervalSeconds': review_context.frame_interval_seconds,
+                'sceneDetection': review_context.scene_detection,
+                'offerIds': review_context.offer_ids,
+            },
+        } if review_context else {}),
         'items': [
             {
                 'itemId': item.item_id,
                 'fileName': item.file_name,
                 'mediaKind': item.media_kind,
+                **({'driveId': item.drive_id} if item.drive_id else {}),
+                **({'driveFileId': item.drive_file_id} if item.drive_file_id else {}),
                 'offerOutcomes': [
                     {
                         'offerId':outcome.offer_id,
@@ -522,6 +540,31 @@ def update_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
         args['jobId']=job_id
     remote=_convex_call_with_retry('mutation', 'batches:updateItemStatus', args)
     return ReviewBatch.model_validate(remote) if remote is not None else local
+
+
+def claim_batch_item_retry(batch_id:str, item_id:str)->bool:
+    remote=_convex_call_with_retry('mutation', 'batches:claimItemRetry', {
+        'batchId':batch_id,
+        'itemId':item_id,
+    })
+    if remote is not None:
+        return bool(remote.get('claimed')) if isinstance(remote, dict) else False
+    batch=get_batch(batch_id)
+    for item in batch.items:
+        if item.item_id != item_id:
+            continue
+        if item.status != 'upload_failed':
+            return False
+        item.status='retrying'
+        item.job_id=None
+        item.result=None
+        item.message='Retrying Drive submission'
+        batch.notification_claim_id=None
+        batch.notification_status='pending'
+        batch.updated_at=now_ms()
+        write_json(batch_path(batch_id), batch.model_dump(mode='json'))
+        return True
+    raise KeyError(item_id)
 
 def finish_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=None, result:str|None=None, offer_outcomes:list[OfferOutcome]|None=None, message:str='')->tuple[ReviewBatch,bool]:
     normalized_result=_normalize_result_status(result)

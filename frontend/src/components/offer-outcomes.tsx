@@ -130,7 +130,12 @@ export function batchOutcomeForOffer(
     if (failed && outcome.evaluation_state === 'evaluated' && !outcome.overall_status) return null;
     return outcome;
   }
-  if (offer.offer_id !== 'acp' || !item.result) return null;
+  // Only synthesize ACP for old batch rows that predate per-offer snapshots.
+  // A modern Kissterra-only row has an outcome list but intentionally no ACP
+  // outcome; treating its primary result as ACP duplicates the verdict.
+  if ((item.offer_outcomes?.length ?? 0) > 0 || offer.offer_id !== 'acp' || !item.result) {
+    return null;
+  }
   return {
     offer_id: offer.offer_id,
     offer_name: offer.offer_name,

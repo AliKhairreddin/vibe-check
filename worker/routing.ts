@@ -95,6 +95,20 @@ export function authRateLimitKey(request: Request, surface: HostSurface): string
   return `${surface}:${connectingIp}`;
 }
 
+export function isDriveReviewSubmission(request: Request): boolean {
+  if (request.method !== 'POST') return false;
+  const pathname = new URL(request.url).pathname;
+  return pathname === '/api/drive/reviews'
+    || /^\/api\/batches\/[0-9a-f]{32}\/items\/[0-9a-f]{32}\/retry-drive$/.test(pathname);
+}
+
+export function isContainerUnavailableMessage(value: unknown): boolean {
+  const message = value instanceof Error ? value.message : String(value ?? '');
+  const normalized = message.toLowerCase();
+  return normalized.includes('no container instance available')
+    || normalized.includes('max concurrent instance count');
+}
+
 export function isAdminPagePath(pathname: string): boolean {
   return pathname === '/'
     || pathname === '/login'
