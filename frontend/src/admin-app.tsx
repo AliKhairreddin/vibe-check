@@ -177,7 +177,7 @@ type BatchItem = {
 };
 
 const queryClient = new QueryClient();
-const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v2';
+const ACTIVE_BATCH_KEY = 'vibe-check-active-batch-v3';
 const OPENROUTER_MODEL_KEY = 'vibe-check-openrouter-model';
 const SIDEBAR_OPEN_KEY = 'vibe-check-sidebar-open';
 const DEFAULT_OPENROUTER_MODEL = 'deepseek/deepseek-v4-flash';

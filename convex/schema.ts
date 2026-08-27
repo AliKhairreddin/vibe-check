@@ -70,6 +70,7 @@ export default defineSchema({
   })
     .index("by_client_id_and_offer_id_and_job_id", ["clientId", "offerId", "jobId"])
     .index("by_client_id_and_decided_at", ["clientId", "decidedAt"])
+    .index("by_job_id", ["jobId"])
     .index("by_offer_id_and_decided_at", ["offerId", "decidedAt"]),
   reportArtifacts: defineTable({
     contentType: v.string(),
@@ -99,7 +100,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_automation_id", ["automationId"])
-    .index("by_enabled", ["enabled"]),
+    .index("by_enabled", ["enabled"])
+    .index("by_last_batch_id", ["lastBatchId"]),
   automationRuns: defineTable({
     attempts: v.optional(v.number()),
     automationId: v.string(),
@@ -120,6 +122,7 @@ export default defineSchema({
     .index("by_run_id", ["runId"])
     .index("by_automation_scheduled", ["automationId", "scheduledFor"])
     .index("by_automation_status", ["automationId", "status"])
+    .index("by_batch_id", ["batchId"])
     .index("by_status", ["status"])
     .index("by_status_lease", ["status", "leaseExpiresAt"]),
   automationFileClaims: defineTable({

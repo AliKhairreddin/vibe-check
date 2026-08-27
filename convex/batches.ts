@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 type BatchItem = {
   offerOutcomes?: Array<{
@@ -64,6 +65,78 @@ const publicBatchValidator = v.object({
 const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 const NOTIFICATION_LEASE_MS = 15 * 60 * 1000;
 const MAX_NOTIFICATION_ATTEMPTS = 3;
+const PURGE_CHUNK_SIZE = 10;
+
+const purgeCountsValidator = v.object({
+  apiEvidenceBundles: v.number(),
+  apiReviewLinks: v.number(),
+  apiWebhookDeliveries: v.number(),
+  automationFileClaims: v.number(),
+  automationJobStates: v.number(),
+  automationRuns: v.number(),
+  batchArtifacts: v.number(),
+  batchItems: v.number(),
+  batches: v.number(),
+  clientDecisions: v.number(),
+  evidenceFiles: v.number(),
+  evidenceFrameSets: v.number(),
+  files: v.number(),
+  liveScanClaims: v.number(),
+  offerReports: v.number(),
+  offerStats: v.number(),
+  payloads: v.number(),
+  processingMetrics: v.number(),
+  reportArtifacts: v.number(),
+  reviews: v.number(),
+});
+
+type PurgeCounts = {
+  apiEvidenceBundles: number;
+  apiReviewLinks: number;
+  apiWebhookDeliveries: number;
+  automationFileClaims: number;
+  automationJobStates: number;
+  automationRuns: number;
+  batchArtifacts: number;
+  batchItems: number;
+  batches: number;
+  clientDecisions: number;
+  evidenceFiles: number;
+  evidenceFrameSets: number;
+  files: number;
+  liveScanClaims: number;
+  offerReports: number;
+  offerStats: number;
+  payloads: number;
+  processingMetrics: number;
+  reportArtifacts: number;
+  reviews: number;
+};
+
+function emptyPurgeCounts(): PurgeCounts {
+  return {
+    apiEvidenceBundles: 0,
+    apiReviewLinks: 0,
+    apiWebhookDeliveries: 0,
+    automationFileClaims: 0,
+    automationJobStates: 0,
+    automationRuns: 0,
+    batchArtifacts: 0,
+    batchItems: 0,
+    batches: 0,
+    clientDecisions: 0,
+    evidenceFiles: 0,
+    evidenceFrameSets: 0,
+    files: 0,
+    liveScanClaims: 0,
+    offerReports: 0,
+    offerStats: 0,
+    payloads: 0,
+    processingMetrics: 0,
+    reportArtifacts: 0,
+    reviews: 0,
+  };
+}
 
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
@@ -115,6 +188,100 @@ async function findBatch(ctx: MutationCtx | QueryCtx, batchId: string) {
     .query("reviewBatches")
     .withIndex("by_batch_id", (q) => q.eq("batchId", batchId))
     .unique();
+}
+
+async function findArtifactsForOwner(
+  ctx: MutationCtx,
+  ownerType: "batch" | "review",
+  ownerId: string,
+) {
+  const candidates = await ctx.db
+    .query("reportArtifacts")
+    .withIndex("by_owner_type_and_owner_id", (q) =>
+      q
+        .eq("ownerType", ownerType)
+        .gte("ownerId", ownerId)
+        .lt("ownerId", `${ownerId}\uffff`)
+    )
+    .take(100);
+  return candidates.filter((artifact) =>
+    artifact.ownerId === ownerId || artifact.ownerId.startsWith(`${ownerId}:`)
+  );
+}
+
+async function purgeJob(
+  ctx: MutationCtx,
+  jobId: string,
+  storageIds: Set<Id<"_storage">>,
+  counts: PurgeCounts,
+) {
+  const [
+    reviews,
+    offerStats,
+    offerReports,
+    processingMetrics,
+    payloads,
+    evidenceFrameSets,
+    clientDecisions,
+    reportArtifacts,
+    automationJobStates,
+    liveScanClaims,
+    apiReviewLinks,
+    apiEvidenceBundles,
+    apiWebhookDeliveries,
+  ] = await Promise.all([
+    ctx.db.query("reviews").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(2),
+    ctx.db.query("reviewOfferStats").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(20),
+    ctx.db.query("reviewOfferReports").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(20),
+    ctx.db.query("reviewProcessingMetrics").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(2),
+    ctx.db.query("reviewPayloads").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(2),
+    ctx.db.query("reviewEvidenceFrames").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(2),
+    ctx.db.query("clientReviewDecisions").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(100),
+    findArtifactsForOwner(ctx, "review", jobId),
+    ctx.db.query("automationJobStates").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(10),
+    ctx.db.query("liveScanReviewClaims").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(10),
+    ctx.db.query("apiReviewLinks").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(10),
+    ctx.db.query("apiEvidenceBundles").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(10),
+    ctx.db.query("apiWebhookDeliveries").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(100),
+  ]);
+
+  for (const payload of payloads) {
+    storageIds.add(payload.manifestStorageId);
+    if (payload.mediaStorageId) storageIds.add(payload.mediaStorageId);
+  }
+  for (const evidence of evidenceFrameSets) {
+    for (const frame of evidence.frames) storageIds.add(frame.storageId);
+    counts.evidenceFiles += evidence.frames.length;
+  }
+  for (const artifact of reportArtifacts) storageIds.add(artifact.storageId);
+
+  for (const document of reviews) await ctx.db.delete(document._id);
+  for (const document of offerStats) await ctx.db.delete(document._id);
+  for (const document of offerReports) await ctx.db.delete(document._id);
+  for (const document of processingMetrics) await ctx.db.delete(document._id);
+  for (const document of payloads) await ctx.db.delete(document._id);
+  for (const document of evidenceFrameSets) await ctx.db.delete(document._id);
+  for (const document of clientDecisions) await ctx.db.delete(document._id);
+  for (const document of reportArtifacts) await ctx.db.delete(document._id);
+  for (const document of automationJobStates) await ctx.db.delete(document._id);
+  for (const document of liveScanClaims) await ctx.db.delete(document._id);
+  for (const document of apiReviewLinks) await ctx.db.delete(document._id);
+  for (const document of apiEvidenceBundles) await ctx.db.delete(document._id);
+  for (const document of apiWebhookDeliveries) await ctx.db.delete(document._id);
+
+  counts.apiEvidenceBundles += apiEvidenceBundles.length;
+  counts.apiReviewLinks += apiReviewLinks.length;
+  counts.apiWebhookDeliveries += apiWebhookDeliveries.length;
+  counts.automationJobStates += automationJobStates.length;
+  counts.clientDecisions += clientDecisions.length;
+  counts.evidenceFrameSets += evidenceFrameSets.length;
+  counts.liveScanClaims += liveScanClaims.length;
+  counts.offerReports += offerReports.length;
+  counts.offerStats += offerStats.length;
+  counts.payloads += payloads.length;
+  counts.processingMetrics += processingMetrics.length;
+  counts.reportArtifacts += reportArtifacts.length;
+  counts.reviews += reviews.length;
 }
 
 async function hydrateBatchItems(
@@ -225,6 +392,135 @@ export const getBatches = query({
       return publicBatch({ ...batch, items });
     }));
     return hydrated.flatMap((batch) => batch ? [batch] : []);
+  },
+});
+
+export const purgeBatch = mutation({
+  args: {
+    batchId: v.string(),
+    confirmation: v.literal("DELETE_BATCH_AND_REVIEWS"),
+    secret: v.string(),
+  },
+  returns: v.object({
+    batchId: v.string(),
+    counts: purgeCountsValidator,
+    done: v.boolean(),
+    remainingItems: v.number(),
+    remainingReviews: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const batch = await findBatch(ctx, args.batchId);
+    const counts = emptyPurgeCounts();
+    if (!batch) {
+      return {
+        batchId: args.batchId,
+        counts,
+        done: true,
+        remainingItems: 0,
+        remainingReviews: 0,
+      };
+    }
+    if (batch.items.some((item) => !TERMINAL_BATCH_STATUSES.has(item.status))) {
+      throw new Error("Only terminal review batches can be purged");
+    }
+
+    const batchReviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_batch_id", (q) => q.eq("batchId", args.batchId))
+      .take(501);
+    if (batchReviews.length > 500) {
+      throw new Error("Review batch is too large to purge safely");
+    }
+    if (batchReviews.some((review) =>
+      review.deletedAt === undefined
+      && review.status !== "complete"
+      && review.status !== "failed"
+    )) {
+      throw new Error("Only terminal review batches can be purged");
+    }
+
+    const itemChunk = batch.items.slice(0, PURGE_CHUNK_SIZE);
+    const selectedItemIds = new Set(itemChunk.map((item) => item.itemId));
+    const jobIds = new Set(
+      itemChunk.flatMap((item) => item.jobId ? [item.jobId] : []),
+    );
+    for (const review of batchReviews) {
+      if (review.batchItemId && selectedItemIds.has(review.batchItemId)) {
+        jobIds.add(review.jobId);
+      }
+    }
+    if (!itemChunk.length) {
+      for (const review of batchReviews.slice(0, PURGE_CHUNK_SIZE)) {
+        jobIds.add(review.jobId);
+      }
+    }
+
+    const storageIds = new Set<Id<"_storage">>();
+    for (const jobId of jobIds) {
+      await purgeJob(ctx, jobId, storageIds, counts);
+    }
+    counts.batchItems = itemChunk.length;
+
+    const remainingItems = batch.items.slice(itemChunk.length);
+    const remainingReviews = batchReviews.filter((review) => !jobIds.has(review.jobId));
+    const done = remainingItems.length === 0 && remainingReviews.length === 0;
+    if (done) {
+      const [batchArtifacts, automations, automationRuns] = await Promise.all([
+        findArtifactsForOwner(ctx, "batch", args.batchId),
+        ctx.db
+          .query("reviewAutomations")
+          .withIndex("by_last_batch_id", (q) => q.eq("lastBatchId", args.batchId))
+          .take(100),
+        ctx.db
+          .query("automationRuns")
+          .withIndex("by_batch_id", (q) => q.eq("batchId", args.batchId))
+          .take(100),
+      ]);
+      for (const artifact of batchArtifacts) {
+        storageIds.add(artifact.storageId);
+        await ctx.db.delete(artifact._id);
+      }
+      for (const automation of automations) {
+        await ctx.db.patch(automation._id, { lastBatchId: undefined });
+      }
+      for (const run of automationRuns) {
+        const [fileClaims, jobStates] = await Promise.all([
+          ctx.db
+            .query("automationFileClaims")
+            .withIndex("by_run_id", (q) => q.eq("runId", run.runId))
+            .take(500),
+          ctx.db
+            .query("automationJobStates")
+            .withIndex("by_run_id", (q) => q.eq("runId", run.runId))
+            .take(500),
+        ]);
+        for (const claim of fileClaims) await ctx.db.delete(claim._id);
+        for (const state of jobStates) await ctx.db.delete(state._id);
+        await ctx.db.delete(run._id);
+        counts.automationFileClaims += fileClaims.length;
+        counts.automationJobStates += jobStates.length;
+      }
+      counts.automationRuns += automationRuns.length;
+      counts.batchArtifacts += batchArtifacts.length;
+      counts.batches = 1;
+      await ctx.db.delete(batch._id);
+    } else {
+      await ctx.db.patch(batch._id, {
+        items: remainingItems,
+        updatedAt: Date.now(),
+      });
+    }
+
+    for (const storageId of storageIds) await ctx.storage.delete(storageId);
+    counts.files = storageIds.size;
+    return {
+      batchId: args.batchId,
+      counts,
+      done,
+      remainingItems: remainingItems.length,
+      remainingReviews: remainingReviews.length,
+    };
   },
 });
 
