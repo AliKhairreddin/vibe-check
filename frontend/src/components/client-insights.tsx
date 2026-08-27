@@ -65,7 +65,7 @@ const VERTICALS: Array<{
     label: 'Auto Insurance',
   },
   {
-    description: 'Home insurance creatives identified by HOME in the filename.',
+    description: 'Creatives assigned to the Home Insurance vertical during submission.',
     icon: Home,
     id: 'home-insurance',
     label: 'Home Insurance',
@@ -265,7 +265,7 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
           <EmptyState
             title={selectedVertical ? `No ${selectedVertical.label} creatives yet` : 'No creative data yet'}
             description={selectedVertical?.id === 'home-insurance'
-              ? 'Creatives with HOME in the filename will appear here automatically.'
+              ? 'Creatives assigned to Home Insurance during submission will appear here.'
               : 'Submit a new batch to populate performance insights.'}
           />
         )}
