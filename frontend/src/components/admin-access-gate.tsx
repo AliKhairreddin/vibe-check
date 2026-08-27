@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { SessionLoadingScreen } from '@/components/session-loading-screen';
 import {
   clearAdminSession,
   getAdminSession,
@@ -31,6 +32,7 @@ type AdminAccessValue = {
   canManageSettings: boolean;
   error: string;
   isChecking: boolean;
+  isRestoringSession: boolean;
   isSigningOut: boolean;
   isUnlocked: boolean;
   lock: () => Promise<void>;
@@ -46,7 +48,8 @@ const AdminAccessContext = createContext<AdminAccessValue | null>(null);
 export function AdminAccessProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [password, setPasswordState] = useState('');
-  const [isChecking, setIsChecking] = useState(true);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
+  const [isChecking, setIsChecking] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [error, setError] = useState('');
@@ -67,7 +70,7 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined)
       .finally(() => {
-        if (active) setIsChecking(false);
+        if (active) setIsRestoringSession(false);
       });
     return () => {
       active = false;
@@ -127,6 +130,7 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
       canManageSettings: role === 'owner',
       error,
       isChecking,
+      isRestoringSession,
       isSigningOut,
       isUnlocked,
       lock,
@@ -143,6 +147,7 @@ export function AdminAccessProvider({ children }: { children: ReactNode }) {
 
 export function AdminPortalGate({ children }: { children: ReactNode }) {
   const access = useAdminAccess();
+  if (access.isRestoringSession) return <SessionLoadingScreen />;
   if (access.isUnlocked) return children;
 
   return (

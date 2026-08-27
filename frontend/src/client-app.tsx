@@ -9,13 +9,21 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 
-import { ClientDashboardPage, ClientReviewDetailPage } from '@/components/client-dashboard';
+import {
+  ClientDashboardPage,
+  ClientPortalGate,
+  ClientReviewDetailPage,
+} from '@/components/client-dashboard';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 const queryClient = new QueryClient();
 
 function ClientLayout() {
-  return <Outlet />;
+  return (
+    <ClientPortalGate>
+      <Outlet />
+    </ClientPortalGate>
+  );
 }
 
 const rootRoute = createRootRoute({ component: ClientLayout });
@@ -73,7 +81,7 @@ const router = createRouter({
 let clientRoot: Root | undefined;
 
 export function mountClientApp(element: HTMLElement) {
-  document.title = 'Sign in · AdChecked';
+  document.title = 'AdChecked';
   clientRoot ??= createRoot(element);
   clientRoot.render(
     <TooltipProvider>

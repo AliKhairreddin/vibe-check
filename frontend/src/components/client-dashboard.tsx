@@ -67,6 +67,7 @@ import {
 } from '@/components/ui/sidebar';
 import { Textarea } from '@/components/ui/textarea';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
+import { SessionLoadingScreen } from '@/components/session-loading-screen';
 import {
   clearClientSession,
   decideClientReview,
@@ -118,32 +119,25 @@ type ClientAuthValue = {
 const ClientAuthContext = createContext<ClientAuthValue | null>(null);
 
 export function ClientDashboardPage() {
-  return (
-    <ClientPortalGate>
-      <ClientDashboard />
-    </ClientPortalGate>
-  );
+  return <ClientDashboard />;
 }
 
 export function ClientReviewDetailPage() {
-  return (
-    <ClientPortalGate>
-      <ClientReviewDetail />
-    </ClientPortalGate>
-  );
+  return <ClientReviewDetail />;
 }
 
 export const KissterraDashboardPage = ClientDashboardPage;
 export const KissterraReviewDetailPage = ClientReviewDetailPage;
 
-function ClientPortalGate({ children }: { children: ReactNode }) {
+export function ClientPortalGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [session, setSession] = useState<ClientSession | null>(null);
-  const [isChecking, setIsChecking] = useState(true);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [error, setError] = useState('');
 
@@ -159,7 +153,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined)
       .finally(() => {
-        if (active) setIsChecking(false);
+        if (active) setIsCheckingSession(false);
       });
     return () => {
       active = false;
@@ -167,13 +161,13 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
   }, [navigate]);
 
   useEffect(() => {
-    if (isChecking) return;
+    if (isCheckingSession) return;
     document.title = !session
       ? 'Sign in · AdChecked'
       : pathname.includes('/reviews/')
         ? 'Creative review · AdChecked'
         : 'Creative reviews · AdChecked';
-  }, [isChecking,pathname,session]);
+  }, [isCheckingSession, pathname, session]);
 
   async function unlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -182,7 +176,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
       setError('Enter your username and password.');
       return;
     }
-    setIsChecking(true);
+    setIsSigningIn(true);
     setError('');
     try {
       const nextSession = await verifyClientCredentials(normalizedUsername, password);
@@ -202,7 +196,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
-      setIsChecking(false);
+      setIsSigningIn(false);
     }
   }
 
@@ -224,6 +218,8 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
     await navigate({ to: '/login', replace: true });
     setIsSigningOut(false);
   }
+
+  if (isCheckingSession) return <SessionLoadingScreen />;
 
   if (!session) {
     return (
@@ -247,7 +243,7 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
                   value={username}
                   autoComplete="username"
                   autoFocus
-                  disabled={isChecking}
+                  disabled={isSigningIn}
                   onChange={(event) => setUsername(event.currentTarget.value)}
                 />
               </div>
@@ -258,13 +254,13 @@ function ClientPortalGate({ children }: { children: ReactNode }) {
                   type="password"
                   value={password}
                   autoComplete="current-password"
-                  disabled={isChecking}
+                  disabled={isSigningIn}
                   onChange={(event) => setPassword(event.currentTarget.value)}
                 />
               </div>
-              <Button type="submit" size="lg" disabled={isChecking || !username.trim() || !password}>
-                {isChecking ? <LoaderCircle className="animate-spin" /> : <KeyRound />}
-                {isChecking ? 'Signing in' : 'Sign in'}
+              <Button type="submit" size="lg" disabled={isSigningIn || !username.trim() || !password}>
+                {isSigningIn ? <LoaderCircle className="animate-spin" /> : <KeyRound />}
+                {isSigningIn ? 'Signing in' : 'Sign in'}
               </Button>
             </form>
             {error ? (
