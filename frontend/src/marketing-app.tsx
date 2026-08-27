@@ -11,7 +11,6 @@ import {
   Menu,
   ScanSearch,
   ShieldCheck,
-  Sparkles,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -87,9 +86,6 @@ function MarketingApp() {
           <div className="pointer-events-none absolute top-0 left-1/2 -z-10 h-[38rem] w-[70rem] -translate-x-1/2 rounded-[50%] bg-[radial-gradient(circle,rgba(52,211,153,0.16)_0%,rgba(59,130,246,0.07)_40%,transparent_70%)] blur-3xl" />
           <div className="mx-auto grid max-w-7xl items-center gap-14 lg:grid-cols-[0.9fr_1.1fr] lg:gap-12">
             <div className="max-w-2xl">
-              <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-emerald-800/15 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 shadow-sm">
-                <Sparkles className="size-3.5" /> AI-assisted creative compliance
-              </div>
               <h1 className="max-w-xl text-balance text-5xl leading-[0.98] font-semibold tracking-[-0.055em] sm:text-6xl lg:text-7xl">
                 Catch ad risk before your audience does.
               </h1>
