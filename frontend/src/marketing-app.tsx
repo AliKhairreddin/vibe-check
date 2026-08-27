@@ -116,11 +116,16 @@ function MarketingApp() {
         </section>
 
         <section className="border-y border-zinc-950/6 bg-white px-5 py-8 sm:px-8">
-          <div className="mx-auto grid max-w-7xl gap-6 text-sm text-zinc-500 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat value="Video + image" label="Creative analysis" />
-            <Stat value="Audio + OCR" label="Message extraction" />
-            <Stat value="Policy evidence" label="Actionable findings" />
-            <Stat value="API + live scans" label="Workflow coverage" />
+          <div className="mx-auto max-w-7xl">
+            <p className="mb-7 text-center text-sm font-medium text-zinc-700">
+              Already used by a media-buying team managing hundreds of thousands of dollars in ad spend every month.
+            </p>
+            <div className="grid gap-6 border-t border-zinc-950/6 pt-7 text-sm text-zinc-500 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat value="Video + image" label="Creative analysis" />
+              <Stat value="Audio + OCR" label="Message extraction" />
+              <Stat value="Policy evidence" label="Actionable findings" />
+              <Stat value="API + live scans" label="Workflow coverage" />
+            </div>
           </div>
         </section>
 
@@ -198,7 +203,20 @@ function MarketingApp() {
             <a className="hover:text-zinc-950" href={ADMIN_LOGIN_URL}>Admin</a>
             <a className="hover:text-zinc-950" href={DEMO_EMAIL_URL}>Contact</a>
           </div>
-          <span>© {new Date().getFullYear()} AdChecked</span>
+          <div className="grid gap-1 sm:text-right">
+            <span>© {new Date().getFullYear()} AdChecked</span>
+            <span className="text-xs">
+              Developed by That Canadian Software Services ·{' '}
+              <a
+                className="font-medium text-zinc-600 hover:text-zinc-950"
+                href="https://x.com/ThatCdnAli"
+                rel="noreferrer"
+                target="_blank"
+              >
+                @ThatCdnAli
+              </a>
+            </span>
+          </div>
         </div>
       </footer>
     </div>
