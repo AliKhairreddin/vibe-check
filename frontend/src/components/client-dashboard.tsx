@@ -21,17 +21,20 @@ import {
   FileText,
   Files,
   Gauge,
+  Grid2X2,
   Home,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
   LogOut,
   RefreshCw,
+  Rows3,
   ScanSearch,
   Search,
   ShieldCheck,
   Layers3,
   SlidersHorizontal,
+  Settings2,
   X,
   XCircle,
 } from 'lucide-react';
@@ -90,6 +93,12 @@ import {
   type ReviewEvidenceFrame,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  readClientPreferences,
+  saveClientPreferences,
+  type ClientPreferences,
+  type ClientReviewView,
+} from '@/lib/client-preferences';
 
 const SELECTED_CLIENT_KEY = 'vibe-check-selected-client';
 const CLIENT_SIDEBAR_OPEN_KEY = 'vibe-check-client-sidebar-open';
@@ -293,11 +302,12 @@ function ClientDashboard() {
     ? storedClientId!
     : session.portals[0]?.client_id ?? '';
   const [selectedClientId, setSelectedClientId] = useState(initialClientId);
+  const [preferences, setPreferences] = useState<ClientPreferences>(() => readClientPreferences());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [expandedCreatives, setExpandedCreatives] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
+  const [resultFilter, setResultFilter] = useState<ResultFilter>(preferences.defaultResultFilter);
   const [batchFilter, setBatchFilter] = useState<BatchFilter>('all');
   const [loadBackgroundPortals, setLoadBackgroundPortals] = useState(false);
 
@@ -339,10 +349,10 @@ function ClientDashboard() {
     setExpandedGroups((current) => {
       const validIds = new Set(allGroups.map((group) => group.id));
       const next = new Set([...current].filter((id) => validIds.has(id)));
-      if (!next.size && allGroups[0]) next.add(allGroups[0].id);
+      if (!next.size && allGroups[0] && preferences.autoExpandNewestBatch) next.add(allGroups[0].id);
       return setsEqual(current, next) ? current : next;
     });
-  }, [allGroups]);
+  }, [allGroups, preferences.autoExpandNewestBatch]);
 
   useEffect(() => {
     if (loadBackgroundPortals || session.role !== 'admin' || !selectedQuery?.data) return;
@@ -415,7 +425,7 @@ function ClientDashboard() {
     setSelectedClientId(clientId);
     setSearch('');
     setStatusFilter('all');
-    setResultFilter('all');
+    setResultFilter(preferences.defaultResultFilter);
     setBatchFilter('all');
     setExpandedGroups(new Set());
     setExpandedCreatives(new Set());
@@ -428,6 +438,14 @@ function ClientDashboard() {
       queryKey: ['client', selectedPortal.client_id, 'review', review.job_id],
       queryFn: () => getClientReview(selectedPortal.client_id, review.job_id),
       staleTime: 60_000,
+    });
+  }
+
+  function changeReviewView(reviewView: ClientReviewView) {
+    setPreferences((current) => {
+      const next = { ...current, reviewView };
+      saveClientPreferences(next);
+      return next;
     });
   }
 
@@ -501,6 +519,30 @@ function ClientDashboard() {
               ]}
               value={batchFilter}
             />
+            <div className="flex items-center rounded-md border bg-background p-0.5" aria-label="Creative layout">
+              <Button
+                type="button"
+                size="icon-xs"
+                variant={preferences.reviewView === 'grid' ? 'secondary' : 'ghost'}
+                aria-label="Grid view"
+                aria-pressed={preferences.reviewView === 'grid'}
+                title="Grid view"
+                onClick={() => changeReviewView('grid')}
+              >
+                <Grid2X2 />
+              </Button>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant={preferences.reviewView === 'list' ? 'secondary' : 'ghost'}
+                aria-label="List view"
+                aria-pressed={preferences.reviewView === 'list'}
+                title="List view"
+                onClick={() => changeReviewView('list')}
+              >
+                <Rows3 />
+              </Button>
+            </div>
             {(search || statusFilter !== 'all' || resultFilter !== 'all' || batchFilter !== 'all') ? (
               <Button type="button" size="icon-sm" variant="ghost" aria-label="Clear filters" title="Clear filters" onClick={() => {
                 setSearch('');
@@ -568,14 +610,30 @@ function ClientDashboard() {
                     </div>
                     {isExpanded ? (
                       <CardContent className="border-t bg-muted/15 p-3">
-                        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(22rem,100%),1fr))] items-start gap-3">
+                        {preferences.reviewView === 'list' ? (
+                          <div className="mb-1 hidden grid-cols-[minmax(0,1fr)_7rem_7rem_8rem] gap-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
+                            <span>Creative</span>
+                            <span>Result</span>
+                            <span>Findings</span>
+                            <span>Decision</span>
+                          </div>
+                        ) : null}
+                        <div className={cn(
+                          'grid items-start',
+                          preferences.density === 'compact' ? 'gap-1.5' : 'gap-3',
+                          preferences.reviewView === 'grid'
+                            ? 'grid-cols-[repeat(auto-fit,minmax(min(22rem,100%),1fr))]'
+                            : 'grid-cols-1'
+                        )}>
                           {group.reviews.map((review) => (
                             <CreativeReviewCard
                               key={review.job_id}
                               clientId={selectedPortal.client_id}
+                              density={preferences.density}
                               isExpanded={expandedCreatives.has(review.job_id)}
                               isSaving={decisionMutation.isPending && decisionMutation.variables?.jobId === review.job_id}
                               review={review}
+                              view={preferences.reviewView}
                               onDecide={(input) => decisionMutation.mutate({ clientId: selectedPortal.client_id, jobId: review.job_id, ...input })}
                               onPrefetch={() => prefetchCreative(review)}
                               onToggle={() => {
@@ -610,7 +668,7 @@ function ClientDashboard() {
 export function ClientPortalFrame({ children }: {
   children: ReactNode;
 }) {
-  const { error, isSigningOut, logout, session } = useClientAuth();
+  const { error, isSigningOut, logout } = useClientAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -653,6 +711,12 @@ export function ClientPortalFrame({ children }: {
                     <SidebarMenuButton isActive={pathname === '/client/reviews'} tooltip="Creative reviews" onClick={() => void navigate({ to: '/client/reviews' })}>
                       <Files />
                       <span>Creative reviews</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton isActive={pathname === '/client/settings'} tooltip="Settings" onClick={() => void navigate({ to: '/client/settings' })}>
+                      <Settings2 />
+                      <span>Settings</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 </SidebarMenu>
@@ -733,14 +797,16 @@ function ClientSidebarBorderTrigger() {
   );
 }
 
-function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefetch, onToggle, review }: {
+function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide, onPrefetch, onToggle, review, view }: {
   clientId: string;
+  density: ClientPreferences['density'];
   isExpanded: boolean;
   isSaving: boolean;
   onDecide: (input: DecisionInput) => void;
   onPrefetch: () => void;
   onToggle: () => void;
   review: ClientReviewItem;
+  view: ClientReviewView;
 }) {
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
   const effectiveStatus = effectiveReviewStatus(review);
@@ -763,11 +829,19 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
       effectiveStatus === 'red' && 'border-red-600/45',
       isExpanded && 'ring-1 ring-ring/30'
     )} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
-      <div className="flex items-center gap-2 p-3">
+      <div className={cn(
+        'gap-2',
+        density === 'compact' ? 'p-2' : 'p-3',
+        view === 'list'
+          ? 'grid md:grid-cols-[minmax(0,1fr)_7rem_7rem_8rem] md:items-center md:gap-3'
+          : 'flex items-center'
+      )}>
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={isExpanded} onClick={onToggle}>
           {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="truncate text-sm font-medium" title={review.file_name}>{review.file_name}</span>
         </button>
+        {view === 'list' ? <StatusBadge status={effectiveStatus} /> : null}
+        {view === 'list' ? <span className="text-xs tabular-nums text-muted-foreground">{review.preview.finding_count} finding{review.preview.finding_count === 1 ? '' : 's'}</span> : null}
         <select
           aria-label={`Decision for ${review.file_name}`}
           className={cn(

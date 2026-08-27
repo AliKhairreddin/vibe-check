@@ -19,6 +19,7 @@ import {
   ClientDashboardPage,
   ClientVerticalPage,
 } from '@/components/client-insights';
+import { ClientSettingsPage } from '@/components/client-settings';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 const queryClient = new QueryClient();
@@ -53,6 +54,11 @@ const clientReviewsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/client/reviews',
   component: ClientReviewsPage,
+});
+const clientSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/settings',
+  component: ClientSettingsPage,
 });
 const clientVerticalRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -93,6 +99,7 @@ const router = createRouter({
     loginRoute,
     clientRoute,
     clientReviewsRoute,
+    clientSettingsRoute,
     clientVerticalRoute,
     clientBatchRoute,
     clientReviewRoute,
