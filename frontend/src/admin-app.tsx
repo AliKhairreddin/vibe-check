@@ -2790,8 +2790,8 @@ function BatchPage() {
                 size="sm"
               />
             ) : null}
-            <Link to="/reviews/new" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-              Back to workspace
+            <Link to="/history" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              Back to history
             </Link>
           </div>
         </CardAction>
