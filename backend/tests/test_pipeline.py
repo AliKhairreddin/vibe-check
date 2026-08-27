@@ -49,6 +49,7 @@ from app.review_pipeline.source_links import resolve_review_sources
 from app.review_pipeline.telegram import build_batch_message, build_live_scan_message, build_review_message, finish_batch_item_and_notify, send_review_message
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
+from app.review_pipeline.verticals import classify_review_vertical
 from PIL import Image
 from pypdf import PdfReader
 
@@ -56,6 +57,18 @@ from pypdf import PdfReader
 @pytest.fixture
 def anyio_backend():
     return 'asyncio'
+
+
+@pytest.mark.parametrize(('file_name', 'expected'), [
+    ('CT_VD_EN_HOME_27.08_AR_101.mp4', 'home-insurance'),
+    ('home-offer-static.png', 'home-insurance'),
+    ('CT_VD_EN_AUTO_FDR_27.08_AR_102.mp4', 'auto-insurance'),
+    ('CT_VD_EN_SWF_27.08_AR_103.mp4', 'auto-insurance'),
+    ('HOMER_offer.mp4', 'auto-insurance'),
+])
+def test_review_vertical_is_derived_from_explicit_filename_tokens(file_name, expected):
+    assert classify_review_vertical(file_name) == expected
+
 
 @pytest.mark.parametrize('result', ['green', 'yellow', 'red'])
 def test_report_schema_validation(result):
@@ -2828,6 +2841,41 @@ def test_review_stats_are_offer_aware_and_keep_override_counts_separate(tmp_path
     assert combined.total_reviews == 1 and combined.completed_reviews == 1
     assert combined.outcomes.red == 1 and combined.outcomes.green == 1
     assert combined.accepted_overrides == 1
+
+
+def test_client_approval_is_effective_green_in_local_admin_history_and_stats(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('client-approved', JobStatus.queued, 0, 'Queued', 'CT_VD_EN_AUTO_offer.mp4')
+    set_report('client-approved', {
+        'overall_status':'red',
+        'summary':'Automated issue.',
+        'findings':[],
+    })
+    set_status('client-approved', JobStatus.complete, 100, 'Complete')
+    review_storage.write_json(tmp_path/'settings'/'client_review_decisions.json', {
+        'client:acp:client-approved': {
+            'aiStatus':'red',
+            'clientId':'client',
+            'decidedAt':123,
+            'decision':'approved',
+            'jobId':'client-approved',
+            'offerId':'acp',
+        },
+    })
+
+    history=list_reviews()
+    outcome=next(value for value in history[0].offer_outcomes if value.offer_id == 'acp')
+    stats=get_review_stats('acp')
+
+    assert history[0].overall_status == 'green'
+    assert outcome.overall_status == 'green'
+    assert outcome.automated_status == 'red'
+    assert outcome.effective_status == 'green'
+    assert outcome.client_decision == 'approved'
+    assert stats.outcomes.green == 1 and stats.outcomes.red == 0
+    assert stats.client_overrides == 1
 
 @pytest.mark.anyio
 async def test_review_stats_api_accepts_multiple_offer_filters(tmp_path, monkeypatch):

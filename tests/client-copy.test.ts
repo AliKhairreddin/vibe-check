@@ -10,6 +10,10 @@ const clientAppSource = readFileSync(
   new URL('../frontend/src/client-app.tsx', import.meta.url),
   'utf8',
 );
+const clientInsightsSource = readFileSync(
+  new URL('../frontend/src/components/client-insights.tsx', import.meta.url),
+  'utf8',
+);
 const adminAccessGateSource = readFileSync(
   new URL('../frontend/src/components/admin-access-gate.tsx', import.meta.url),
   'utf8',
@@ -42,6 +46,24 @@ test('keeps red, yellow, and green review counts separate', () => {
   assert.match(clientDashboardSource, /label="green" tone="success" value=\{statusCounts\.green\}/);
   assert.doesNotMatch(clientDashboardSource, /ai_status !== 'green'/);
   assert.doesNotMatch(clientDashboardSource, /label="flagged"/);
+});
+
+test('uses neutral client workspace labels and exposes result filtering', () => {
+  assert.match(clientDashboardSource, /<h1[^>]*>Creative reviews<\/h1>/);
+  assert.match(clientDashboardSource, /label="Result"/);
+  assert.match(clientDashboardSource, /label: 'Green', value: 'green'/);
+  assert.match(clientDashboardSource, /label: 'Yellow', value: 'yellow'/);
+  assert.match(clientDashboardSource, /label: 'Red', value: 'red'/);
+  assert.doesNotMatch(clientDashboardSource, />Kissterra<\//);
+  assert.doesNotMatch(clientDashboardSource, /Signed in as/);
+});
+
+test('provides dashboard, vertical, and batch insight routes', () => {
+  assert.match(clientAppSource, /path: '\/client\/verticals\/\$verticalId'/);
+  assert.match(clientAppSource, /path: '\/client\/\$clientId\/batches\/\$batchId'/);
+  assert.match(clientInsightsSource, /Auto Insurance/);
+  assert.match(clientInsightsSource, /Home Insurance/);
+  assert.match(clientInsightsSource, /Batch performance/);
 });
 
 test('never renders a sign-in screen while an existing session is being restored', () => {

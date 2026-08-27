@@ -1,3 +1,5 @@
+export type ReviewVertical = 'auto-insurance' | 'home-insurance';
+
 export type Status = {
   job_id: string;
   file_name: string;
@@ -14,6 +16,7 @@ export type Status = {
   updated_at?: number | null;
   offer_ids?: string[];
   primary_offer_id?: string | null;
+  vertical?: ReviewVertical;
 };
 
 export type ReviewSource = {
@@ -149,6 +152,10 @@ export type OfferOutcome = {
   creative_result: OverallStatus | null;
   ad_copy_result: OverallStatus | null;
   with_override?: boolean;
+  automated_status?: OverallStatus | null;
+  effective_status?: OverallStatus | null;
+  client_decision?: 'approved' | 'disapproved' | null;
+  client_decided_at?: number | null;
   message: string;
 };
 
@@ -189,6 +196,15 @@ export type Report = OfferResult & {
   primary_offer_id?: string | null;
   offer_results?: OfferResult[];
   offer_outcomes?: OfferOutcome[];
+  client_decisions?: Array<{
+    ai_status: OverallStatus | null;
+    client_id: string;
+    decided_at: number;
+    decision: 'approved' | 'disapproved';
+    feedback_note: string | null;
+    feedback_reason: ClientFeedbackReason | null;
+    offer_id: string;
+  }>;
 };
 
 export type ReviewEvidenceFrame = {
@@ -218,6 +234,7 @@ export type ClientReviewDecision = {
 
 export type ClientReviewItem = {
   ai_status: OverallStatus;
+  effective_status: OverallStatus;
   batch_created_at: number;
   batch_id: string | null;
   batch_source_label: string | null;
@@ -233,6 +250,7 @@ export type ClientReviewItem = {
     google_drive_url: string | null;
     summary: string;
   };
+  vertical: ReviewVertical;
 };
 
 export type ClientReviewList = {
@@ -340,6 +358,8 @@ export type ReviewStats = {
   in_progress_reviews: number;
   failed_reviews: number;
   accepted_overrides: number;
+  client_overrides: number;
+  vertical: ReviewVertical | 'all';
   outcomes: Record<OverallStatus, number>;
 };
 
@@ -783,8 +803,12 @@ export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
   return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
 }
 
-export async function getReviewStats(offerIds: string[] = ['acp']): Promise<ReviewStats> {
+export async function getReviewStats(
+  offerIds: string[] = ['acp'],
+  vertical?: ReviewVertical
+): Promise<ReviewStats> {
   const params = new URLSearchParams({ offer_ids: offerIds.join(',') });
+  if (vertical) params.set('vertical', vertical);
   return requestJson<ReviewStats>(`/api/reviews/stats?${params}`);
 }
 

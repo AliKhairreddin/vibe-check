@@ -209,8 +209,17 @@ export default defineSchema({
     sourceUrl: v.optional(v.string()),
     status: v.string(),
     updatedAt: v.number(),
+    vertical: v.optional(v.union(
+      v.literal("auto-insurance"),
+      v.literal("home-insurance")
+    )),
   })
     .index("by_offer_id_deleted_at", ["offerId", "deletedAt"])
+    .index("by_offer_id_and_vertical_and_deleted_at", [
+      "offerId",
+      "vertical",
+      "deletedAt",
+    ])
     .index("by_offer_id_and_deleted_at_and_status_and_created_at", [
       "offerId",
       "deletedAt",

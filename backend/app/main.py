@@ -170,6 +170,7 @@ BATCH_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 JOB_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 OBSERVATION_DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
+REVIEW_VERTICALS = {'auto-insurance', 'home-insurance'}
 PARTNER_ID_PATTERN = re.compile(r'^partner_[0-9a-f]{32}$')
 API_KEY_ID_PATTERN = re.compile(r'^key_[0-9a-f]{32}$')
 MAX_BATCH_ITEMS = 100
@@ -1109,6 +1110,7 @@ def public_client_review(value:dict)->dict:
     preview=value.get('preview') if isinstance(value.get('preview'), dict) else {}
     return {
         'ai_status':value.get('aiStatus'),
+        'effective_status':value.get('effectiveStatus') or value.get('aiStatus'),
         'batch_created_at':value.get('batchCreatedAt') or value.get('createdAt'),
         'batch_id':value.get('batchId'),
         'batch_source_label':value.get('batchSourceLabel'),
@@ -1123,6 +1125,7 @@ def public_client_review(value:dict)->dict:
         'issue_summary':value.get('issueSummary'),
         'job_id':value.get('jobId'),
         'media_kind':value.get('mediaKind'),
+        'vertical':value.get('vertical') or 'auto-insurance',
         'preview':{
             'finding_count':int(preview.get('findingCount') or 0),
             'findings':[
@@ -3389,14 +3392,21 @@ def full_review_history(limit:int=50, cursor:str|None=None):
 
 
 @app.get('/api/reviews/stats', response_model=ReviewStats)
-def review_stats(offer_id:str|None=None, offer_ids:str|None=None):
+def review_stats(
+    offer_id:str|None=None,
+    offer_ids:str|None=None,
+    vertical:str|None=None,
+):
     requested=(offer_ids.split(',') if offer_ids is not None else [offer_id or 'acp'])
     normalized=list(dict.fromkeys(value.strip().lower() for value in requested if value.strip()))
     if not normalized:
         normalized=['acp']
     if len(normalized) > 10 or any(not OFFER_ID_PATTERN.fullmatch(value) for value in normalized):
         raise HTTPException(400, 'Invalid offer IDs')
-    return get_review_stats(normalized)
+    normalized_vertical=vertical.strip().lower() if vertical else None
+    if normalized_vertical is not None and normalized_vertical not in REVIEW_VERTICALS:
+        raise HTTPException(400, 'Invalid review vertical')
+    return get_review_stats(normalized, normalized_vertical)
 
 
 @app.delete('/api/reviews/{job_id}', response_model=DeletedReview)

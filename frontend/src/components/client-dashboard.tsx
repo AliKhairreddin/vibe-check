@@ -19,6 +19,9 @@ import {
   Download,
   ExternalLink,
   FileText,
+  Files,
+  Gauge,
+  Home,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
@@ -57,7 +60,6 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -79,7 +81,6 @@ import {
   verifyClientCredentials,
   type ClientDecisionValue,
   type ClientFeedbackReason,
-  type ClientPortalSummary,
   type ClientReviewDetail,
   type ClientReviewItem,
   type ClientReviewList,
@@ -102,6 +103,7 @@ type ReviewGroup = {
 };
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'disapproved';
+type ResultFilter = 'all' | OverallStatus;
 type BatchFilter = 'all' | 'unchecked' | 'checked';
 type DecisionInput = {
   decision: ClientDecisionValue;
@@ -118,7 +120,7 @@ type ClientAuthValue = {
 
 const ClientAuthContext = createContext<ClientAuthValue | null>(null);
 
-export function ClientDashboardPage() {
+export function ClientReviewsPage() {
   return <ClientDashboard />;
 }
 
@@ -126,7 +128,7 @@ export function ClientReviewDetailPage() {
   return <ClientReviewDetail />;
 }
 
-export const KissterraDashboardPage = ClientDashboardPage;
+export const KissterraDashboardPage = ClientReviewsPage;
 export const KissterraReviewDetailPage = ClientReviewDetailPage;
 
 export function ClientPortalGate({ children }: { children: ReactNode }) {
@@ -295,6 +297,7 @@ function ClientDashboard() {
   const [expandedCreatives, setExpandedCreatives] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [batchFilter, setBatchFilter] = useState<BatchFilter>('all');
   const [loadBackgroundPortals, setLoadBackgroundPortals] = useState(false);
 
@@ -320,11 +323,12 @@ function ClientDashboard() {
     if (batchFilter === 'unchecked' && isChecked) return [];
     const visibleReviews = group.reviews.filter((review) => {
       if (statusFilter !== 'all' && decisionStatus(review) !== statusFilter) return false;
+      if (resultFilter !== 'all' && effectiveReviewStatus(review) !== resultFilter) return false;
       if (!normalizedSearch) return true;
       return `${review.file_name} ${review.issue_summary ?? ''}`.toLocaleLowerCase().includes(normalizedSearch);
     });
     return visibleReviews.length ? [{ ...group, reviews: visibleReviews }] : [];
-  }), [allGroups, batchFilter, normalizedSearch, statusFilter]);
+  }), [allGroups, batchFilter, normalizedSearch, resultFilter, statusFilter]);
 
   useEffect(() => {
     if (!selectedPortal) return;
@@ -403,19 +407,15 @@ function ClientDashboard() {
   const checkedBatches = allGroups.filter((group) => group.reviews.every((review) => Boolean(review.decision))).length;
   const uncheckedBatches = allGroups.length - checkedBatches;
   const statusCounts = {
-    green: reviews.filter((review) => review.ai_status === 'green').length,
-    yellow: reviews.filter((review) => review.ai_status === 'yellow').length,
-    red: reviews.filter((review) => review.ai_status === 'red').length,
+    green: reviews.filter((review) => effectiveReviewStatus(review) === 'green').length,
+    yellow: reviews.filter((review) => effectiveReviewStatus(review) === 'yellow').length,
+    red: reviews.filter((review) => effectiveReviewStatus(review) === 'red').length,
   };
-  const portalCounts = new Map(session.portals.map((portal, index) => [
-    portal.client_id,
-    queries[index]?.data?.reviews.length,
-  ]));
-
   function selectClient(clientId: string) {
     setSelectedClientId(clientId);
     setSearch('');
     setStatusFilter('all');
+    setResultFilter('all');
     setBatchFilter('all');
     setExpandedGroups(new Set());
     setExpandedCreatives(new Set());
@@ -432,15 +432,28 @@ function ClientDashboard() {
   }
 
   return (
-    <ClientPortalFrame activeClientId={selectedPortal?.client_id} counts={portalCounts} onSelectClient={selectClient}>
+    <ClientPortalFrame>
       {selectedPortal ? (
         <div className="grid gap-4">
           <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Your creative reviews</p>
-              <h1 className="font-heading text-3xl font-semibold tracking-tight">{selectedPortal.display_name}</h1>
+              <p className="text-sm font-medium text-muted-foreground">Creative workspace</p>
+              <h1 className="font-heading text-3xl font-semibold tracking-tight">Creative reviews</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Review results, apply your final decision, and inspect every finding.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {session.portals.length > 1 ? (
+                <select
+                  aria-label="Client workspace"
+                  className="h-8 rounded-md border bg-background px-2 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={selectedPortal.client_id}
+                  onChange={(event) => selectClient(event.currentTarget.value)}
+                >
+                  {session.portals.map((portal) => (
+                    <option key={portal.client_id} value={portal.client_id}>{portal.display_name}</option>
+                  ))}
+                </select>
+              ) : null}
               <MetricBadge label="total" value={reviews.length} />
               <MetricBadge label="red" tone="danger" value={statusCounts.red} />
               <MetricBadge label="yellow" tone="warning" value={statusCounts.yellow} />
@@ -455,7 +468,7 @@ function ClientDashboard() {
             </div>
             <CompactFilterMenu
               icon={<SlidersHorizontal />}
-              label="Status"
+              label="Decision"
               onChange={setStatusFilter}
               options={[
                 { count: counts.all, label: 'All', value: 'all' },
@@ -464,6 +477,18 @@ function ClientDashboard() {
                 { count: counts.disapproved, label: 'Disapproved', value: 'disapproved' },
               ]}
               value={statusFilter}
+            />
+            <CompactFilterMenu
+              icon={<ShieldCheck />}
+              label="Result"
+              onChange={setResultFilter}
+              options={[
+                { count: reviews.length, label: 'All colors', value: 'all' },
+                { count: statusCounts.green, label: 'Green', value: 'green' },
+                { count: statusCounts.yellow, label: 'Yellow', value: 'yellow' },
+                { count: statusCounts.red, label: 'Red', value: 'red' },
+              ]}
+              value={resultFilter}
             />
             <CompactFilterMenu
               icon={<Layers3 />}
@@ -476,10 +501,11 @@ function ClientDashboard() {
               ]}
               value={batchFilter}
             />
-            {(search || statusFilter !== 'all' || batchFilter !== 'all') ? (
+            {(search || statusFilter !== 'all' || resultFilter !== 'all' || batchFilter !== 'all') ? (
               <Button type="button" size="icon-sm" variant="ghost" aria-label="Clear filters" title="Clear filters" onClick={() => {
                 setSearch('');
                 setStatusFilter('all');
+                setResultFilter('all');
                 setBatchFilter('all');
               }}>
                 <X />
@@ -503,9 +529,9 @@ function ClientDashboard() {
             <div className="grid gap-3">
               {visibleGroups.map((group) => {
                 const isExpanded = expandedGroups.has(group.id);
-                const red = group.reviews.filter((review) => review.ai_status === 'red').length;
-                const yellow = group.reviews.filter((review) => review.ai_status === 'yellow').length;
-                const green = group.reviews.filter((review) => review.ai_status === 'green').length;
+                const red = group.reviews.filter((review) => effectiveReviewStatus(review) === 'red').length;
+                const yellow = group.reviews.filter((review) => effectiveReviewStatus(review) === 'yellow').length;
+                const green = group.reviews.filter((review) => effectiveReviewStatus(review) === 'green').length;
                 const pending = group.reviews.filter((review) => !review.decision).map((review) => review.job_id);
                 const recommendedPending = group.reviews
                   .filter((review) => !review.decision && aiDecision(review) === 'approved')
@@ -518,6 +544,15 @@ function ClientDashboard() {
                         <span className="min-w-0 truncate font-semibold">{formatBatchTitle(group)}</span>
                         <Badge variant="outline" className="hidden sm:inline-flex">{pending.length ? 'Needs review' : 'Reviewed'}</Badge>
                       </button>
+                      {group.kind === 'batch' ? (
+                        <Link
+                          to="/client/$clientId/batches/$batchId"
+                          params={{ clientId: selectedPortal.client_id, batchId: group.id.slice('batch:'.length) }}
+                          className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+                        >
+                          View insights
+                        </Link>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-xs tabular-nums text-muted-foreground sm:pl-0">
                         <span>{group.reviews.length} total</span>
                         <span className="text-red-700 dark:text-red-300">{red} red</span>
@@ -572,11 +607,8 @@ function ClientDashboard() {
   );
 }
 
-function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }: {
-  activeClientId?: string;
+export function ClientPortalFrame({ children }: {
   children: ReactNode;
-  counts?: Map<string, number | undefined>;
-  onSelectClient?: (clientId: string) => void;
 }) {
   const { error, isSigningOut, logout, session } = useClientAuth();
   const navigate = useNavigate();
@@ -584,25 +616,11 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
     if (typeof window === 'undefined') return true;
     return window.localStorage.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
   });
-  const categories = useMemo(() => {
-    const values = new Map<string, ClientPortalSummary[]>();
-    for (const portal of session.portals) {
-      const current = values.get(portal.category) ?? [];
-      current.push(portal);
-      values.set(portal.category, current);
-    }
-    return [...values.entries()];
-  }, [session.portals]);
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
 
   useEffect(() => {
     window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
   }, [sidebarOpen]);
-
-  function selectPortal(clientId: string) {
-    window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId);
-    if (onSelectClient) onSelectClient(clientId);
-    else void navigate({ to: '/client' });
-  }
 
   return (
     <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="bg-muted/20 text-foreground">
@@ -620,34 +638,50 @@ function ClientPortalFrame({ activeClientId, children, counts, onSelectClient }:
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <nav aria-label="Client workspaces">
-            {categories.map(([category, portals]) => (
-              <SidebarGroup key={category}>
-                <SidebarGroupLabel className="uppercase tracking-[0.12em]">{category}</SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                  {portals.map((portal) => (
-                    <SidebarMenuItem key={portal.client_id}>
-                      <SidebarMenuButton
-                        isActive={activeClientId === portal.client_id}
-                        tooltip={portal.display_name}
-                        onClick={() => selectPortal(portal.client_id)}
-                      >
-                        <ShieldCheck />
-                        <span>{portal.display_name}</span>
-                      </SidebarMenuButton>
-                      <SidebarMenuBadge>{counts?.get(portal.client_id) ?? '—'}</SidebarMenuBadge>
-                    </SidebarMenuItem>
-                  ))}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            ))}
+          <nav aria-label="Client navigation">
+            <SidebarGroup>
+              <SidebarGroupLabel className="uppercase tracking-[0.12em]">Workspace</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
+                      <Gauge />
+                      <span>Overview</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton isActive={pathname === '/client/reviews'} tooltip="Creative reviews" onClick={() => void navigate({ to: '/client/reviews' })}>
+                      <Files />
+                      <span>Creative reviews</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+            <SidebarGroup>
+              <SidebarGroupLabel className="uppercase tracking-[0.12em]">Verticals</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto Insurance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
+                      <ShieldCheck />
+                      <span>Auto Insurance</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton isActive={pathname === '/client/verticals/home-insurance'} tooltip="Home Insurance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'home-insurance' } })}>
+                      <Home />
+                      <span>Home Insurance</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
           </nav>
         </SidebarContent>
         <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
           <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
-            <p className="font-medium">Signed in as {session.username}</p>
+            <p className="font-medium">Client workspace</p>
             <p className="text-muted-foreground">Client view</p>
           </div>
           <SidebarMenu>
@@ -709,6 +743,7 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
   review: ClientReviewItem;
 }) {
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
+  const effectiveStatus = effectiveReviewStatus(review);
 
   function chooseDecision(decision: ClientDecisionValue) {
     if (decision !== 'pending' && decision !== aiDecision(review)) {
@@ -721,7 +756,13 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
   }
 
   return (
-    <article className={cn('self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors', review.ai_status === 'yellow' && 'border-yellow-600/45', review.ai_status === 'red' && 'border-red-600/45', isExpanded && 'ring-1 ring-ring/30')} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
+    <article className={cn(
+      'self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors',
+      effectiveStatus === 'green' && 'border-emerald-600/45 bg-emerald-500/[0.025]',
+      effectiveStatus === 'yellow' && 'border-yellow-600/45',
+      effectiveStatus === 'red' && 'border-red-600/45',
+      isExpanded && 'ring-1 ring-ring/30'
+    )} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
       <div className="flex items-center gap-2 p-3">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={isExpanded} onClick={onToggle}>
           {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
@@ -763,11 +804,16 @@ function CreativeReviewCard({ clientId, isExpanded, isSaving, onDecide, onPrefet
 
 function InlineCreativeDetails({ clientId, review }: { clientId: string; review: ClientReviewItem }) {
   const { preview } = review;
+  const effectiveStatus = effectiveReviewStatus(review);
   return (
     <div className="grid gap-4 border-t bg-muted/10 p-3">
       <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-64 w-full rounded-lg" clientId={clientId} jobId={review.job_id} />
       <div className="grid gap-2">
-        <div className="flex flex-wrap items-center gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge></div>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge status={effectiveStatus} />
+          {effectiveStatus !== review.ai_status ? <Badge variant="outline">AdChecked: {statusLabel(review.ai_status)}</Badge> : null}
+          <Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge>
+        </div>
         <p className="text-sm leading-6 text-muted-foreground">{preview.summary}</p>
         {review.decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5"><span className="font-semibold">Your note:</span> {review.decision.feedback_note}</p> : null}
       </div>
@@ -814,26 +860,26 @@ function ClientReviewDetail() {
 
   if (!portal) {
     return (
-      <ClientPortalFrame activeClientId={clientId}>
-        <Alert variant="destructive"><LockKeyhole /><AlertTitle>Review unavailable</AlertTitle><AlertDescription>You do not have access to this workspace.</AlertDescription><AlertAction><Link to="/client" className={buttonVariants({ variant: 'outline', size: 'xs' })}>Back to reviews</Link></AlertAction></Alert>
+      <ClientPortalFrame>
+        <Alert variant="destructive"><LockKeyhole /><AlertTitle>Review unavailable</AlertTitle><AlertDescription>You do not have access to this workspace.</AlertDescription><AlertAction><Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'xs' })}>Back to reviews</Link></AlertAction></Alert>
       </ClientPortalFrame>
     );
   }
-  if (query.isLoading) return <ClientPortalFrame activeClientId={clientId}><div className="grid gap-4"><Skeleton className="h-36" /><Skeleton className="h-96" /></div></ClientPortalFrame>;
+  if (query.isLoading) return <ClientPortalFrame><div className="grid gap-4"><Skeleton className="h-36" /><Skeleton className="h-96" /></div></ClientPortalFrame>;
   if (!query.data) {
     return (
-      <ClientPortalFrame activeClientId={clientId}>
-        <Alert variant="destructive"><AlertCircle /><AlertTitle>Creative unavailable</AlertTitle><AlertDescription>{query.error ? errorMessage(query.error) : 'This creative could not be loaded.'}</AlertDescription><AlertAction><Link to="/client" className={buttonVariants({ variant: 'outline', size: 'xs' })}>Back to batches</Link></AlertAction></Alert>
+      <ClientPortalFrame>
+        <Alert variant="destructive"><AlertCircle /><AlertTitle>Creative unavailable</AlertTitle><AlertDescription>{query.error ? errorMessage(query.error) : 'This creative could not be loaded.'}</AlertDescription><AlertAction><Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'xs' })}>Back to reviews</Link></AlertAction></Alert>
       </ClientPortalFrame>
     );
   }
 
   const { evidence_frames: evidenceFrames, google_drive_url: googleDriveUrl, report, review } = query.data;
   return (
-    <ClientPortalFrame activeClientId={clientId}>
+    <ClientPortalFrame>
       <div className="grid gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Link to="/client" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to batches</Link>
+          <Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to reviews</Link>
           <DecisionControl review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} />
         </div>
 
@@ -847,7 +893,7 @@ function ClientReviewDetail() {
             <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-36 w-28 sm:h-40 sm:w-32" clientId={clientId} jobId={review.job_id} />
             <div className="grid content-start gap-3">
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{report.summary}</p>
-              <div className="flex flex-wrap gap-2"><StatusBadge status={review.ai_status} /><Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
+              <div className="flex flex-wrap gap-2"><StatusBadge status={effectiveReviewStatus(review)} />{effectiveReviewStatus(review) !== review.ai_status ? <Badge variant="outline">AdChecked: {statusLabel(review.ai_status)}</Badge> : null}<Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
               <div className="flex flex-wrap items-center gap-2">
                 <ClientPdfDownloadButton clientId={clientId} jobId={jobId} />
                 {googleDriveUrl ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={googleDriveUrl} target="_blank" rel="noreferrer"><ExternalLink />Open in Google Drive</a> : null}
@@ -1072,7 +1118,7 @@ function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
   return <Badge variant={severity === 'high' ? 'destructive' : 'secondary'}>{capitalize(severity)}</Badge>;
 }
 
-function useClientAuth() {
+export function useClientAuth() {
   const value = useContext(ClientAuthContext);
   if (!value) throw new Error('Client portal authentication is unavailable.');
   return value;
@@ -1116,6 +1162,12 @@ function decisionStatus(review: ClientReviewItem): StatusFilter {
 
 function aiDecision(review: ClientReviewItem): Exclude<ClientDecisionValue, 'pending'> {
   return review.ai_status === 'red' ? 'disapproved' : 'approved';
+}
+
+export function effectiveReviewStatus(review: ClientReviewItem): OverallStatus {
+  if (review.decision?.decision === 'approved') return 'green';
+  if (review.decision?.decision === 'disapproved') return 'red';
+  return review.effective_status ?? review.ai_status;
 }
 
 function isClientOverride(review: ClientReviewItem) {

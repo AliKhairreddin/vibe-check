@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { classifyReviewVertical } from "./reviewVerticals";
 
 type ResultStatus = "green" | "yellow" | "red";
 
@@ -54,6 +55,7 @@ const previewValidator = v.object({
 });
 const reviewValidator = v.object({
   aiStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
+  effectiveStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
   batchCreatedAt: v.number(),
   batchId: v.union(v.string(), v.null()),
   batchSourceLabel: v.union(v.string(), v.null()),
@@ -64,7 +66,16 @@ const reviewValidator = v.object({
   jobId: v.string(),
   mediaKind: v.union(v.literal("video"), v.literal("image"), v.literal("copy_only")),
   preview: previewValidator,
+  vertical: v.union(v.literal("auto-insurance"), v.literal("home-insurance")),
 });
+
+function effectiveStatus(
+  aiStatus: ResultStatus,
+  decision: { decision: "approved" | "disapproved" } | undefined,
+): ResultStatus {
+  if (!decision) return aiStatus;
+  return decision.decision === "approved" ? "green" : "red";
+}
 
 function mediaKind(fileName: string, hasCreative: boolean | undefined) {
   if (hasCreative === false) return "copy_only" as const;
@@ -225,6 +236,7 @@ export const list = query({
       });
       return [{
         aiStatus,
+        effectiveStatus: effectiveStatus(aiStatus, decision),
         batchCreatedAt: batch?.createdAt ?? stat.createdAt,
         batchId,
         batchSourceLabel: batchId
@@ -242,6 +254,7 @@ export const list = query({
         jobId: stat.jobId,
         mediaKind: mediaKind(fileName, stat.hasCreative),
         preview: { ...preview, googleDriveUrl },
+        vertical: stat.vertical ?? classifyReviewVertical(fileName),
       }];
     });
   },
@@ -309,6 +322,7 @@ export const getDetail = query({
       report,
       review: {
         aiStatus,
+        effectiveStatus: effectiveStatus(aiStatus, decision ?? undefined),
         batchCreatedAt: batch?.createdAt ?? review.createdAt,
         batchId: review.batchId ?? null,
         batchSourceLabel: review.batchId ? batch?.sourceLabel ?? null : null,
@@ -324,6 +338,7 @@ export const getDetail = query({
         jobId: review.jobId,
         mediaKind: mediaKind(review.fileName, review.hasCreative),
         preview: { ...preview, googleDriveUrl: driveUrl(review) },
+        vertical: stat.vertical ?? classifyReviewVertical(review.fileName),
       },
     };
   },

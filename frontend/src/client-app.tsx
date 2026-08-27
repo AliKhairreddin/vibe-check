@@ -10,10 +10,15 @@ import {
 } from '@tanstack/react-router';
 
 import {
-  ClientDashboardPage,
   ClientPortalGate,
   ClientReviewDetailPage,
+  ClientReviewsPage,
 } from '@/components/client-dashboard';
+import {
+  ClientBatchPage,
+  ClientDashboardPage,
+  ClientVerticalPage,
+} from '@/components/client-insights';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 const queryClient = new QueryClient();
@@ -44,6 +49,21 @@ const clientRoute = createRoute({
   path: '/client',
   component: ClientDashboardPage,
 });
+const clientReviewsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/reviews',
+  component: ClientReviewsPage,
+});
+const clientVerticalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/verticals/$verticalId',
+  component: ClientVerticalPage,
+});
+const clientBatchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/$clientId/batches/$batchId',
+  component: ClientBatchPage,
+});
 const clientReviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/client/$clientId/reviews/$jobId',
@@ -72,6 +92,9 @@ const router = createRouter({
     indexRoute,
     loginRoute,
     clientRoute,
+    clientReviewsRoute,
+    clientVerticalRoute,
+    clientBatchRoute,
     clientReviewRoute,
     legacyKissterraRoute,
     legacyKissterraReviewRoute,

@@ -1,6 +1,8 @@
 import { paginationOptsValidator } from "convex/server";
-import { type MutationCtx, mutation, query } from "./_generated/server";
+import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
 import { getConvexSize, v, type Value } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
+import { classifyReviewVertical } from "./reviewVerticals";
 
 type ResultStatus = "green" | "yellow" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
@@ -370,6 +372,7 @@ async function syncReviewOfferStats(
       sourceUrl: review.sourceUrl,
       status: review.status,
       updatedAt,
+      vertical: classifyReviewVertical(review.fileName ?? ""),
     };
     const existing = rowsByOfferId.get(offerId);
     if (existing) await ctx.db.patch(existing._id, value);
@@ -520,6 +523,55 @@ function publicOfferOutcomes(report: unknown, hasCreative: boolean, hasAdCopy: b
   });
 }
 
+type ClientDecisionRow = Doc<"clientReviewDecisions">;
+
+async function clientDecisionsForJob(ctx: QueryCtx, jobId: string) {
+  return ctx.db
+    .query("clientReviewDecisions")
+    .withIndex("by_job_id", (query) => query.eq("jobId", jobId))
+    .order("desc")
+    .take(20);
+}
+
+function publicClientDecisions(decisions: ClientDecisionRow[]) {
+  return decisions.map((decision) => ({
+    ai_status: normalizeResultStatus(decision.aiStatus),
+    client_id: decision.clientId,
+    decided_at: decision.decidedAt,
+    decision: decision.decision,
+    feedback_note: decision.feedbackNote ?? null,
+    feedback_reason: decision.feedbackReason ?? null,
+    offer_id: decision.offerId,
+  }));
+}
+
+function outcomesWithClientDecisions(
+  outcomes: ReturnType<typeof publicOfferOutcomes>,
+  decisions: ClientDecisionRow[],
+) {
+  const latestByOfferId = new Map<string, ClientDecisionRow>();
+  for (const decision of decisions) {
+    const current = latestByOfferId.get(decision.offerId);
+    if (!current || decision.decidedAt > current.decidedAt) {
+      latestByOfferId.set(decision.offerId, decision);
+    }
+  }
+  return outcomes.map((outcome) => {
+    const decision = latestByOfferId.get(outcome.offer_id);
+    if (!decision || outcome.evaluation_state !== "evaluated") return outcome;
+    const automatedStatus = normalizeResultStatus(decision.aiStatus) ?? outcome.overall_status;
+    const effectiveStatus: ResultStatus = decision.decision === "approved" ? "green" : "red";
+    return {
+      ...outcome,
+      automated_status: automatedStatus,
+      client_decided_at: decision.decidedAt,
+      client_decision: decision.decision,
+      effective_status: effectiveStatus,
+      overall_status: effectiveStatus,
+    };
+  });
+}
+
 function publicReview(review: {
   batchId?: string;
   batchItemId?: string;
@@ -543,7 +595,7 @@ function publicReview(review: {
   sourceStatus?: string;
   sourceUrl?: string;
   updatedAt: number;
-}) {
+}, clientDecisions: ClientDecisionRow[] = []) {
   const hasAdCopy = review.hasAdCopy ?? true;
   const hasCreative = review.hasCreative ?? true;
   return {
@@ -558,7 +610,10 @@ function publicReview(review: {
     has_creative: hasCreative,
     job_id: review.jobId,
     message: review.message,
-    offer_outcomes: publicOfferOutcomes(review.report, hasCreative, hasAdCopy),
+    offer_outcomes: outcomesWithClientDecisions(
+      publicOfferOutcomes(review.report, hasCreative, hasAdCopy),
+      clientDecisions,
+    ),
     offer_ids: review.offerIds ?? ["acp"],
     overall_status: overallStatus(review.report),
     primary_offer_id: review.primaryOfferId ?? "acp",
@@ -572,6 +627,7 @@ function publicReview(review: {
     source_status: review.sourceStatus ?? null,
     source_url: review.sourceUrl ?? null,
     updated_at: review.updatedAt,
+    vertical: classifyReviewVertical(review.fileName),
   };
 }
 
@@ -778,7 +834,7 @@ export const getStatus = query({
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
     if (!review || review.deletedAt !== undefined) return null;
-    return publicReview(review);
+    return publicReview(review, await clientDecisionsForJob(ctx, review.jobId));
   },
 });
 
@@ -796,13 +852,28 @@ export const getReport = query({
     if (!review || review.deletedAt !== undefined) return null;
     const report = review.report ?? null;
     if (!report || typeof report !== "object" || Array.isArray(report)) return report;
-    const offerReports = await ctx.db
-      .query("reviewOfferReports")
-      .withIndex("by_job_id", (query) => query.eq("jobId", args.jobId))
-      .collect();
-    if (!offerReports.length) return report;
+    const [offerReports, clientDecisions] = await Promise.all([
+      ctx.db
+        .query("reviewOfferReports")
+        .withIndex("by_job_id", (query) => query.eq("jobId", args.jobId))
+        .collect(),
+      clientDecisionsForJob(ctx, args.jobId),
+    ]);
+    const effectiveOutcomes = outcomesWithClientDecisions(
+      publicOfferOutcomes(report, review.hasCreative ?? true, review.hasAdCopy ?? true),
+      clientDecisions,
+    );
+    if (!offerReports.length) {
+      return {
+        ...report,
+        client_decisions: publicClientDecisions(clientDecisions),
+        offer_outcomes: effectiveOutcomes,
+      };
+    }
     return {
       ...report,
+      client_decisions: publicClientDecisions(clientDecisions),
+      offer_outcomes: effectiveOutcomes,
       offer_results: offerReports
         .sort((left, right) => left.position - right.position || left.offerId.localeCompare(right.offerId))
         .map((row) => row.report),
@@ -887,7 +958,9 @@ export const listRecent = query({
       .withIndex("by_deleted_at_created_at", (q) => q.eq("deletedAt", undefined))
       .order("desc")
       .take(limit);
-    return reviews.map(publicReview);
+    return Promise.all(reviews.map(async (review) =>
+      publicReview(review, await clientDecisionsForJob(ctx, review.jobId))
+    ));
   },
 });
 
@@ -1016,7 +1089,9 @@ export const listPage = query({
       .paginate(args.paginationOpts);
     return {
       ...result,
-      page: result.page.map(publicReview),
+      page: await Promise.all(result.page.map(async (review) =>
+        publicReview(review, await clientDecisionsForJob(ctx, review.jobId))
+      )),
     };
   },
 });
@@ -1029,7 +1104,7 @@ export const backfillOfferStats = mutation({
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const migrationKey = "reviewOfferStatsV2";
+    const migrationKey = "reviewOfferStatsV3Vertical";
     const state = await ctx.db
       .query("maintenanceState")
       .withIndex("by_key", (query) => query.eq("key", migrationKey))
@@ -1078,6 +1153,10 @@ export const getStats = query({
     secret: v.string(),
     offerId: v.optional(v.string()),
     offerIds: v.optional(v.array(v.string())),
+    vertical: v.optional(v.union(
+      v.literal("auto-insurance"),
+      v.literal("home-insurance"),
+    )),
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);
@@ -1090,14 +1169,39 @@ export const getStats = query({
     )].slice(0, 10);
     if (!requestedOfferIds.length) requestedOfferIds.push("acp");
     const reviewRows = await Promise.all(requestedOfferIds.map((offerId) =>
+      args.vertical
+        ? ctx.db
+            .query("reviewOfferStats")
+            .withIndex("by_offer_id_and_vertical_and_deleted_at", (query) =>
+              query
+                .eq("offerId", offerId)
+                .eq("vertical", args.vertical)
+                .eq("deletedAt", undefined)
+            )
+            .collect()
+        : ctx.db
+            .query("reviewOfferStats")
+            .withIndex("by_offer_id_deleted_at", (query) =>
+              query.eq("offerId", offerId).eq("deletedAt", undefined)
+            )
+            .collect()
+    ));
+    const decisionRows = await Promise.all(requestedOfferIds.map((offerId) =>
       ctx.db
-        .query("reviewOfferStats")
-        .withIndex("by_offer_id_deleted_at", (query) =>
-          query.eq("offerId", offerId).eq("deletedAt", undefined)
-        )
-        .collect()
+        .query("clientReviewDecisions")
+        .withIndex("by_offer_id_and_decided_at", (query) => query.eq("offerId", offerId))
+        .order("desc")
+        .take(1000)
     ));
     const reviews = reviewRows.flat();
+    const latestDecisionByOfferAndJob = new Map<string, ClientDecisionRow>();
+    for (const decision of decisionRows.flat()) {
+      const key = `${decision.offerId}:${decision.jobId}`;
+      const current = latestDecisionByOfferAndJob.get(key);
+      if (!current || decision.decidedAt > current.decidedAt) {
+        latestDecisionByOfferAndJob.set(key, decision);
+      }
+    }
 
     const outcomes: Record<ResultStatus, number> = {
       green: 0,
@@ -1105,10 +1209,18 @@ export const getStats = query({
       red: 0,
     };
     let acceptedOverrides = 0;
+    let clientOverrides = 0;
     for (const review of reviews) {
       if (review.status !== "complete") continue;
-      const resultStatus = normalizeResultStatus(review.resultStatus);
+      const automatedStatus = normalizeResultStatus(review.resultStatus);
+      const decision = latestDecisionByOfferAndJob.get(`${review.offerId}:${review.jobId}`);
+      const resultStatus = decision
+        ? decision.decision === "approved" ? "green" : "red"
+        : automatedStatus;
       if (resultStatus) outcomes[resultStatus] += 1;
+      if (decision && automatedStatus && resultStatus !== automatedStatus) {
+        clientOverrides += 1;
+      }
       if (review.internalDisposition === "accepted_with_override") {
         acceptedOverrides += 1;
       }
@@ -1126,6 +1238,7 @@ export const getStats = query({
 
     return {
       accepted_overrides: acceptedOverrides,
+      client_overrides: clientOverrides,
       completed_reviews: completedReviews,
       copy_only_reviews: copyOnlyReviews,
       creative_reviews: creativeReviews,
@@ -1135,6 +1248,7 @@ export const getStats = query({
       offer_ids: requestedOfferIds,
       outcomes,
       total_reviews: uniqueReviews.length,
+      vertical: args.vertical ?? "all",
     };
   },
 });

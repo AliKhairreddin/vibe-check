@@ -39,6 +39,7 @@ import {
   type OverallStatus,
   type ReviewHistoryItem,
   type ReviewStats,
+  type ReviewVertical,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { CreativeThumbnail } from '@/components/creative-media';
@@ -88,6 +89,7 @@ const RESULT_META: Record<OverallStatus, {
 export function DashboardPage() {
   const { canManageSettings } = useAdminAccess();
   const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>([]);
+  const [selectedVertical, setSelectedVertical] = useState<ReviewVertical | 'all'>('all');
   const offersQuery = useQuery({
     queryKey: ['offers'],
     queryFn: listOfferCatalog,
@@ -112,12 +114,16 @@ export function DashboardPage() {
   }, [catalogOfferIds]);
 
   const effectiveOfferIds = selectedOfferIds.length ? selectedOfferIds : catalogOfferIds;
-  const statsOfferKey = effectiveOfferIds.join(',');
+  const statsOfferKey = `${effectiveOfferIds.join(',')}:${selectedVertical}`;
   const statsOfferLabel = offerFilterLabel(offerCatalog, selectedOfferIds);
+  const statsContextLabel = `${statsOfferLabel} · ${verticalLabel(selectedVertical)}`;
 
   const statsQuery = useQuery({
     queryKey: ['reviews', 'stats', statsOfferKey],
-    queryFn: () => getReviewStats(effectiveOfferIds),
+    queryFn: () => getReviewStats(
+      effectiveOfferIds,
+      selectedVertical === 'all' ? undefined : selectedVertical
+    ),
     enabled: Boolean(effectiveOfferIds.length),
     staleTime: 15_000,
   });
@@ -128,6 +134,9 @@ export function DashboardPage() {
       (review) => !review.report_ready && review.status !== 'failed'
     ) ? 3_000 : false,
   });
+  const recentReviews = (recentQuery.data ?? []).filter((review) =>
+    selectedVertical === 'all' || review.vertical === selectedVertical
+  );
 
   return (
     <div className="grid gap-4">
@@ -140,6 +149,18 @@ export function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-end">
+          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+            Vertical
+            <select
+              value={selectedVertical}
+              onChange={(event) => setSelectedVertical(event.currentTarget.value as ReviewVertical | 'all')}
+              className="h-10 min-w-40 rounded-md border bg-background px-3 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="all">All verticals</option>
+              <option value="auto-insurance">Auto Insurance</option>
+              <option value="home-insurance">Home Insurance</option>
+            </select>
+          </label>
           <OfferFilter
             offers={offerCatalog}
             selectedOfferIds={selectedOfferIds}
@@ -203,14 +224,14 @@ export function DashboardPage() {
       ) : statsQuery.isLoading ? (
         <DashboardStatsSkeleton />
       ) : statsQuery.data ? (
-        <DashboardStats stats={statsQuery.data} offerLabel={statsOfferLabel} />
+        <DashboardStats stats={statsQuery.data} offerLabel={statsContextLabel} />
       ) : null}
 
       <RecentReviewsCard
         error={recentQuery.error}
         isLoading={recentQuery.isLoading}
         onRetry={() => void recentQuery.refetch()}
-        reviews={recentQuery.data ?? []}
+        reviews={recentReviews}
         offers={offersQuery.data ?? []}
       />
     </div>
@@ -385,9 +406,9 @@ function DashboardStats({ stats, offerLabel }: { stats: ReviewStats; offerLabel:
     },
     {
       icon: ShieldCheck,
-      label: 'Internal exceptions',
-      value: stats.accepted_overrides,
-      detail: 'Cleared by internal guidance',
+      label: 'Client overrides',
+      value: stats.client_overrides,
+      detail: 'Final decisions different from AI',
     },
   ];
 
@@ -635,6 +656,12 @@ function offerFilterLabel(offers: OfferCatalogItem[], selectedOfferIds: string[]
     return offers.find((offer) => offer.offer_id === selectedOfferIds[0])?.display_name ?? '1 offer';
   }
   return `${selectedOfferIds.length} offers`;
+}
+
+function verticalLabel(vertical: ReviewVertical | 'all') {
+  if (vertical === 'auto-insurance') return 'Auto Insurance';
+  if (vertical === 'home-insurance') return 'Home Insurance';
+  return 'All verticals';
 }
 
 function distributionLabel(stats: ReviewStats, total: number) {

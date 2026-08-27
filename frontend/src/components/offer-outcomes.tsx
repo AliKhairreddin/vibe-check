@@ -148,19 +148,26 @@ export function batchOutcomeForOffer(
 }
 
 export function OfferResultBadge({
+  automatedStatus,
   className,
+  clientDecision,
   status,
   withOverride = false,
 }: {
   className?: string;
+  automatedStatus?: OverallStatus | null;
+  clientDecision?: OfferOutcome['client_decision'];
   status: OverallStatus | null | undefined;
   withOverride?: boolean;
 }) {
   if (!status) return <Badge variant="outline" className={className}>N/A</Badge>;
   const meta = STATUS_META[status];
+  const isClientOverride = Boolean(clientDecision && automatedStatus && automatedStatus !== status);
   return (
     <Badge variant="outline" className={cn(meta.className, className)}>
-      {status === 'green' && withOverride ? 'Green · Exception' : meta.label}
+      {isClientOverride
+        ? `${meta.label} · Client ${clientDecision === 'approved' ? 'approved' : 'disapproved'}`
+        : status === 'green' && withOverride ? 'Green · Exception' : meta.label}
     </Badge>
   );
 }
@@ -193,7 +200,9 @@ export function OfferOutcomeCell({
     >
       {outcome.overall_status ? (
         <OfferResultBadge
+          automatedStatus={outcome.automated_status}
           className="w-fit"
+          clientDecision={outcome.client_decision}
           status={outcome.overall_status}
           withOverride={outcome.with_override}
         />
@@ -558,9 +567,11 @@ function railOutcomeMeta(outcome: OfferOutcome | null) {
   }
   return {
     className: STATUS_META[outcome.overall_status].railClassName,
-    label: outcome.overall_status === 'green' && outcome.with_override
-      ? 'Green (internal exception)'
-      : STATUS_META[outcome.overall_status].label,
+    label: outcome.client_decision && outcome.automated_status !== outcome.overall_status
+      ? `${STATUS_META[outcome.overall_status].label} (client ${outcome.client_decision})`
+      : outcome.overall_status === 'green' && outcome.with_override
+        ? 'Green (internal exception)'
+        : STATUS_META[outcome.overall_status].label,
     withOverride: Boolean(outcome.with_override),
   };
 }
@@ -612,6 +623,12 @@ function outcomeDetails(outcome: OfferOutcome) {
   }
   if (outcome.with_override) {
     details.push('Approved internal exception applied');
+  }
+  if (outcome.client_decision) {
+    details.push(`Client ${outcome.client_decision}`);
+    if (outcome.automated_status && outcome.automated_status !== outcome.overall_status) {
+      details.push(`AdChecked: ${STATUS_META[outcome.automated_status].label}`);
+    }
   }
   if (
     outcome.overall_status &&

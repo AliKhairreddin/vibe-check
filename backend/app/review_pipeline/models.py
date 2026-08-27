@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ResultStatus = Literal['green','yellow','red']
+ReviewVertical = Literal['auto-insurance','home-insurance']
 EnforcementConsequence = Literal[
     'none',
     'payment_withheld_or_forfeited',
@@ -217,9 +218,20 @@ class OfferOutcome(BaseModel):
     creative_result: ResultStatus | None = None
     ad_copy_result: ResultStatus | None = None
     with_override: bool = False
+    automated_status: ResultStatus | None = None
+    effective_status: ResultStatus | None = None
+    client_decision: Literal['approved','disapproved'] | None = None
+    client_decided_at: int | None = None
     message: str = ''
 
-    @field_validator('overall_status', 'creative_result', 'ad_copy_result', mode='before')
+    @field_validator(
+        'overall_status',
+        'creative_result',
+        'ad_copy_result',
+        'automated_status',
+        'effective_status',
+        mode='before',
+    )
     @classmethod
     def normalize_legacy_status(cls, value):
         return normalize_result_status(value) if value is not None else None
@@ -229,6 +241,7 @@ class ComplianceReport(OfferComplianceResult):
     primary_offer_id: str | None = None
     offer_results: list[OfferComplianceResult] = Field(default_factory=list)
     offer_outcomes: list[OfferOutcome] = Field(default_factory=list)
+    client_decisions: list[dict] = Field(default_factory=list)
 
 class JobRecord(BaseModel):
     job_id: str
@@ -252,6 +265,7 @@ class JobRecord(BaseModel):
     source_checked_at: int | None = None
     created_at: int | None = None
     updated_at: int | None = None
+    vertical: ReviewVertical = 'auto-insurance'
 
 class ReviewSource(BaseModel):
     kind: ReviewSourceKind | None = None
@@ -522,6 +536,8 @@ class ReviewStats(BaseModel):
     in_progress_reviews: int = 0
     failed_reviews: int = 0
     accepted_overrides: int = 0
+    client_overrides: int = 0
+    vertical: ReviewVertical | Literal['all'] = 'all'
     outcomes: ReviewOutcomeCounts = Field(default_factory=ReviewOutcomeCounts)
 
 class DeletedReview(BaseModel):

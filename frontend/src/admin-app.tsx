@@ -155,6 +155,7 @@ import {
   type ReviewBatch,
   type ReviewBatchItem,
   type ReviewHistoryItem,
+  type ReviewVertical,
   type ReviewEvidenceFrame,
   type Status,
 } from '@/lib/api';
@@ -1223,6 +1224,7 @@ function BatchRow({
 
 type HistoryResultFilter = 'all' | OverallStatus | 'na';
 type HistoryTypeFilter = 'all' | 'creative' | 'copy_only';
+type HistoryVerticalFilter = 'all' | ReviewVertical;
 type HistoryDeleteRequest = {
   ids: string[];
   label: string;
@@ -1268,6 +1270,7 @@ function HistoryCard({
   const [offerFilter, setOfferFilter] = useState('all');
   const [resultFilter, setResultFilter] = useState<HistoryResultFilter>('all');
   const [typeFilter, setTypeFilter] = useState<HistoryTypeFilter>('all');
+  const [verticalFilter, setVerticalFilter] = useState<HistoryVerticalFilter>('all');
   const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(new Set());
   const [deleteRequest, setDeleteRequest] = useState<HistoryDeleteRequest | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -1328,6 +1331,7 @@ function HistoryCard({
     return historyEntries.filter((entry) => {
       if (normalizedSearch && !historyEntryMatchesSearch(entry, normalizedSearch)) return false;
       if (!historyEntryMatchesTypeFilter(entry, typeFilter)) return false;
+      if (!historyEntryMatchesVerticalFilter(entry, verticalFilter)) return false;
       return historyEntryMatchesResultFilter(
         entry,
         offerColumns,
@@ -1342,12 +1346,14 @@ function HistoryCard({
     offerFilter,
     resultFilter,
     typeFilter,
+    verticalFilter,
   ]);
   const filtersActive = Boolean(
     normalizedSearch ||
     offerFilter !== 'all' ||
     resultFilter !== 'all' ||
-    typeFilter !== 'all'
+    typeFilter !== 'all' ||
+    verticalFilter !== 'all'
   );
   const selectableVisibleIds = Array.from(new Set(
     filteredEntries.flatMap(deletableHistoryEntryIds)
@@ -1360,13 +1366,14 @@ function HistoryCard({
 
   useEffect(() => {
     setSelectedReviewIds(new Set());
-  }, [normalizedSearch, offerFilter, resultFilter, typeFilter]);
+  }, [normalizedSearch, offerFilter, resultFilter, typeFilter, verticalFilter]);
 
   function resetFilters() {
     setSearchQuery('');
     setOfferFilter('all');
     setResultFilter('all');
     setTypeFilter('all');
+    setVerticalFilter('all');
   }
 
   function toggleEntrySelection(entry: HistoryEntry) {
@@ -1477,6 +1484,16 @@ function HistoryCard({
                 </div>
                 <div className="flex flex-wrap items-center gap-2" aria-label="History filters">
                   <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden="true" />
+                  <select
+                    value={verticalFilter}
+                    onChange={(event) => setVerticalFilter(event.target.value as HistoryVerticalFilter)}
+                    aria-label="Filter by vertical"
+                    className={historyFilterClassName}
+                  >
+                    <option value="all">All verticals</option>
+                    <option value="auto-insurance">Auto Insurance</option>
+                    <option value="home-insurance">Home Insurance</option>
+                  </select>
                   <select
                     value={offerFilter}
                     onChange={(event) => setOfferFilter(event.target.value)}
@@ -1919,7 +1936,18 @@ function buildHistoryEntries(
 }
 
 function historyEntryBatchItems(entry: Extract<HistoryEntry, { kind: 'batch' }>): ReviewBatchItem[] {
-  if (entry.batch) return entry.batch.items;
+  if (entry.batch) {
+    return entry.batch.items.map((item) => {
+      const review = entry.reviews.find((value) =>
+        value.job_id === item.job_id || value.batch_item_id === item.item_id
+      );
+      return review ? {
+        ...item,
+        offer_outcomes: review.offer_outcomes,
+        result: normalizeResultStatus(review.overall_status),
+      } : item;
+    });
+  }
   return entry.reviews.map((review) => ({
     file_name: review.file_name,
     item_id: review.batch_item_id ?? review.job_id,
@@ -2019,6 +2047,15 @@ function historyEntryMatchesTypeFilter(entry: HistoryEntry, typeFilter: HistoryT
   return typeFilter === 'creative'
     ? items.some((item) => item.media_kind !== 'copy_only')
     : items.some((item) => item.media_kind === 'copy_only');
+}
+
+function historyEntryMatchesVerticalFilter(
+  entry: HistoryEntry,
+  verticalFilter: HistoryVerticalFilter
+) {
+  if (verticalFilter === 'all') return true;
+  if (entry.kind === 'review') return entry.review.vertical === verticalFilter;
+  return entry.reviews.some((review) => review.vertical === verticalFilter);
 }
 
 function historyEntryMatchesResultFilter(
@@ -2463,6 +2500,12 @@ function ReportPage() {
     );
   }
 
+  const activeOutcome = findOfferOutcome(offerOutcomes, activeOffer.offer_id);
+  const effectiveActiveStatus = activeOutcome?.effective_status
+    ?? activeOutcome?.overall_status
+    ?? normalizeResultStatus(activeOffer.overall_status)
+    ?? 'yellow';
+
   const sourceResults = [
     { label: 'Creative', result: activeOffer.source_results?.creative },
     { label: 'Ad copy', result: activeOffer.source_results?.ad_copy },
@@ -2539,12 +2582,21 @@ function ReportPage() {
           </CardDescription>
           <CardAction>
             <div className="flex flex-wrap justify-end gap-2">
-              <StatusBadge status={activeOffer.overall_status} />
+              <StatusBadge status={effectiveActiveStatus} />
               <InternalDispositionBadge disposition={activeOffer.internal_disposition} />
             </div>
           </CardAction>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {activeOutcome?.client_decision && activeOutcome.automated_status && activeOutcome.automated_status !== effectiveActiveStatus ? (
+            <Alert>
+              <CheckCircle2 />
+              <AlertTitle>Client decision applied</AlertTitle>
+              <AlertDescription>
+                The effective result is {formatStatus(effectiveActiveStatus)} because the client {activeOutcome.client_decision} this creative. The original AdChecked result was {formatStatus(activeOutcome.automated_status)}.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <div className="flex flex-col gap-4 sm:flex-row">
             <CreativeThumbnail
               alt={`Preview for review ${jobId}`}

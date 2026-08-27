@@ -30,6 +30,7 @@ from .models import (
 )
 from .guidelines import built_in_acp_profile
 from .offer_catalog import KNOWN_OFFERS, KNOWN_OFFER_NAMES, offer_sort_key
+from .verticals import ReviewVertical, classify_review_vertical
 
 JOB_DATA_DIR = Path(os.getenv('JOB_DATA_DIR', 'data/jobs'))
 CONVEX_URL = os.getenv('CONVEX_URL', '').rstrip('/')
@@ -766,6 +767,7 @@ def _local_reviews()->list[ReviewHistoryItem]:
     if not JOB_DATA_DIR.exists():
         return []
 
+    latest_decisions=_latest_local_client_decisions()
     items=[]
     for status_path in JOB_DATA_DIR.glob('*/status.json'):
         if (status_path.parent/'deleted.json').exists():
@@ -783,14 +785,30 @@ def _local_reviews()->list[ReviewHistoryItem]:
         data['overall_status']=_overall_status(report)
         data['creative_result']=_creative_result(report, rec.has_creative)
         data['ad_copy_result']=_ad_copy_result(report, rec.has_ad_copy)
-        data['offer_outcomes']=[
-            outcome.model_dump(mode='json')
-            for outcome in _offer_outcomes(
-                report,
-                has_creative=rec.has_creative,
-                has_ad_copy=rec.has_ad_copy,
-            )
-        ]
+        offer_outcomes=[]
+        for outcome in _offer_outcomes(
+            report,
+            has_creative=rec.has_creative,
+            has_ad_copy=rec.has_ad_copy,
+        ):
+            decision=latest_decisions.get((outcome.offer_id, rec.job_id))
+            if decision and outcome.evaluation_state == 'evaluated' and outcome.overall_status:
+                automated_status=outcome.overall_status
+                effective_status=(
+                    'green' if decision.get('decision') == 'approved' else 'red'
+                )
+                outcome=outcome.model_copy(update={
+                    'automated_status':automated_status,
+                    'client_decided_at':decision.get('decidedAt'),
+                    'client_decision':decision.get('decision'),
+                    'effective_status':effective_status,
+                    'overall_status':effective_status,
+                })
+                if outcome.offer_id == rec.primary_offer_id:
+                    data['overall_status']=effective_status
+            offer_outcomes.append(outcome.model_dump(mode='json'))
+        data['offer_outcomes']=offer_outcomes
+        data['vertical']=classify_review_vertical(rec.file_name)
         items.append(ReviewHistoryItem(**data))
 
     items.sort(key=lambda item: item.created_at or 0, reverse=True)
@@ -844,6 +862,22 @@ def _read_local_client_decisions()->dict[str, dict[str, Any]]:
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _latest_local_client_decisions()->dict[tuple[str, str], dict[str, Any]]:
+    latest={}
+    for decision in _read_local_client_decisions().values():
+        if not isinstance(decision, dict):
+            continue
+        offer_id=str(decision.get('offerId') or '').strip().lower()
+        job_id=str(decision.get('jobId') or '').strip()
+        if not offer_id or not job_id or decision.get('decision') not in {'approved','disapproved'}:
+            continue
+        key=(offer_id, job_id)
+        current=latest.get(key)
+        if current is None or int(decision.get('decidedAt') or 0) > int(current.get('decidedAt') or 0):
+            latest[key]=decision
+    return latest
 
 
 def _client_review_preview(
@@ -935,6 +969,11 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
         )
         reviews.append({
             'aiStatus':outcome.overall_status,
+            'effectiveStatus':(
+                'green' if decision and decision.get('decision') == 'approved'
+                else 'red' if decision and decision.get('decision') == 'disapproved'
+                else outcome.overall_status
+            ),
             'batchCreatedAt':batch_created_at,
             'batchId':review.batch_id,
             'batchSourceLabel':batch_source_label,
@@ -945,6 +984,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
             'jobId':review.job_id,
             'mediaKind':media_kind,
             'preview':_client_review_preview(report, outcome.overall_status, review),
+            'vertical':classify_review_vertical(review.file_name),
         })
     return reviews
 
@@ -1389,30 +1429,40 @@ def _report_offer_result(report:dict[str, Any]|None, offer_id:str)->dict[str, An
     return report if primary == offer_id else None
 
 
-def get_review_stats(offer_ids:str|list[str]='acp')->ReviewStats:
+def get_review_stats(
+    offer_ids:str|list[str]='acp',
+    vertical:ReviewVertical|None=None,
+)->ReviewStats:
     requested_offer_ids=[offer_ids] if isinstance(offer_ids, str) else offer_ids
     normalized_offer_ids=list(dict.fromkeys(
         offer_id.strip().lower()
         for offer_id in requested_offer_ids
         if offer_id.strip()
     )) or ['acp']
-    remote=_convex_call('query', 'reviews:getStats', {'offerIds':normalized_offer_ids})
+    remote=_convex_call('query', 'reviews:getStats', {
+        'offerIds':normalized_offer_ids,
+        **({'vertical':vertical} if vertical else {}),
+    })
     if remote is not None:
         return ReviewStats.model_validate(remote)
 
     stats=ReviewStats(
         offer_id=normalized_offer_ids[0] if len(normalized_offer_ids) == 1 else 'all',
         offer_ids=normalized_offer_ids,
+        vertical=vertical or 'all',
     )
     outcomes=stats.outcomes.model_dump()
     if not JOB_DATA_DIR.exists():
         return stats
+    latest_decisions=_latest_local_client_decisions()
     for status_path in JOB_DATA_DIR.glob('*/status.json'):
         if (status_path.parent/'deleted.json').exists():
             continue
         try:
             record=JobRecord.model_validate(read_json(status_path))
         except (OSError, ValueError):
+            continue
+        if vertical and classify_review_vertical(record.file_name) != vertical:
             continue
         matched_offer_ids=[offer_id for offer_id in normalized_offer_ids if offer_id in record.offer_ids]
         if not matched_offer_ids:
@@ -1433,9 +1483,17 @@ def get_review_stats(offer_ids:str|list[str]='acp')->ReviewStats:
         report=read_json(report_path) if report_path.exists() else None
         for offer_id in matched_offer_ids:
             result=_report_offer_result(report, offer_id)
-            status=_overall_status(result)
-            if status:
-                outcomes[status] += 1
+            automated_status=_overall_status(result)
+            decision=latest_decisions.get((offer_id, record.job_id))
+            effective_status=(
+                'green' if decision and decision.get('decision') == 'approved'
+                else 'red' if decision and decision.get('decision') == 'disapproved'
+                else automated_status
+            )
+            if effective_status:
+                outcomes[effective_status] += 1
+            if decision and automated_status and effective_status != automated_status:
+                stats.client_overrides += 1
             if isinstance(result, dict) and result.get('internal_disposition') == 'accepted_with_override':
                 stats.accepted_overrides += 1
     stats.outcomes=ReviewOutcomeCounts(**outcomes)
