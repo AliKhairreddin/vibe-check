@@ -56,7 +56,7 @@ export function ClientSettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Default review layout</CardTitle>
-            <CardDescription>Choose the first view shown when you open Creative reviews.</CardDescription>
+            <CardDescription>Choose the first view shown when you open the review queue.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
             <PreferenceOption

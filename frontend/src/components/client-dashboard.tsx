@@ -173,11 +173,21 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isCheckingSession) return;
-    document.title = !session
-      ? 'Sign in · AdChecked'
-      : pathname.includes('/reviews/')
-        ? 'Creative review · AdChecked'
-        : 'Creative reviews · AdChecked';
+    if (session === null) {
+      document.title = 'Sign in · AdChecked';
+    } else if (pathname.includes('/reviews/')) {
+      document.title = 'Creative review · AdChecked';
+    } else if (pathname.includes('/batches/')) {
+      document.title = 'Batch performance · AdChecked';
+    } else if (pathname === '/client/reviews') {
+      document.title = 'Review queue · AdChecked';
+    } else if (pathname === '/client/settings') {
+      document.title = 'Settings · AdChecked';
+    } else if (pathname.startsWith('/client/verticals/')) {
+      document.title = 'Insurance performance · AdChecked';
+    } else {
+      document.title = 'Overview · AdChecked';
+    }
   }, [isCheckingSession, pathname, session]);
 
   async function unlock(event: FormEvent<HTMLFormElement>) {
@@ -455,9 +465,9 @@ function ClientDashboard() {
         <div className="grid gap-4">
           <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Creative workspace</p>
-              <h1 className="font-heading text-3xl font-semibold tracking-tight">Creative reviews</h1>
-              <p className="mt-1 text-sm text-muted-foreground">Review results, apply your final decision, and inspect every finding.</p>
+              <p className="text-sm font-medium text-muted-foreground">Creative decisions</p>
+              <h1 className="font-heading text-3xl font-semibold tracking-tight">Review queue</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Review each creative, apply your final decision, and inspect every finding.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {session.portals.length > 1 ? (
@@ -675,6 +685,8 @@ export function ClientPortalFrame({ children }: {
     return window.localStorage.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
   });
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const reviewQueueActive = pathname === '/client/reviews'
+    || /^\/client\/[^/]+\/reviews\/[^/]+$/.test(pathname);
 
   useEffect(() => {
     window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
@@ -689,7 +701,7 @@ export function ClientPortalFrame({ children }: {
               <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><ScanSearch className="size-4" strokeWidth={2.2} /></span>
               <span className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
                 <span className="truncate font-heading text-sm font-semibold">AdChecked</span>
-                <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Creative reviews</span>
+                <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Client portal</span>
               </span>
             </Link>
             <SidebarTrigger className="md:hidden" aria-label="Close navigation" title="Close navigation" />
@@ -702,38 +714,32 @@ export function ClientPortalFrame({ children }: {
               <SidebarGroupContent>
                 <SidebarMenu>
                   <SidebarMenuItem>
-                    <SidebarMenuButton isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
+                    <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
                       <Gauge />
                       <span>Overview</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                   <SidebarMenuItem>
-                    <SidebarMenuButton isActive={pathname === '/client/reviews'} tooltip="Creative reviews" onClick={() => void navigate({ to: '/client/reviews' })}>
+                    <SidebarMenuButton aria-current={reviewQueueActive ? 'page' : undefined} isActive={reviewQueueActive} tooltip="Review queue" onClick={() => void navigate({ to: '/client/reviews' })}>
                       <Files />
-                      <span>Creative reviews</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton isActive={pathname === '/client/settings'} tooltip="Settings" onClick={() => void navigate({ to: '/client/settings' })}>
-                      <Settings2 />
-                      <span>Settings</span>
+                      <span>Review queue</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
             <SidebarGroup>
-              <SidebarGroupLabel className="uppercase tracking-[0.12em]">Verticals</SidebarGroupLabel>
+              <SidebarGroupLabel className="uppercase tracking-[0.12em]">Performance</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
                   <SidebarMenuItem>
-                    <SidebarMenuButton isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto Insurance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
+                    <SidebarMenuButton aria-current={pathname === '/client/verticals/auto-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
                       <ShieldCheck />
                       <span>Auto Insurance</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                   <SidebarMenuItem>
-                    <SidebarMenuButton isActive={pathname === '/client/verticals/home-insurance'} tooltip="Home Insurance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'home-insurance' } })}>
+                    <SidebarMenuButton aria-current={pathname === '/client/verticals/home-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/home-insurance'} tooltip="Home insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'home-insurance' } })}>
                       <Home />
                       <span>Home Insurance</span>
                     </SidebarMenuButton>
@@ -749,6 +755,12 @@ export function ClientPortalFrame({ children }: {
             <p className="text-muted-foreground">Client view</p>
           </div>
           <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton aria-current={pathname === '/client/settings' ? 'page' : undefined} isActive={pathname === '/client/settings'} tooltip="Settings" onClick={() => void navigate({ to: '/client/settings' })}>
+                <Settings2 />
+                <span>Settings</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton tooltip="Sign out" disabled={isSigningOut} onClick={() => void logout()}>
               {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}

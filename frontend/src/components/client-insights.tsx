@@ -59,13 +59,13 @@ const VERTICALS: Array<{
   label: string;
 }> = [
   {
-    description: 'Auto insurance creatives and offer guidance.',
+    description: 'Performance and decision trends for auto insurance creatives.',
     icon: ShieldCheck,
     id: 'auto-insurance',
     label: 'Auto Insurance',
   },
   {
-    description: 'Creatives assigned to the Home Insurance vertical during submission.',
+    description: 'Performance and decision trends for home insurance creatives.',
     icon: Home,
     id: 'home-insurance',
     label: 'Home Insurance',
@@ -117,7 +117,7 @@ export function ClientBatchPage() {
       <div className="grid gap-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="grid gap-1">
-            <Link to="/client/reviews" className="mb-2 w-fit text-sm font-medium text-muted-foreground hover:text-foreground">← Back to creative reviews</Link>
+            <Link to="/client/reviews" className="mb-2 w-fit text-sm font-medium text-muted-foreground hover:text-foreground">← Back to review queue</Link>
             <p className="text-sm font-medium text-muted-foreground">Batch insights</p>
             <h1 className="font-heading text-3xl font-semibold tracking-tight">{batch?.label ?? 'Creative batch'}</h1>
             <p className="text-sm text-muted-foreground">A focused view of this batch’s effective results and client decisions.</p>
@@ -213,13 +213,13 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
       <div className="grid gap-5">
         <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-1">
-            <p className="text-sm font-medium text-muted-foreground">{selectedVertical ? 'Vertical performance' : 'Client overview'}</p>
+            <p className="text-sm font-medium text-muted-foreground">{selectedVertical ? 'Performance by insurance line' : 'Workspace overview'}</p>
             <h1 className="font-heading text-3xl font-semibold tracking-tight">{selectedVertical?.label ?? 'Creative performance'}</h1>
             <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
               {selectedVertical?.description ?? 'See effective results, decision progress, and batch performance across every creative.'}
             </p>
           </div>
-          <Link to="/client/reviews" className={buttonVariants({ size: 'sm' })}><Files />Open creative reviews</Link>
+          <Link to="/client/reviews" className={buttonVariants({ size: 'sm' })}><Files />Open review queue</Link>
         </section>
 
         {isLoading ? (

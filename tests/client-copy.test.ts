@@ -57,13 +57,30 @@ test('keeps red, yellow, and green review counts separate', () => {
 });
 
 test('uses neutral client workspace labels and exposes result filtering', () => {
-  assert.match(clientDashboardSource, /<h1[^>]*>Creative reviews<\/h1>/);
+  assert.match(clientDashboardSource, /<h1[^>]*>Review queue<\/h1>/);
   assert.match(clientDashboardSource, /label="Result"/);
   assert.match(clientDashboardSource, /label: 'Green', value: 'green'/);
   assert.match(clientDashboardSource, /label: 'Yellow', value: 'yellow'/);
   assert.match(clientDashboardSource, /label: 'Red', value: 'red'/);
   assert.doesNotMatch(clientDashboardSource, />Kissterra<\//);
   assert.doesNotMatch(clientDashboardSource, /Signed in as/);
+});
+
+test('organizes client navigation by workflow, performance, and utilities', () => {
+  const workspace = clientDashboardSource.indexOf('>Workspace</SidebarGroupLabel>');
+  const reviewQueue = clientDashboardSource.indexOf('<span>Review queue</span>');
+  const performance = clientDashboardSource.indexOf('>Performance</SidebarGroupLabel>');
+  const sidebarFooter = clientDashboardSource.indexOf('<SidebarFooter');
+  const settings = clientDashboardSource.lastIndexOf('<span>Settings</span>');
+
+  assert.ok(workspace >= 0);
+  assert.ok(reviewQueue > workspace);
+  assert.ok(performance > reviewQueue);
+  assert.ok(sidebarFooter > performance);
+  assert.ok(settings > sidebarFooter);
+  assert.match(clientDashboardSource, /<span>Auto Insurance<\/span>/);
+  assert.match(clientDashboardSource, /<span>Home Insurance<\/span>/);
+  assert.doesNotMatch(clientDashboardSource, /<SidebarGroupLabel[^>]*>Verticals<\/SidebarGroupLabel>/);
 });
 
 test('provides dashboard, vertical, and batch insight routes', () => {
