@@ -108,7 +108,7 @@
     "CONVEX_URL": "https://energetic-partridge-813.convex.cloud",
     "CORS_ALLOWED_ORIGINS": "https://admin.adchecked.com,https://app.adchecked.com",
     "GOOGLE_AD_COPY_SHEET_URL": "https://docs.google.com/spreadsheets/d/1p3z7ubxNH8yOh_58CD12XOH6XEN80toI7fvkEgnA29o/edit?usp=drive_link",
-    "GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON": "{\"kissterra\":{\"name\":\"Kissterra Auto\",\"folder_id\":\"1F3rYM_tVmbNXuYkn00HoaopB0UsUVcn5\"},\"kissterra-home\":{\"name\":\"Kissterra Home\",\"folder_id\":\"14JPGzMvru97KOqRIatOscY1lyCKNISIR\"},\"smart-financial\":{\"name\":\"Smart Financial\",\"folder_id\":\"1LozyVky9H1rMjJA4p0em7V8Bm8QnZMM8\"}}",
+    "GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON": "{\"kissterra\":{\"name\":\"Kissterra Auto\",\"folder_id\":\"1F3rYM_tVmbNXuYkn00HoaopB0UsUVcn5\"},\"kissterra-home\":{\"name\":\"Kissterra Home\",\"folder_id\":\"14JPGzMvru97KOqRIatOscY1lyCKNISIR\"},\"smart-financial\":{\"name\":\"Smart Financial\",\"folder_id\":\"1LozyVky9H1rMjJA4p0em7V8Bm8QnZMM8\"},\"lead-economy\":{\"name\":\"Lead Economy\",\"folder_id\":\"1_aFP9qE59-PmTz9BwM6QyItzWAqEYTSY\"}}",
     "GOOGLE_DRIVE_FOLDER_ID": "16zD3i1-QnFcrfxXECtjf7T0zbUfzcCAd",
     "JOB_DATA_DIR": "/tmp/vibe-check/jobs",
     "JOB_MAX_ATTEMPTS": "2",

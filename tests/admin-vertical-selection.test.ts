@@ -19,12 +19,14 @@ test('lets an operator assign a vertical to the entire review selection', () => 
   assert.match(adminSource, /vertical: selectedVertical/);
 });
 
-test('exposes dedicated Kissterra and Smart Financial Drive roots', () => {
+test('exposes dedicated partner Drive roots', () => {
   assert.match(workerConfig, /Kissterra Auto/);
   assert.match(workerConfig, /Kissterra Home/);
   assert.match(workerConfig, /14JPGzMvru97KOqRIatOscY1lyCKNISIR/);
   assert.match(workerConfig, /Smart Financial/);
   assert.match(workerConfig, /1LozyVky9H1rMjJA4p0em7V8Bm8QnZMM8/);
+  assert.match(workerConfig, /Lead Economy/);
+  assert.match(workerConfig, /1_aFP9qE59-PmTz9BwM6QyItzWAqEYTSY/);
 });
 
 test('keeps the review form full width and renders batch progress as a table below', () => {
