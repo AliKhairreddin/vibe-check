@@ -228,6 +228,12 @@ function CreativeMediaDialog({
   const [error, setError] = useState('');
   const sourceUrl = creativeMediaUrl(clientId, jobId);
   const posterUrl = creativeThumbnailUrl(clientId, jobId);
+  const viewerLabel = resolvedKind === 'image'
+    ? 'Image viewer'
+    : resolvedKind === 'video'
+      ? 'Video player'
+      : 'Media viewer';
+  const sourceLabel = driveUrl ? 'the linked Google Drive file' : 'the stored creative';
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -271,13 +277,13 @@ function CreativeMediaDialog({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label={`Media player for ${fileName}`}
+        aria-label={`${viewerLabel} for ${fileName}`}
         className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-white/15 bg-card shadow-2xl"
       >
         <header className="flex min-w-0 items-center justify-between gap-3 border-b px-4 py-3">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold" title={fileName}>{fileName}</p>
-            <p className="text-xs text-muted-foreground">In-dashboard media player</p>
+            <p className="text-xs text-muted-foreground">In-dashboard {viewerLabel.toLowerCase()}</p>
           </div>
           <button
             ref={closeRef}
@@ -293,7 +299,9 @@ function CreativeMediaDialog({
           {error ? (
             <div className="grid max-w-md gap-3 p-8 text-center text-white">
               <FileImage className="mx-auto size-8 text-white/65" />
-              <p className="text-sm font-medium">Playback unavailable</p>
+              <p className="text-sm font-medium">
+                {resolvedKind === 'image' ? 'Image unavailable' : resolvedKind === 'video' ? 'Playback unavailable' : 'Media unavailable'}
+              </p>
               <p className="text-sm leading-6 text-white/65">{error}</p>
             </div>
           ) : resolvedKind === 'video' ? (
@@ -305,7 +313,11 @@ function CreativeMediaDialog({
               playsInline
               poster={posterUrl}
               preload="metadata"
-              onError={() => setError('The linked Google Drive video could not be streamed. Try opening the original file instead.')}
+              onError={() => setError(
+                driveUrl
+                  ? 'The linked Google Drive video could not be streamed. Try opening the original file instead.'
+                  : 'This video could not be streamed in the dashboard.'
+              )}
               onLoadedMetadata={(event) => {
                 if (startSeconds && Number.isFinite(startSeconds)) {
                   event.currentTarget.currentTime = startSeconds;
@@ -320,7 +332,11 @@ function CreativeMediaDialog({
               src={sourceUrl}
               alt={alt}
               className="max-h-[min(72vh,800px)] max-w-full object-contain"
-              onError={() => setError('The linked Google Drive image could not be loaded. Try opening the original file instead.')}
+              onError={() => setError(
+                driveUrl
+                  ? 'The linked Google Drive image could not be loaded. Try opening the original file instead.'
+                  : 'This image could not be loaded in the dashboard.'
+              )}
             />
           ) : (
             <div className="flex items-center gap-2 text-sm text-white/70">
@@ -330,7 +346,9 @@ function CreativeMediaDialog({
           )}
         </div>
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground">
-          <span>Streamed securely from the linked Google Drive file.</span>
+          <span>
+            {resolvedKind === 'video' ? 'Streamed' : 'Loaded'} securely from {sourceLabel}.
+          </span>
           {driveUrl ? (
             <a
               href={driveUrl}
