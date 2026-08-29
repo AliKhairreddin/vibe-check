@@ -3976,6 +3976,120 @@ async def test_queue_downloads_drive_file_before_processing(tmp_path, monkeypatc
 
 
 @pytest.mark.anyio
+async def test_dashboard_media_streams_drive_ranges_and_enforces_client_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('KISSTERRA_CLIENT_PASSWORD', 'client-secret')
+    job_id='d' * 32
+    set_status(
+        job_id,
+        JobStatus.queued,
+        0,
+        'Queued',
+        'Drive creative.mp4',
+        file_size=12,
+        offer_ids=['kissterra'],
+        primary_offer_id='kissterra',
+    )
+    review_storage.set_review_source(job_id, ReviewSource(
+        kind='google_drive_file',
+        status='linked',
+        url='https://drive.google.com/file/d/drive-media/view',
+        file_id='drive-media',
+        label='Open in Google Drive',
+        message='Linked to the original creative.',
+        checked_at=1_786_579_200_000,
+    ))
+    set_report(job_id, {
+        'offer_id':'kissterra',
+        'offer_name':'Kissterra',
+        'overall_status':'green',
+        'summary':'Ready.',
+        'findings':[],
+    })
+    set_status(job_id, JobStatus.complete, 100, 'Complete')
+
+    opened_ranges=[]
+    closed_streams=[]
+
+    class FakeStream:
+        status_code=206
+        headers=httpx.Headers({
+            'content-length':'4',
+            'content-range':'bytes 4-7/12',
+            'content-type':'video/mp4',
+        })
+
+        def iter_bytes(self):
+            yield b'5678'
+
+        def close(self):
+            closed_streams.append(True)
+
+    class FakeDrive:
+        def get_file(self, file_id, *, require_within_root=True):
+            assert file_id == 'drive-media'
+            assert require_within_root is False
+            return DriveFile(
+                file_id,
+                'Drive creative.mp4',
+                'video/mp4',
+                ('configured-root',),
+                'https://drive.google.com/file/d/drive-media/view',
+                12,
+            )
+
+        def open_file_stream(self, file, *, range_header=None):
+            assert file.file_id == 'drive-media'
+            opened_ranges.append(range_header)
+            return FakeStream()
+
+    monkeypatch.setattr('app.main.get_google_drive_client', lambda: FakeDrive())
+    transport=httpx.ASGITransport(app=app)
+    client_headers={
+        'x-client-username':'kissterra',
+        'x-client-password':'client-secret',
+    }
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        head=await client.head(f'/api/reviews/{job_id}/media')
+        partial=await client.get(
+            f'/api/reviews/{job_id}/media',
+            headers={'range':'bytes=4-7'},
+        )
+        invalid_range=await client.get(
+            f'/api/reviews/{job_id}/media',
+            headers={'range':'items=0-3'},
+        )
+        unauthorized=await client.get(f'/api/client/kissterra/reviews/{job_id}/media')
+        client_partial=await client.get(
+            f'/api/client/kissterra/reviews/{job_id}/media',
+            headers={**client_headers, 'range':'bytes=4-7'},
+        )
+        wrong_offer=await client.get(
+            f'/api/client/acp/reviews/{job_id}/media',
+            headers=client_headers,
+        )
+
+    assert head.status_code == 200
+    assert head.headers['content-type'] == 'video/mp4'
+    assert head.headers['content-length'] == '12'
+    assert partial.status_code == 206
+    assert partial.headers['accept-ranges'] == 'bytes'
+    assert partial.headers['content-range'] == 'bytes 4-7/12'
+    assert partial.content == b'5678'
+    assert invalid_range.status_code == 416
+    assert invalid_range.headers['content-range'] == 'bytes */12'
+    assert unauthorized.status_code == 401
+    assert client_partial.status_code == 206
+    assert client_partial.content == b'5678'
+    assert wrong_offer.status_code == 404
+    assert opened_ranges == ['bytes=4-7', 'bytes=4-7']
+    assert len(closed_streams) == 2
+
+
+@pytest.mark.anyio
 async def test_automated_job_heartbeat_starts_while_waiting_in_queue(monkeypatch):
     queue=asyncio.Queue()
     started=asyncio.Event()

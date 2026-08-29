@@ -1719,6 +1719,12 @@ function HistoryCard({
                           <CreativeThumbnail
                             alt={`Preview of ${label}`}
                             className="size-10"
+                            driveUrl={entry.kind === 'review' && entry.review.source_kind === 'google_drive_file'
+                              ? entry.review.source_url
+                              : null}
+                            fileName={entry.kind === 'review'
+                              ? entry.review.file_name
+                              : entry.reviews.find((review) => review.has_creative !== false)?.file_name}
                             jobId={entry.kind === 'review'
                               ? entry.review.has_creative === false ? null : entry.review.job_id
                               : entry.reviews.find((review) => review.has_creative !== false)?.job_id ?? null}
@@ -2511,6 +2517,7 @@ function ReportPage() {
   const { jobId } = useParams({ from: '/reviews/$jobId/report' });
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId) });
+  const statusQuery = useQuery({ queryKey: ['status', jobId], queryFn: () => getStatus(jobId) });
   const sourceQuery = useQuery({
     queryKey: ['source', jobId],
     queryFn: () => getReviewSources(jobId),
@@ -2689,6 +2696,8 @@ function ReportPage() {
             <CreativeThumbnail
               alt={`Preview for review ${jobId}`}
               className="h-40 w-32"
+              driveUrl={linkedSources.find((source) => source.kind === 'google_drive_file')?.url}
+              fileName={statusQuery.data?.file_name}
               jobId={jobId}
             />
             <div className="grid content-start gap-3">
@@ -2809,6 +2818,8 @@ function ReportPage() {
               {activeOffer.findings.map((finding, index) => (
                 <ReviewFindingCard
                   key={`${finding.source}-${finding.timestamp_start ?? 'none'}-${index}`}
+                  driveUrl={linkedSources.find((source) => source.kind === 'google_drive_file')?.url}
+                  fileName={statusQuery.data?.file_name}
                   finding={finding}
                   frame={nearestReviewEvidenceFrame(
                     evidenceQuery.data?.frames ?? [],
@@ -3013,7 +3024,10 @@ function BatchPage() {
                   <TableCell className="align-top">
                     <CreativeThumbnail
                       alt={`Preview of ${item.file_name}`}
+                      driveUrl={item.drive_file_id ? `https://drive.google.com/file/d/${encodeURIComponent(item.drive_file_id)}/view` : null}
+                      fileName={item.file_name}
                       jobId={item.media_kind === 'copy_only' ? null : item.job_id}
+                      mediaKind={item.media_kind}
                     />
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{batchTypeLabel(item.media_kind)}</TableCell>
@@ -3455,11 +3469,15 @@ function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
 }
 
 function ReviewFindingCard({
+  driveUrl,
+  fileName,
   finding,
   frame,
   index,
   jobId,
 }: {
+  driveUrl?: string | null;
+  fileName?: string;
   finding: Finding;
   frame: ReviewEvidenceFrame | null;
   index: number;
@@ -3470,8 +3488,11 @@ function ReviewFindingCard({
       {frame ? (
         <CreativeEvidenceImage
           alt={`Evidence frame for finding ${index}`}
+          driveUrl={driveUrl}
+          fileName={fileName}
           filename={frame.filename}
           jobId={jobId}
+          startSeconds={frame.timestamp}
         />
       ) : (
         <span className="grid h-32 w-24 shrink-0 place-items-center rounded-lg border bg-muted/30 px-2 text-center text-[11px] font-medium text-muted-foreground sm:h-36 sm:w-28">

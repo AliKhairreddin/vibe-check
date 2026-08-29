@@ -3,14 +3,16 @@ import asyncio, base64, binascii, hashlib, hmac, json, logging, os, re, secrets,
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 import httpx
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from .review_pipeline.models import (
     BatchReviewContext,
     BatchFailure,
@@ -1173,6 +1175,69 @@ def evidence_frame_response(job_id:str, filename:str)->Response:
     raise HTTPException(404, 'Evidence frame not found')
 
 
+MEDIA_RANGE_PATTERN = re.compile(r'^bytes=(?:\d+-\d*|\d*-\d+)$')
+
+
+def review_media_response(job_id:str, request:Request)->Response:
+    try:
+        record=get_status(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Creative media not found.') from None
+    if (
+        not record.has_creative
+        or record.source_kind != 'google_drive_file'
+        or record.source_status != 'linked'
+        or not record.source_file_id
+    ):
+        raise HTTPException(404, 'A playable Google Drive source is not available for this review.')
+
+    range_header=request.headers.get('range')
+    if range_header and not MEDIA_RANGE_PATTERN.fullmatch(range_header.strip()):
+        headers={'accept-ranges':'bytes'}
+        if record.file_size is not None:
+            headers['content-range']=f'bytes */{record.file_size}'
+        raise HTTPException(416, 'The requested media range is invalid.', headers=headers)
+
+    try:
+        drive=get_google_drive_client()
+        drive_file=drive.get_file(record.source_file_id, require_within_root=False)
+    except DriveLookupError as exc:
+        raise HTTPException(502, str(exc)) from None
+    if not drive_file.can_download:
+        raise HTTPException(403, 'This Google Drive file cannot be played in the dashboard.')
+
+    media_type=drive_file.mime_type or 'application/octet-stream'
+    headers={
+        'accept-ranges':'bytes',
+        'cache-control':'private, max-age=300',
+        'content-disposition':f"inline; filename*=UTF-8''{quote(drive_file.name, safe='')}",
+    }
+    if request.method == 'HEAD':
+        if drive_file.size is not None:
+            headers['content-length']=str(drive_file.size)
+        return Response(status_code=200, media_type=media_type, headers=headers)
+
+    try:
+        stream=drive.open_file_stream(
+            drive_file,
+            range_header=range_header.strip() if range_header else None,
+        )
+    except DriveLookupError as exc:
+        raise HTTPException(502, str(exc)) from None
+    for name in ('content-length','content-range','etag','last-modified'):
+        value=stream.headers.get(name)
+        if value:
+            headers[name]=value
+    response_media_type=stream.headers.get('content-type') or media_type
+    return StreamingResponse(
+        stream.iter_bytes(),
+        status_code=stream.status_code,
+        media_type=response_media_type,
+        headers=headers,
+        background=BackgroundTask(stream.close),
+    )
+
+
 @app.get('/api/client/check')
 def client_session_check(request:Request):
     return public_client_session(authenticate_client(request))
@@ -1371,6 +1436,14 @@ def client_review_frame(client_id:str, job_id:str, filename:str, request:Request
     if not client_review_exists(config['offer_id'], job_id):
         raise HTTPException(404, 'Review not found.')
     return evidence_frame_response(job_id, filename)
+
+
+@app.api_route('/api/client/{client_id}/reviews/{job_id}/media', methods=['GET','HEAD'])
+def client_review_media(client_id:str, job_id:str, request:Request):
+    config=require_client(request, client_id)
+    if not client_review_exists(config['offer_id'], job_id):
+        raise HTTPException(404, 'Review not found.')
+    return review_media_response(job_id, request)
 
 
 def validate_review_text(
@@ -3503,6 +3576,11 @@ def frame(job_id:str, filename:str):
     if legacy.exists():
         return FileResponse(legacy)
     return evidence_frame_response(job_id, filename)
+
+
+@app.api_route('/api/reviews/{job_id}/media', methods=['GET','HEAD'])
+def review_media(job_id:str, request:Request):
+    return review_media_response(job_id, request)
 
 static=Path('frontend/dist')
 if static.exists():

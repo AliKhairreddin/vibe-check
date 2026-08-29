@@ -16,6 +16,10 @@ export type Status = {
   updated_at?: number | null;
   offer_ids?: string[];
   primary_offer_id?: string | null;
+  source_file_id?: string | null;
+  source_kind?: 'google_drive_file' | 'google_sheet' | 'meta_ads' | null;
+  source_status?: 'linked' | 'not_found' | 'ambiguous' | 'unavailable' | null;
+  source_url?: string | null;
   vertical?: ReviewVertical;
 };
 

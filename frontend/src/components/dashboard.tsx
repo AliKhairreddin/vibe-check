@@ -589,10 +589,6 @@ function RecentReviewRow({
 }) {
   const content = (
     <>
-      <CreativeThumbnail
-        alt={`Preview of ${review.file_name || review.job_id}`}
-        jobId={review.has_creative === false ? null : review.job_id}
-      />
       <div className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{review.file_name || review.job_id}</span>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
@@ -621,16 +617,21 @@ function RecentReviewRow({
       <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover/review:translate-x-0.5" />
     </>
   );
-  const className = 'group/review flex items-center gap-3 px-3 py-3 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring';
+  const linkClassName = 'flex min-w-0 flex-1 items-center gap-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  const target = review.report_ready ? '/reviews/$jobId/report' : '/reviews/$jobId';
 
-  return review.report_ready ? (
-    <Link to="/reviews/$jobId/report" params={{ jobId: review.job_id }} className={className}>
-      {content}
-    </Link>
-  ) : (
-    <Link to="/reviews/$jobId" params={{ jobId: review.job_id }} className={className}>
-      {content}
-    </Link>
+  return (
+    <div className="group/review flex items-center gap-3 px-3 py-3 transition-colors hover:bg-muted/40">
+      <CreativeThumbnail
+        alt={`Preview of ${review.file_name || review.job_id}`}
+        driveUrl={review.source_kind === 'google_drive_file' ? review.source_url : null}
+        fileName={review.file_name}
+        jobId={review.has_creative === false ? null : review.job_id}
+      />
+      <Link to={target} params={{ jobId: review.job_id }} className={linkClassName}>
+        {content}
+      </Link>
+    </div>
   );
 }
 

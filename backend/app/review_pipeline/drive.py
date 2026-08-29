@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import quote
 
 import httpx
@@ -44,6 +44,29 @@ class DriveFile:
     size: int | None = None
     modified_time: str | None = None
     can_download: bool = True
+
+
+class DriveMediaStream:
+    """An open Google Drive response whose lifecycle follows the HTTP response."""
+
+    def __init__(self, client: httpx.Client, response: httpx.Response):
+        self._client = client
+        self._response = response
+
+    @property
+    def headers(self) -> httpx.Headers:
+        return self._response.headers
+
+    @property
+    def status_code(self) -> int:
+        return self._response.status_code
+
+    def iter_bytes(self) -> Iterator[bytes]:
+        yield from self._response.iter_bytes(1024 * 1024)
+
+    def close(self) -> None:
+        self._response.close()
+        self._client.close()
 
 
 def escape_drive_query_value(value: str) -> str:
@@ -415,6 +438,39 @@ class GoogleDriveClient:
             raise DriveLookupError('Google Drive could not download the selected file.') from exc
         finally:
             temporary.unlink(missing_ok=True)
+
+    def open_file_stream(
+        self,
+        file: DriveFile,
+        *,
+        range_header: str | None = None,
+    ) -> DriveMediaStream:
+        if not file.can_download:
+            raise DriveLookupError('This Google Drive file cannot be downloaded by the service account.')
+        headers = {'authorization': self._authorization_header()}
+        if range_header:
+            headers['range'] = range_header
+        client = httpx.Client(
+            timeout=httpx.Timeout(300.0, connect=20.0),
+            follow_redirects=True,
+        )
+        try:
+            request = client.build_request(
+                'GET',
+                f'{DRIVE_API_BASE_URL}/files/{quote(file.file_id, safe="")}',
+                params={'alt': 'media', 'supportsAllDrives': 'true'},
+                headers=headers,
+            )
+            response = client.send(request, stream=True)
+            if response.status_code not in {200, 206}:
+                status_code = response.status_code
+                response.close()
+                client.close()
+                raise DriveLookupError(f'Google Drive media stream returned HTTP {status_code}.')
+            return DriveMediaStream(client, response)
+        except httpx.HTTPError as exc:
+            client.close()
+            raise DriveLookupError('Google Drive could not stream the selected file.') from exc
 
     @staticmethod
     def _is_supported_creative(file: DriveFile) -> bool:

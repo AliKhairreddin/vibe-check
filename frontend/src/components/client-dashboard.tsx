@@ -899,7 +899,15 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
   const effectiveStatus = effectiveReviewStatus(review);
   return (
     <div className="grid gap-4 border-t bg-muted/10 p-3">
-      <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-64 w-full rounded-lg" clientId={clientId} jobId={review.job_id} />
+      <CreativeThumbnail
+        alt={`Preview of ${review.file_name}`}
+        className="h-64 w-full rounded-lg"
+        clientId={clientId}
+        driveUrl={preview.google_drive_url}
+        fileName={review.file_name}
+        jobId={review.job_id}
+        mediaKind={review.media_kind}
+      />
       <div className="grid gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={effectiveStatus} />
@@ -982,7 +990,15 @@ function ClientReviewDetail() {
             <CardAction><AiRecommendation status={review.ai_status} /></CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4 sm:flex-row">
-            <CreativeThumbnail alt={`Preview of ${review.file_name}`} className="h-36 w-28 sm:h-40 sm:w-32" clientId={clientId} jobId={review.job_id} />
+            <CreativeThumbnail
+              alt={`Preview of ${review.file_name}`}
+              className="h-36 w-28 sm:h-40 sm:w-32"
+              clientId={clientId}
+              driveUrl={googleDriveUrl}
+              fileName={review.file_name}
+              jobId={review.job_id}
+              mediaKind={review.media_kind}
+            />
             <div className="grid content-start gap-3">
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{report.summary}</p>
               <div className="flex flex-wrap gap-2"><StatusBadge status={effectiveReviewStatus(review)} />{effectiveReviewStatus(review) !== review.ai_status ? <Badge variant="outline">AdChecked: {statusLabel(review.ai_status)}</Badge> : null}<Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
@@ -999,7 +1015,7 @@ function ClientReviewDetail() {
           <CardContent>
             {report.findings.length ? (
               <div className="grid gap-3 lg:grid-cols-2">
-                {report.findings.map((finding, index) => <FindingCard key={`${finding.source}-${finding.timestamp_start ?? 'none'}-${index}`} finding={finding} frame={nearestEvidenceFrame(evidenceFrames, finding.timestamp_start)} index={index + 1} jobId={jobId} clientId={clientId} />)}
+                {report.findings.map((finding, index) => <FindingCard key={`${finding.source}-${finding.timestamp_start ?? 'none'}-${index}`} finding={finding} frame={nearestEvidenceFrame(evidenceFrames, finding.timestamp_start)} index={index + 1} jobId={jobId} clientId={clientId} driveUrl={googleDriveUrl} fileName={review.file_name} mediaKind={review.media_kind} />)}
               </div>
             ) : (
               <div className="grid min-h-40 place-items-center rounded-lg border border-emerald-600/25 bg-emerald-500/5 p-6 text-center"><div className="grid gap-2"><CheckCircle2 className="mx-auto size-7 text-emerald-600" /><p className="font-medium">No policy findings</p><p className="text-sm text-muted-foreground">AdChecked found no {portal.display_name} policy issue in this creative.</p></div></div>
@@ -1012,10 +1028,10 @@ function ClientReviewDetail() {
   );
 }
 
-function FindingCard({ clientId, finding, frame, index, jobId }: { clientId: string; finding: Finding; frame: ReviewEvidenceFrame | null; index: number; jobId: string }) {
+function FindingCard({ clientId, driveUrl, fileName, finding, frame, index, jobId, mediaKind }: { clientId: string; driveUrl?: string | null; fileName: string; finding: Finding; frame: ReviewEvidenceFrame | null; index: number; jobId: string; mediaKind: ClientReviewItem['media_kind'] }) {
   return (
     <article className="flex gap-3 rounded-xl border bg-card p-3">
-      {frame ? <CreativeEvidenceImage alt={`Evidence frame for finding ${index}`} clientId={clientId} filename={frame.filename} jobId={jobId} /> : <span className="grid h-32 w-24 shrink-0 place-items-center rounded-lg border bg-muted/30 text-center text-[11px] font-medium text-muted-foreground sm:h-36 sm:w-28">{sourceLabel(finding.source)}</span>}
+      {frame ? <CreativeEvidenceImage alt={`Evidence frame for finding ${index}`} clientId={clientId} driveUrl={driveUrl} fileName={fileName} filename={frame.filename} jobId={jobId} mediaKind={mediaKind} startSeconds={frame.timestamp} /> : <span className="grid h-32 w-24 shrink-0 place-items-center rounded-lg border bg-muted/30 text-center text-[11px] font-medium text-muted-foreground sm:h-36 sm:w-28">{sourceLabel(finding.source)}</span>}
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5"><Badge variant="outline">#{index}</Badge><SeverityBadge severity={finding.severity} /><Badge variant="outline">{sourceLabel(finding.source)}</Badge>{finding.timestamp_start ? <Badge variant="secondary">{formatTimestamp(finding.timestamp_start)}</Badge> : null}</div>
         <p className="mt-3 text-sm font-medium leading-5">{finding.evidence}</p>
