@@ -66,6 +66,13 @@ test('uses neutral client workspace labels and exposes result filtering', () => 
   assert.doesNotMatch(clientDashboardSource, /Signed in as/);
 });
 
+test('labels the client footer with the signed-in company', () => {
+  assert.match(clientDashboardSource, /workspaceName=\{selectedPortal\?\.display_name\}/);
+  assert.match(clientDashboardSource, /<p className="font-medium">\{resolvedWorkspaceName\}<\/p>/);
+  assert.match(clientDashboardSource, /<p className="text-muted-foreground">Client view<\/p>/);
+  assert.doesNotMatch(clientDashboardSource, />Client workspace<\/p>/);
+});
+
 test('organizes client navigation by workflow, performance, and utilities', () => {
   const workspace = clientDashboardSource.indexOf('>Workspace</SidebarGroupLabel>');
   const reviewQueue = clientDashboardSource.indexOf('<span>Review queue</span>');

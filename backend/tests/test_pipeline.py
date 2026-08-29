@@ -3217,6 +3217,12 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
         'lead-economy',
         'smart-financial',
     ]
+    assert [portal['display_name'] for portal in admin_session.json()['portals']] == [
+        'Kissterra',
+        'Auto Coverage Pro',
+        'Lead Economy',
+        'Smart Financial',
+    ]
     assert cross_scoped.status_code == 404
     assert acp_reviews.status_code == 200
     assert acp_reviews.json()['reviews'][0]['ai_status'] == 'green'

@@ -186,7 +186,7 @@ CLIENT_SESSION_COOKIE = 'adchecked_client_session'
 SESSION_TTL_SECONDS = 12 * 60 * 60
 CLIENT_PORTALS = {
     'acp': {
-        'display_name': 'ACP',
+        'display_name': 'Auto Coverage Pro',
         'offer_id': 'acp',
         'username_env': 'ACP_CLIENT_USERNAME',
         'username_default': 'acp',

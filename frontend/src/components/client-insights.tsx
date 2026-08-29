@@ -113,7 +113,7 @@ export function ClientBatchPage() {
   const counts = statusCounts(reviews);
 
   return (
-    <ClientPortalFrame>
+    <ClientPortalFrame workspaceName={portal?.display_name}>
       <div className="grid gap-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="grid gap-1">

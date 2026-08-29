@@ -460,7 +460,7 @@ function ClientDashboard() {
   }
 
   return (
-    <ClientPortalFrame>
+    <ClientPortalFrame workspaceName={selectedPortal?.display_name}>
       {selectedPortal ? (
         <div className="grid gap-4">
           <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -675,10 +675,11 @@ function ClientDashboard() {
   );
 }
 
-export function ClientPortalFrame({ children }: {
+export function ClientPortalFrame({ children, workspaceName }: {
   children: ReactNode;
+  workspaceName?: string;
 }) {
-  const { error, isSigningOut, logout } = useClientAuth();
+  const { error, isSigningOut, logout, session } = useClientAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -687,6 +688,11 @@ export function ClientPortalFrame({ children }: {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const reviewQueueActive = pathname === '/client/reviews'
     || /^\/client\/[^/]+\/reviews\/[^/]+$/.test(pathname);
+  const routeClientId = pathname.match(/^\/client\/([^/]+)\/(?:batches|reviews)\//)?.[1];
+  const routePortal = session.portals.find((portal) => portal.client_id === routeClientId);
+  const resolvedWorkspaceName = workspaceName
+    ?? routePortal?.display_name
+    ?? (session.portals.length === 1 ? session.portals[0]?.display_name : 'All companies');
 
   useEffect(() => {
     window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
@@ -751,7 +757,7 @@ export function ClientPortalFrame({ children }: {
         </SidebarContent>
         <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
           <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
-            <p className="font-medium">Client workspace</p>
+            <p className="font-medium">{resolvedWorkspaceName}</p>
             <p className="text-muted-foreground">Client view</p>
           </div>
           <SidebarMenu>
