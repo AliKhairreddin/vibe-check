@@ -553,6 +553,9 @@ function ReviewWorkspace() {
 
   const selectedDriveFiles = driveSelectionQuery.data?.files ?? [];
   const creativeCount = creativeSource === 'drive' ? selectedDriveFiles.length : selectedFiles.length;
+  const isResolvingDriveSelection = creativeSource === 'drive'
+    && Boolean(selectedDriveFolders.size || selectedDriveFileIds.size)
+    && driveSelectionQuery.isFetching;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1046,18 +1049,28 @@ function ReviewWorkspace() {
               </p>
               <Button
                 type="submit"
+                variant={isResolvingDriveSelection ? 'secondary' : 'default'}
                 disabled={
                   isSubmitting
+                  || isResolvingDriveSelection
                   || offersQuery.isLoading
                   || Boolean(offersQuery.error)
                   || !eligibleOffers.length
                   || eligibleOffers.length > MAX_OFFERS_PER_REVIEW
                 }
               >
-                <Upload data-icon="inline-start" />
-                {isSubmitting
-                  ? 'Starting reviews…'
-                  : createButtonLabel(creativeCount || adCopyLines.length)}
+                {isResolvingDriveSelection ? (
+                  <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <Upload data-icon="inline-start" />
+                )}
+                {isResolvingDriveSelection
+                  ? selectedDriveFolders.size
+                    ? `Resolving ${selectedDriveFolders.size === 1 ? 'folder' : 'folders'}…`
+                    : 'Resolving selection…'
+                  : isSubmitting
+                    ? 'Starting reviews…'
+                    : createButtonLabel(creativeCount || adCopyLines.length)}
               </Button>
             </div>
           </form>
