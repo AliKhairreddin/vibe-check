@@ -686,7 +686,7 @@ def test_drive_configuration_adds_named_folder_roots(monkeypatch):
         (option.drive_id, option.name, option.folder_id)
         for option in configured_drive_options()
     ] == [
-        ('default', 'Google Drive', 'primary-root'),
+        ('default', 'ACP', 'primary-root'),
         ('kissterra', 'Kissterra Auto', 'kissterra-root'),
         ('kissterra-home', 'Kissterra Home', 'kissterra-home-root'),
     ]

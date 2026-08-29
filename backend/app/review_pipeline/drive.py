@@ -78,7 +78,7 @@ def configured_drive_options() -> tuple[DriveOption, ...]:
     if not default_folder_id:
         raise DriveLookupError('Google Drive is not configured.')
 
-    options = [DriveOption(DEFAULT_DRIVE_ID, 'Google Drive', default_folder_id)]
+    options = [DriveOption(DEFAULT_DRIVE_ID, 'ACP', default_folder_id)]
     raw_options = os.getenv('GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON', '').strip()
     if not raw_options:
         return tuple(options)
