@@ -86,6 +86,7 @@ test('organizes client navigation by workflow, performance, and utilities', () =
   assert.ok(sidebarFooter > performance);
   assert.ok(settings > sidebarFooter);
   assert.match(clientDashboardSource, /<span>Auto Insurance<\/span>/);
+  assert.match(clientDashboardSource, /<CarFront\s*\/>\s*<span>Auto Insurance<\/span>/);
   assert.match(clientDashboardSource, /<span>Home Insurance<\/span>/);
   assert.doesNotMatch(clientDashboardSource, /<SidebarGroupLabel[^>]*>Verticals<\/SidebarGroupLabel>/);
 });
@@ -94,6 +95,7 @@ test('provides dashboard, vertical, and batch insight routes', () => {
   assert.match(clientAppSource, /path: '\/client\/verticals\/\$verticalId'/);
   assert.match(clientAppSource, /path: '\/client\/\$clientId\/batches\/\$batchId'/);
   assert.match(clientInsightsSource, /Auto Insurance/);
+  assert.match(clientInsightsSource, /icon: CarFront/);
   assert.match(clientInsightsSource, /Home Insurance/);
   assert.match(clientInsightsSource, /Batch performance/);
 });

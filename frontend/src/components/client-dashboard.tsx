@@ -12,6 +12,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import {
   AlertCircle,
+  CarFront,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -740,7 +741,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
                 <SidebarMenu>
                   <SidebarMenuItem>
                     <SidebarMenuButton aria-current={pathname === '/client/verticals/auto-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
-                      <ShieldCheck />
+                      <CarFront />
                       <span>Auto Insurance</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

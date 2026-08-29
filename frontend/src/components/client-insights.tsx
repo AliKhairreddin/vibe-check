@@ -3,13 +3,13 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import {
   ArrowRight,
+  CarFront,
   CheckCircle2,
   Clock3,
   Files,
   Gauge,
   Home,
   Layers3,
-  ShieldCheck,
   Sparkles,
   TriangleAlert,
   XCircle,
@@ -54,13 +54,13 @@ import { cn } from '@/lib/utils';
 
 const VERTICALS: Array<{
   description: string;
-  icon: typeof ShieldCheck;
+  icon: typeof CarFront;
   id: ReviewVertical;
   label: string;
 }> = [
   {
     description: 'Performance and decision trends for auto insurance creatives.',
-    icon: ShieldCheck,
+    icon: CarFront,
     id: 'auto-insurance',
     label: 'Auto Insurance',
   },
