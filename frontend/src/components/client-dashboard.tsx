@@ -758,7 +758,6 @@ export function ClientPortalFrame({ children, workspaceName }: {
         <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
           <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
             <p className="font-medium">{resolvedWorkspaceName}</p>
-            <p className="text-muted-foreground">Client view</p>
           </div>
           <SidebarMenu>
             <SidebarMenuItem>

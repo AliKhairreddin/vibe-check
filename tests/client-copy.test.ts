@@ -69,7 +69,7 @@ test('uses neutral client workspace labels and exposes result filtering', () => 
 test('labels the client footer with the signed-in company', () => {
   assert.match(clientDashboardSource, /workspaceName=\{selectedPortal\?\.display_name\}/);
   assert.match(clientDashboardSource, /<p className="font-medium">\{resolvedWorkspaceName\}<\/p>/);
-  assert.match(clientDashboardSource, /<p className="text-muted-foreground">Client view<\/p>/);
+  assert.doesNotMatch(clientDashboardSource, />Client view<\/p>/);
   assert.doesNotMatch(clientDashboardSource, />Client workspace<\/p>/);
 });
 
