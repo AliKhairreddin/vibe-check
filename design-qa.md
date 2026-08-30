@@ -63,3 +63,68 @@ A separate crop was not required because the 2626 × 768 combined comparison pre
 - No blocking visual polish remains.
 
 final result: passed
+
+---
+
+# Mobile UI Design QA
+
+**Source visual truth**
+
+- `/tmp/codex-remote-attachments/01a053fd-9305-7693-a644-18de27e5150a/0E1D34D9-083E-4CC1-B59C-8D8253F3865F/1-Pasted-Image-1.jpg`
+- `/tmp/codex-remote-attachments/01a053fd-9305-7693-a644-18de27e5150a/BDC6367F-CEB5-45BE-9E50-5806FB5B2737/1-Pasted-Image-1.jpg`
+- `/tmp/codex-remote-attachments/01a053fd-9305-7693-a644-18de27e5150a/59396190-F870-4EBD-9C68-AEEF875544D9/1-Pasted-Image-1.jpg`
+- `/tmp/codex-remote-attachments/01a053fd-9305-7693-a644-18de27e5150a/B54F3BEE-8F19-4F77-887A-62CE38A7306B/1-Pasted-Image-1.jpg`
+- `/tmp/codex-remote-attachments/01a053fd-9305-7693-a644-18de27e5150a/3FAF96E7-41B2-460C-975C-DBF4DC87D1E1/1-Pasted-Image-1.jpg`
+- `/tmp/codex-remote-attachments/01a053fd-9305-7693-a644-18de27e5150a/BAD93EE1-F6A3-4C2B-8EBC-AD253AC343E8/1-Pasted-Image-1.jpg`
+
+**Implementation evidence**
+
+- `/tmp/vibe-check-mobile-final-top.png`
+- `/tmp/vibe-check-mobile-final-lower.png`
+- Combined focused comparison: `/tmp/vibe-check-mobile-final-comparison.png`
+- Browser viewport: 393 × 852 CSS px at device scale factor 1.
+- Implementation screenshots: 393 × 852 px.
+- Primary source screenshot: 590 × 1280 px, normalized to 393 × 852 for the header and batch-progress comparison. The remaining user screenshots are focused mobile crops, so their marked regions were compared to matching focused implementation crops rather than treated as pixel-identical full screens.
+- State: light theme, phone layout, empty batch progress, populated history/report examples, Green-with-exception and Yellow compact outcomes.
+
+**Findings**
+
+- No actionable P0, P1, or P2 differences remain in the requested regions.
+- Fonts and typography: the existing Geist type system, weights, sizes, and line heights are unchanged. The batch description now wraps in four lines and the batch-report summary in two lines at 393 px, without clipping.
+- Spacing and layout rhythm: the mobile header divider is removed; header actions and long status groups stay within their cards; table columns have non-overlapping minimum widths and scroll within their containers instead of widening the page.
+- Colors and visual tokens: existing background, border, muted, Green, Yellow, and badge tokens are preserved.
+- Image quality and asset fidelity: no image assets were changed. Existing thumbnail behavior remains outside the layout-only fixture; the supplied screenshots were used only to identify the surrounding overflow.
+- Copy and content: all user-facing copy is unchanged. Long Green-with-exception, Yellow, and accepted-internally labels remain legible and contained.
+
+**Comparison history**
+
+1. Initial P2: the batch description and batch-report summary were constrained by action columns, causing excessive vertical wrapping. Fix: mobile descriptions now span the full card header; actions retain their desktop placement above 640 px. Post-fix evidence: four-line batch description and two-line report summary at 393 px.
+2. Initial P2: review-history and individual-creative table columns collapsed into one another on phones. Fix: mobile-only table minimum widths and a protected Upload column allow horizontal scrolling. Post-fix evidence: both tables report zero intersecting header rectangles; scroll widths are 1184 px and 928 px inside 346 px and 314 px viewports.
+3. Initial P2: Green-with-exception, Yellow, and accepted-internally badges overflowed their mobile containers. Fix: compact dashboard tiles stack their label and result on phones, shared compact badges constrain safely, and the summary badge group moves below the title. Post-fix evidence: all measured badge bounds remain inside their parent cards.
+4. Initial P3: an unintended vertical separator appeared in the phone header and the navigation trigger did not use the conventional mobile menu symbol. Fix: removed the separator and used the existing off-canvas navigation drawer with a hamburger trigger. Post-fix evidence: zero header separator nodes; drawer open and close states verified.
+
+**Interaction and runtime checks**
+
+- Mobile navigation drawer opened from the hamburger trigger and closed with Escape.
+- Both wide data tables were verified as horizontally scrollable; a 320 px horizontal scroll was exercised on the batch-results table.
+- Page width remained bounded to the mobile viewport.
+- Clean browser verification run reported no console errors.
+
+**Open Questions**
+
+- None for the requested mobile fixes.
+
+**Implementation Checklist**
+
+- [x] Expand mobile card descriptions beneath header actions.
+- [x] Remove the stray mobile header divider.
+- [x] Keep the off-canvas mobile navigation drawer and use a hamburger trigger.
+- [x] Prevent history and batch-result table column collisions.
+- [x] Contain compact result and summary badges for all statuses.
+- [x] Verify phone rendering, interactions, horizontal scrolling, and console output.
+
+**Follow-up Polish**
+
+- None required for this pass.
+
+final result: passed

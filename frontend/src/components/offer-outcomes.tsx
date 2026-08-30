@@ -184,7 +184,7 @@ export function OfferOutcomeCell({
   if (!outcome || outcome.evaluation_state !== 'evaluated') {
     const message = outcome?.message || unavailableMessage(outcome?.evaluation_state);
     return (
-      <div className={cn('grid min-w-24 gap-1', compact && 'min-w-0')} title={message}>
+      <div className={cn('grid min-w-24 gap-1', compact && 'min-w-0 max-w-full overflow-hidden')} title={message}>
         <Badge variant="outline" className="w-fit text-muted-foreground">N/A</Badge>
         {!compact ? <span className="max-w-40 text-xs leading-4 text-muted-foreground">{message}</span> : null}
       </div>
@@ -195,19 +195,19 @@ export function OfferOutcomeCell({
 
   return (
     <div
-      className={cn('grid min-w-24 gap-1', compact && 'min-w-0')}
+      className={cn('grid min-w-24 gap-1', compact && 'min-w-0 max-w-full overflow-hidden')}
       title={compactDetails}
     >
       {outcome.overall_status ? (
         <OfferResultBadge
           automatedStatus={outcome.automated_status}
-          className="w-fit"
+          className={cn('w-fit', compact && 'min-w-0 max-w-full justify-start truncate')}
           clientDecision={outcome.client_decision}
           status={outcome.overall_status}
           withOverride={outcome.with_override}
         />
       ) : (
-        <Badge variant="outline" className="w-fit">Not ready</Badge>
+        <Badge variant="outline" className={cn('w-fit', compact && 'min-w-0 max-w-full justify-start truncate')}>Not ready</Badge>
       )}
       {showSources && (outcome.creative_result || outcome.ad_copy_result) ? (
         <span className="text-xs leading-4 text-muted-foreground">

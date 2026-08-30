@@ -604,7 +604,7 @@ function RecentReviewRow({
           {offerColumns.map((offer) => (
             <div
               key={offer.offer_id}
-              className="flex min-w-0 items-center justify-between gap-1 rounded-md border bg-background px-2 py-1"
+              className="flex min-w-0 items-center justify-between gap-1 rounded-md border bg-background px-2 py-1 max-sm:flex-col max-sm:items-stretch max-sm:gap-0.5 max-sm:[&_[data-slot=badge]]:ml-auto"
             >
               <span className="truncate text-[11px] font-medium text-muted-foreground">
                 {offer.offer_name}

@@ -43,6 +43,7 @@ import {
   Layers3,
   LoaderCircle,
   LogOut,
+  Menu as MenuIcon,
   Moon,
   RefreshCw,
   ScanSearch,
@@ -322,17 +323,24 @@ function AppHeader({
   onToggleTheme: () => void;
   theme: Theme;
 }) {
-  const { openMobile } = useSidebar();
+  const { openMobile, setOpenMobile } = useSidebar();
   const triggerVerb = openMobile ? 'Close' : 'Open';
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/90 px-4 backdrop-blur md:hidden">
-      <SidebarTrigger
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
         className="-ml-1"
+        onClick={() => setOpenMobile(!openMobile)}
         aria-label={`${triggerVerb} navigation`}
+        aria-expanded={openMobile}
+        aria-haspopup="dialog"
         title={`${triggerVerb} navigation`}
-      />
-      <Separator orientation="vertical" className="h-4" />
+      >
+        <MenuIcon />
+      </Button>
       <Link to="/" className="flex items-center gap-2 font-heading text-sm font-semibold">
         <ScanSearch className="size-4" strokeWidth={2.2} />
         AdChecked
@@ -1080,10 +1088,10 @@ function ReviewWorkspace() {
         <Card>
           <CardHeader>
             <CardTitle className="text-xl">Batch progress</CardTitle>
-            <CardDescription>
+            <CardDescription className="max-sm:col-span-2">
               Jobs are submitted in groups of up to {UPLOAD_CONCURRENCY}, without waiting for earlier reviews to finish. The backend can process up to 50 creatives in parallel; additional jobs wait automatically.
             </CardDescription>
-            <CardAction>
+            <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
               <div className="flex items-center gap-2">
                 {activeBatchId ? (
                   <Link
@@ -1659,12 +1667,12 @@ function HistoryCard({
               <Skeleton className="h-24" />
             </div>
           ) : filteredEntries.length ? (
-            <div className={cn('overflow-auto', !allHistory && 'max-h-[42rem]')}>
-              <Table className="min-w-[58rem] table-fixed">
+            <div className={cn('overflow-auto max-md:overscroll-x-contain', !allHistory && 'max-h-[42rem]')}>
+              <Table className="min-w-[58rem] table-fixed max-md:min-w-[74rem]">
                 <colgroup>
                   <col className="w-8" />
                   <col className="w-14" />
-                  <col />
+                  <col className="max-md:w-56" />
                   <col className="w-36" />
                   <col className="w-28" />
                   <col className="w-44" />
@@ -2685,11 +2693,11 @@ function ReportPage() {
       <Card>
         <CardHeader>
           <CardTitle as="h2" className="text-xl">{activeOffer.offer_name} review summary</CardTitle>
-          <CardDescription>
+          <CardDescription className="max-sm:col-span-2">
             Review job {jobId}{activeOffer.guideline_version ? ` · guidelines v${activeOffer.guideline_version}` : ''}
           </CardDescription>
-          <CardAction>
-            <div className="flex flex-wrap justify-end gap-2">
+          <CardAction className="max-sm:col-span-2 max-sm:col-start-1 max-sm:row-span-1 max-sm:row-start-3 max-sm:justify-self-stretch">
+            <div className="flex flex-wrap justify-end gap-2 max-sm:justify-start">
               <StatusBadge status={effectiveActiveStatus} />
               <InternalDispositionBadge disposition={activeOffer.internal_disposition} />
             </div>
@@ -2956,10 +2964,10 @@ function BatchPage() {
         <CardTitle as="h1" className="text-xl">
           Batch report
         </CardTitle>
-        <CardDescription>
+        <CardDescription className="max-sm:col-span-2">
           Uploaded {formatDate(query.data.created_at)} · {completeCount} complete · {failedCount} failed · {query.data.expected_count} total
         </CardDescription>
-        <CardAction>
+        <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
           <div className="flex flex-wrap justify-end gap-2">
             {batchComplete ? (
               <PdfDownloadMenu
@@ -2995,7 +3003,7 @@ function BatchPage() {
             Open any row for that creative’s detailed report and individual PDF options.
           </p>
         </div>
-        <Table className="table-fixed">
+        <Table className="table-fixed max-md:min-w-[58rem]">
           <colgroup>
             <col className="w-20" />
             <col className="w-28" />
