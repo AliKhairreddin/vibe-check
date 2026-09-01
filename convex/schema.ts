@@ -72,6 +72,32 @@ export default defineSchema({
     .index("by_client_id_and_decided_at", ["clientId", "decidedAt"])
     .index("by_job_id", ["jobId"])
     .index("by_offer_id_and_decided_at", ["offerId", "decidedAt"]),
+  clientReviewDecisionHistory: defineTable({
+    aiFindings: v.optional(v.array(v.string())),
+    aiStatus: v.optional(v.union(
+      v.literal("green"),
+      v.literal("yellow"),
+      v.literal("red")
+    )),
+    aiSummary: v.optional(v.string()),
+    archivedAt: v.number(),
+    clientId: v.string(),
+    decidedAt: v.number(),
+    decision: v.union(v.literal("approved"), v.literal("disapproved")),
+    feedbackNote: v.optional(v.string()),
+    feedbackReason: v.optional(v.union(
+      v.literal("false_positive"),
+      v.literal("missed_policy_issue"),
+      v.literal("partner_preference"),
+      v.literal("one_off_exception"),
+      v.literal("business_decision")
+    )),
+    jobId: v.string(),
+    offerId: v.string(),
+  })
+    .index("by_client_id_and_offer_id_and_archived_at", ["clientId", "offerId", "archivedAt"])
+    .index("by_client_id_and_offer_id_and_job_id_and_archived_at", ["clientId", "offerId", "jobId", "archivedAt"])
+    .index("by_job_id", ["jobId"]),
   reportArtifacts: defineTable({
     contentType: v.string(),
     createdAt: v.number(),

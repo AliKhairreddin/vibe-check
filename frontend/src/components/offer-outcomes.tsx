@@ -220,10 +220,10 @@ export function OfferOutcomeCell({
   );
 }
 
-export function OfferResultsHeader({ offers }: { offers: OfferColumn[] }) {
+export function OfferResultsHeader({ label = 'Offer results', offers }: { label?: string; offers: OfferColumn[] }) {
   return (
     <div className="grid gap-1 py-1">
-      <span>Offer results</span>
+      <span>{label}</span>
       <div
         className="grid gap-px"
         style={{
@@ -629,6 +629,7 @@ function outcomeDetails(outcome: OfferOutcome) {
     if (outcome.automated_status && outcome.automated_status !== outcome.overall_status) {
       details.push(`AdChecked: ${STATUS_META[outcome.automated_status].label}`);
     }
+    if (outcome.client_feedback_note) details.push(`Note: ${outcome.client_feedback_note}`);
   }
   if (
     outcome.overall_status &&

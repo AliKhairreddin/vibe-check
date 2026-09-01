@@ -1117,6 +1117,7 @@ def api_webhook_secret_rotate(partner_id:str, request:Request):
 
 def public_client_review(value:dict)->dict:
     decision=value.get('decision') if isinstance(value.get('decision'), dict) else None
+    previous_decision=value.get('previousDecision') if isinstance(value.get('previousDecision'), dict) else None
     preview=value.get('preview') if isinstance(value.get('preview'), dict) else {}
     return {
         'ai_status':value.get('aiStatus'),
@@ -1131,6 +1132,12 @@ def public_client_review(value:dict)->dict:
             'feedback_note':decision.get('feedbackNote'),
             'feedback_reason':decision.get('feedbackReason'),
         } if decision else None),
+        'previous_decision':({
+            'decided_at':previous_decision.get('decidedAt'),
+            'decision':previous_decision.get('decision'),
+            'feedback_note':previous_decision.get('feedbackNote'),
+            'feedback_reason':previous_decision.get('feedbackReason'),
+        } if previous_decision else None),
         'file_name':value.get('fileName'),
         'issue_summary':value.get('issueSummary'),
         'job_id':value.get('jobId'),

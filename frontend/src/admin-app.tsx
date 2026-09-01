@@ -45,6 +45,7 @@ import {
   LogOut,
   Menu as MenuIcon,
   Moon,
+  MessageSquareText,
   RefreshCw,
   ScanSearch,
   Search,
@@ -1696,7 +1697,7 @@ function HistoryCard({
                     <TableHead className="h-11 text-xs text-muted-foreground">Uploaded</TableHead>
                     <TableHead className="h-11 text-xs text-muted-foreground">Status</TableHead>
                     <TableHead className="h-11 text-xs text-muted-foreground">
-                      <OfferResultsHeader offers={offerColumns} />
+                      <OfferResultsHeader label="Effective results" offers={offerColumns} />
                     </TableHead>
                     <TableHead className="h-11 text-right text-xs text-muted-foreground">Action</TableHead>
                   </TableRow>
@@ -2704,12 +2705,13 @@ function ReportPage() {
           </CardAction>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {activeOutcome?.client_decision && activeOutcome.automated_status && activeOutcome.automated_status !== effectiveActiveStatus ? (
+          {activeOutcome?.client_decision && activeOutcome.automated_status ? (
             <Alert>
               <CheckCircle2 />
               <AlertTitle>Client decision applied</AlertTitle>
               <AlertDescription>
-                The effective result is {formatStatus(effectiveActiveStatus)} because the client {activeOutcome.client_decision} this creative. The original AdChecked result was {formatStatus(activeOutcome.automated_status)}.
+                <span className="block">The effective result is {formatStatus(effectiveActiveStatus)} because the client {activeOutcome.client_decision} this creative. The original AdChecked result was {formatStatus(activeOutcome.automated_status)}.</span>
+                {activeOutcome.client_feedback_note ? <span className="mt-2 block rounded-md border bg-background/70 p-2 text-foreground"><span className="font-semibold">Decision note:</span> {activeOutcome.client_feedback_note}</span> : null}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -2904,8 +2906,8 @@ function ReportPage() {
 
 function BatchPage() {
   const { batchId } = useParams({ from: '/batches/$batchId' });
-  const navigate = useNavigate();
   const [selectedOfferId, setSelectedOfferId] = useState('all');
+  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
   const query = useQuery({
     queryKey: ['batch', batchId],
     queryFn: () => getBatch(batchId),
@@ -2949,14 +2951,6 @@ function BatchPage() {
   const pdfOffers = offerColumns.filter((offer) => query.data.items.some((item) =>
     findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
   ));
-
-  function openBatchItem(item: ReviewBatchItem) {
-    if (!item.job_id) return;
-    const to = item.status === 'complete'
-      ? '/reviews/$jobId/report' as const
-      : '/reviews/$jobId' as const;
-    void navigate({ to, params: { jobId: item.job_id } });
-  }
 
   return (
     <Card className="min-w-0">
@@ -3019,29 +3013,21 @@ function BatchPage() {
               <TableHead>Name</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-xs">
-                <OfferResultsHeader offers={visibleOfferColumns} />
+                <OfferResultsHeader label="Effective results" offers={visibleOfferColumns} />
               </TableHead>
-              <TableHead className="text-right">Report</TableHead>
+              <TableHead className="text-right">Report & details</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {query.data.items.map((item) => (
-                <TableRow
-                  key={item.item_id}
-                  role={item.job_id ? 'link' : undefined}
-                  tabIndex={item.job_id ? 0 : undefined}
-                  className={cn(
-                    item.job_id && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset'
-                  )}
-                  onClick={(event) => {
-                    if (item.job_id && !isInteractiveRowTarget(event.target)) openBatchItem(item);
-                  }}
-                  onKeyDown={(event) => {
-                    if (item.job_id && event.key === 'Enter' && !isInteractiveRowTarget(event.target)) {
-                      openBatchItem(item);
-                    }
-                  }}
-                >
+            {query.data.items.map((item) => {
+              const isExpanded = expandedItemIds.has(item.item_id);
+              const hasDecisionContext = visibleOfferColumns.some((offer) => {
+                const outcome = batchOutcomeForOffer(item, offer);
+                return outcome?.evaluation_state === 'evaluated';
+              });
+              return (
+              <React.Fragment key={item.item_id}>
+                <TableRow>
                   <TableCell className="align-top">
                     <CreativeThumbnail
                       alt={`Preview of ${item.file_name}`}
@@ -3068,6 +3054,7 @@ function BatchPage() {
                     <BatchOfferResultsRail item={item} offers={visibleOfferColumns} />
                   </TableCell>
                   <TableCell className="text-right">
+                    <div className="flex flex-wrap justify-end gap-1">
                     {item.status === 'upload_failed' && !item.job_id ? (
                       <Button
                         type="button"
@@ -3103,13 +3090,91 @@ function BatchPage() {
                     ) : (
                       <span className="text-sm text-muted-foreground">—</span>
                     )}
+                    {hasDecisionContext ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`${isExpanded ? 'Hide' : 'Show'} decision context for ${item.file_name}`}
+                        aria-expanded={isExpanded}
+                        title={`${isExpanded ? 'Hide' : 'Show'} assessment, decision, and note`}
+                        onClick={() => setExpandedItemIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(item.item_id)) next.delete(item.item_id);
+                          else next.add(item.item_id);
+                          return next;
+                        })}
+                      >
+                        <ChevronDown className={cn('transition-transform', isExpanded && 'rotate-180')} />
+                      </Button>
+                    ) : null}
+                    </div>
                   </TableCell>
                 </TableRow>
-            ))}
+                {isExpanded ? (
+                  <TableRow className="bg-muted/15 hover:bg-muted/15">
+                    <TableCell colSpan={6} className="p-3">
+                      <BatchItemDecisionDetails item={item} offers={visibleOfferColumns} />
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </React.Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+function BatchItemDecisionDetails({ item, offers }: { item: ReviewBatchItem; offers: OfferColumn[] }) {
+  const outcomes = offers.flatMap((offer) => {
+    const outcome = batchOutcomeForOffer(item, offer);
+    return outcome?.evaluation_state === 'evaluated' ? [{ offer, outcome }] : [];
+  });
+
+  if (!outcomes.length) return <p className="text-sm text-muted-foreground">No evaluated offer results are available.</p>;
+
+  return (
+    <div className="grid gap-3">
+      {outcomes.map(({ offer, outcome }) => {
+        const automatedStatus = outcome.automated_status ?? outcome.overall_status;
+        const effectiveStatus = outcome.effective_status ?? outcome.overall_status;
+        return (
+          <section key={offer.offer_id} className="grid gap-3 rounded-lg border bg-background p-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">AdChecked assessment</span>
+              <span className="text-sm font-medium">{offer.offer_name}</span>
+              {automatedStatus ? <StatusBadge status={automatedStatus} /> : <Badge variant="outline">N/A</Badge>}
+            </div>
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Client decision</span>
+              {outcome.client_decision ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className={cn(
+                    outcome.client_decision === 'approved' && 'border-emerald-600/35 bg-emerald-500/10 text-emerald-700',
+                    outcome.client_decision === 'disapproved' && 'border-red-600/35 bg-red-500/10 text-red-700',
+                  )}>
+                    {outcome.client_decision === 'approved' ? <CheckCircle2 /> : <AlertCircle />}
+                    {outcome.client_decision === 'approved' ? 'Approved' : 'Disapproved'}
+                  </Badge>
+                  {outcome.client_decided_at ? <span className="text-xs text-muted-foreground">{formatDateTime(outcome.client_decided_at)}</span> : null}
+                </div>
+              ) : <Badge variant="outline" className="w-fit text-muted-foreground">Pending</Badge>}
+              {outcome.client_feedback_note ? (
+                <p className="mt-1 flex gap-2 rounded-md border bg-muted/20 p-2 text-xs leading-5"><MessageSquareText className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><span><span className="font-semibold">Decision note:</span> {outcome.client_feedback_note}</span></p>
+              ) : outcome.client_decision ? <p className="text-xs text-muted-foreground">No decision note was added.</p> : null}
+            </div>
+            <div className="grid content-start gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Effective disposition</span>
+              {effectiveStatus ? <StatusBadge status={effectiveStatus} /> : <Badge variant="outline">Not ready</Badge>}
+              <span className="text-xs text-muted-foreground">{effectiveStatus === 'green' ? 'Ready' : effectiveStatus === 'red' ? 'Hold' : 'Needs decision'}</span>
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 

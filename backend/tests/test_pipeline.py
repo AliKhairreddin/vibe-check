@@ -2885,6 +2885,35 @@ def test_client_approval_is_effective_green_in_local_admin_history_and_stats(tmp
     assert stats.outcomes.green == 1 and stats.outcomes.red == 0
     assert stats.client_overrides == 1
 
+
+def test_client_approval_resolves_yellow_without_counting_as_an_override(tmp_path, monkeypatch):
+    monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
+    monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
+    set_status('client-approved-yellow', JobStatus.queued, 0, 'Queued', 'CT_VD_EN_AUTO_offer.mp4')
+    set_report('client-approved-yellow', {
+        'overall_status':'yellow',
+        'summary':'A routine issue needs client review.',
+        'findings':[],
+    })
+    set_status('client-approved-yellow', JobStatus.complete, 100, 'Complete')
+    review_storage.write_json(tmp_path/'settings'/'client_review_decisions.json', {
+        'client:acp:client-approved-yellow': {
+            'aiStatus':'yellow',
+            'clientId':'client',
+            'decidedAt':123,
+            'decision':'approved',
+            'jobId':'client-approved-yellow',
+            'offerId':'acp',
+        },
+    })
+
+    stats=get_review_stats('acp')
+
+    assert stats.outcomes.green == 1 and stats.outcomes.yellow == 0
+    assert stats.client_overrides == 0
+
+
 @pytest.mark.anyio
 async def test_review_stats_api_accepts_multiple_offer_filters(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -3146,7 +3175,7 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
         decision=await client.put(
             f'/api/client/kissterra/reviews/{job_id}/decision',
             headers=headers,
-            json={'decision':'approved'},
+            json={'decision':'approved', 'feedback_note':'Approved after client review.'},
         )
         updated=await client.get('/api/client/kissterra/reviews', headers=headers)
         missing_feedback=await client.put(
@@ -3226,6 +3255,7 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert cross_scoped.status_code == 404
     assert acp_reviews.status_code == 200
     assert acp_reviews.json()['reviews'][0]['ai_status'] == 'green'
+    assert acp_reviews.json()['reviews'][0]['effective_status'] == 'yellow'
     assert admin_acp_reviews.status_code == 200
     assert reviews.status_code == 200
     assert reviews.json()['reviews'][0]['ai_status'] == 'yellow'
@@ -3248,7 +3278,9 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert 'ACP-only result' not in detail.text
     assert decision.status_code == 200
     assert decision.json()['decision'] == 'approved'
+    assert decision.json()['feedback_note'] == 'Approved after client review.'
     assert updated.json()['reviews'][0]['decision']['decision'] == 'approved'
+    assert updated.json()['reviews'][0]['decision']['feedback_note'] == 'Approved after client review.'
     assert missing_feedback.status_code == 400
     assert learning_decision.status_code == 200
     assert learning_decision.json()['feedback_reason'] == 'missed_policy_issue'
@@ -3265,6 +3297,7 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert reset.status_code == 200
     assert reset.json() is None
     assert reset_reviews.json()['reviews'][0]['decision'] is None
+    assert reset_reviews.json()['reviews'][0]['previous_decision']['feedback_note'] == 'The price disclaimer must appear in the same frame.'
     assert fast_detail.status_code == 200
     assert fast_detail.json()['report']['summary'] == 'Loaded from the direct detail query.'
 

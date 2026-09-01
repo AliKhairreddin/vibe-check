@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Clock3,
   Download,
   ExternalLink,
   FileText,
@@ -28,11 +29,14 @@ import {
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  MessageSquareText,
   RefreshCw,
+  RotateCcw,
   Rows3,
   ScanSearch,
   Search,
   ShieldCheck,
+  Sparkles,
   Layers3,
   SlidersHorizontal,
   Settings2,
@@ -394,7 +398,9 @@ function ClientDashboard() {
       clientId,
       jobId,
       decision,
-      feedbackReason ? { note: feedbackNote, reason: feedbackReason } : undefined
+      feedbackNote !== undefined || feedbackReason
+        ? { note: feedbackNote, reason: feedbackReason }
+        : undefined
     ),
     onSuccess: (decision, variables) => {
       updateReviewDecision(queryClient, variables.clientId, variables.jobId, decision);
@@ -402,6 +408,8 @@ function ClientDashboard() {
         ['client', variables.clientId, 'review', variables.jobId],
         (current) => current ? { ...current, review: { ...current.review, decision } } : current
       );
+      void queryClient.invalidateQueries({ queryKey: ['client', variables.clientId, 'reviews'] });
+      void queryClient.invalidateQueries({ queryKey: ['client', variables.clientId, 'review', variables.jobId] });
     },
   });
   const bulkMutation = useMutation({
@@ -432,6 +440,12 @@ function ClientDashboard() {
     yellow: reviews.filter((review) => effectiveReviewStatus(review) === 'yellow').length,
     red: reviews.filter((review) => effectiveReviewStatus(review) === 'red').length,
   };
+  const aiStatusCounts = {
+    green: reviews.filter((review) => review.ai_status === 'green').length,
+    yellow: reviews.filter((review) => review.ai_status === 'yellow').length,
+    red: reviews.filter((review) => review.ai_status === 'red').length,
+  };
+  const decisionOverrides = reviews.filter(isClientOverride).length;
   function selectClient(clientId: string) {
     setSelectedClientId(clientId);
     setSearch('');
@@ -484,10 +498,36 @@ function ClientDashboard() {
                 </select>
               ) : null}
               <MetricBadge label="total" value={reviews.length} />
-              <MetricBadge label="red" tone="danger" value={statusCounts.red} />
-              <MetricBadge label="yellow" tone="warning" value={statusCounts.yellow} />
-              <MetricBadge label="green" tone="success" value={statusCounts.green} />
+              <MetricBadge label="hold" tone="danger" value={statusCounts.red} />
+              <MetricBadge label="needs decision" tone="warning" value={statusCounts.yellow} />
+              <MetricBadge label="ready" tone="success" value={statusCounts.green} />
             </div>
+          </section>
+
+          <section className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-4" aria-label="Decision summary">
+            <QueueMetric icon={Files} label="Unique creatives" value={reviews.length} detail={`${allGroups.length} batch${allGroups.length === 1 ? '' : 'es'}`} />
+            <QueueMetric icon={CheckCircle2} label="Effective ready" value={statusCounts.green} detail={`${counts.approved} approved`} tone="success" />
+            <QueueMetric icon={Clock3} label="Needs decision" value={counts.pending} detail={counts.pending ? 'Waiting for client review' : 'Everything reviewed'} tone="warning" />
+            <QueueMetric icon={Sparkles} label="Decision overrides" value={decisionOverrides} detail="Different from AdChecked recommendation" tone="danger" />
+          </section>
+
+          <section className="grid gap-3 rounded-xl border bg-card p-3 shadow-xs lg:grid-cols-2" aria-label="Result layers">
+            <DecisionLayerLine
+              label="Final client decisions"
+              values={[
+                { label: 'Approved', tone: 'success', value: counts.approved },
+                { label: 'Pending', tone: 'warning', value: counts.pending },
+                { label: 'Disapproved', tone: 'danger', value: counts.disapproved },
+              ]}
+            />
+            <DecisionLayerLine
+              label="Original AdChecked assessment"
+              values={[
+                { label: 'Green', tone: 'success', value: aiStatusCounts.green },
+                { label: 'Yellow', tone: 'warning', value: aiStatusCounts.yellow },
+                { label: 'Red', tone: 'danger', value: aiStatusCounts.red },
+              ]}
+            />
           </section>
 
           <section aria-label="Review filters" className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 shadow-xs">
@@ -827,16 +867,28 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
   view: ClientReviewView;
 }) {
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
+  const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
+  const [isNoteOpen, setIsNoteOpen] = useState(false);
   const effectiveStatus = effectiveReviewStatus(review);
 
-  function chooseDecision(decision: ClientDecisionValue) {
-    if (decision !== 'pending' && decision !== aiDecision(review)) {
+  useEffect(() => {
+    setDraftNote(review.decision?.feedback_note ?? '');
+  }, [review.decision?.feedback_note, review.job_id]);
+
+  function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
+    if (decision !== aiDecision(review)) {
       setDraftDecision(decision);
       if (!isExpanded) onToggle();
       return;
     }
     setDraftDecision(null);
-    onDecide({ decision });
+    onDecide({ decision, ...(draftNote.trim() ? { feedbackNote: draftNote.trim() } : {}) });
+  }
+
+  function resetDecision() {
+    setDraftDecision(null);
+    setIsNoteOpen(false);
+    onDecide({ decision: 'pending' });
   }
 
   return (
@@ -860,30 +912,67 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
         </button>
         {view === 'list' ? <StatusBadge status={effectiveStatus} /> : null}
         {view === 'list' ? <span className="text-xs tabular-nums text-muted-foreground">{review.preview.finding_count} finding{review.preview.finding_count === 1 ? '' : 's'}</span> : null}
-        <select
-          aria-label={`Decision for ${review.file_name}`}
-          className={cn(
-            'h-8 min-w-28 rounded-md border bg-background px-2 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
-            review.decision?.decision === 'approved' && 'border-emerald-600/35 text-emerald-700 dark:text-emerald-300',
-            review.decision?.decision === 'disapproved' && 'border-destructive/40 text-destructive'
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+          <Link
+            to="/client/$clientId/reviews/$jobId"
+            params={{ clientId, jobId: review.job_id }}
+            className={buttonVariants({ size: 'icon-xs', variant: 'ghost' })}
+            aria-label={`Open full review for ${review.file_name}`}
+            title="Open full review"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <FileText />
+          </Link>
+          {review.decision ? (
+            <>
+              <ClientDecisionBadge decision={review.decision.decision} />
+              <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
+                <MessageSquareText />{review.decision.feedback_note ? 'Edit note' : 'Add note'}
+              </Button>
+              <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={resetDecision}>
+                <RotateCcw />Reset
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('approved')}><Check />Approve</Button>
+              <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
+              <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
+                <MessageSquareText />{draftNote ? 'Edit note' : 'Add note'}
+              </Button>
+            </>
           )}
-          value={review.decision?.decision ?? 'pending'}
-          disabled={isSaving}
-          onClick={(event) => event.stopPropagation()}
-          onChange={(event) => chooseDecision(event.currentTarget.value as ClientDecisionValue)}
-        >
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="disapproved">Disapproved</option>
-        </select>
+        </div>
       </div>
+      {isNoteOpen ? (
+        <DecisionNoteEditor
+          initialNote={draftNote}
+          isSaving={isSaving}
+          onCancel={() => setIsNoteOpen(false)}
+          onSave={(note) => {
+            setDraftNote(note);
+            setIsNoteOpen(false);
+            if (review.decision) {
+              onDecide({
+                decision: review.decision.decision,
+                feedbackNote: note,
+                ...(review.decision.feedback_reason ? { feedbackReason: review.decision.feedback_reason } : {}),
+              });
+            }
+          }}
+          pending={!review.decision}
+          review={review}
+        />
+      ) : null}
       {draftDecision ? (
         <FeedbackForm
           decision={draftDecision}
+          initialNote={draftNote}
           isSaving={isSaving}
           review={review}
           onCancel={() => setDraftDecision(null)}
           onSubmit={(feedbackReason, feedbackNote) => {
+            setDraftNote(feedbackNote);
             onDecide({ decision: draftDecision, feedbackNote, feedbackReason });
             setDraftDecision(null);
           }}
@@ -915,7 +1004,8 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
           <Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge>
         </div>
         <p className="text-sm leading-6 text-muted-foreground">{preview.summary}</p>
-        {review.decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5"><span className="font-semibold">Your note:</span> {review.decision.feedback_note}</p> : null}
+        {review.decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5"><span className="font-semibold">Decision note:</span> {review.decision.feedback_note}</p> : null}
+        {!review.decision && review.previous_decision?.feedback_note ? <p className="rounded-lg border bg-background/70 p-2 text-xs leading-5 text-muted-foreground"><span className="font-semibold text-foreground">Previous decision note:</span> {review.previous_decision.feedback_note}</p> : null}
       </div>
       <div className="grid gap-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flags</p>
@@ -950,11 +1040,15 @@ function ClientReviewDetail() {
       clientId,
       jobId,
       decision,
-      feedbackReason ? { note: feedbackNote, reason: feedbackReason } : undefined
+      feedbackNote !== undefined || feedbackReason
+        ? { note: feedbackNote, reason: feedbackReason }
+        : undefined
     ),
     onSuccess: (decision) => {
       queryClient.setQueryData<ClientReviewDetail>(['client', clientId, 'review', jobId], (current) => current ? { ...current, review: { ...current.review, decision } } : current);
       updateReviewDecision(queryClient, clientId, jobId, decision);
+      void queryClient.invalidateQueries({ queryKey: ['client', clientId, 'reviews'] });
+      void queryClient.invalidateQueries({ queryKey: ['client', clientId, 'review', jobId] });
     },
   });
 
@@ -1002,6 +1096,8 @@ function ClientReviewDetail() {
             <div className="grid content-start gap-3">
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{report.summary}</p>
               <div className="flex flex-wrap gap-2"><StatusBadge status={effectiveReviewStatus(review)} />{effectiveReviewStatus(review) !== review.ai_status ? <Badge variant="outline">AdChecked: {statusLabel(review.ai_status)}</Badge> : null}<Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
+              {review.decision?.feedback_note ? <p className="max-w-3xl rounded-lg border bg-muted/20 p-3 text-sm leading-6"><span className="font-semibold">Decision note:</span> {review.decision.feedback_note}</p> : null}
+              {!review.decision && review.previous_decision?.feedback_note ? <p className="max-w-3xl rounded-lg border bg-muted/20 p-3 text-sm leading-6 text-muted-foreground"><span className="font-semibold text-foreground">Previous decision note:</span> {review.previous_decision.feedback_note}</p> : null}
               <div className="flex flex-wrap items-center gap-2">
                 <ClientPdfDownloadButton clientId={clientId} jobId={jobId} />
                 {googleDriveUrl ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={googleDriveUrl} target="_blank" rel="noreferrer"><ExternalLink />Open in Google Drive</a> : null}
@@ -1041,23 +1137,24 @@ function FindingCard({ clientId, driveUrl, fileName, finding, frame, index, jobI
   );
 }
 
-function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
+function FeedbackForm({ decision, initialNote = '', isSaving, onCancel, onSubmit, review }: {
   decision: Exclude<ClientDecisionValue, 'pending'>;
+  initialNote?: string;
   isSaving: boolean;
   onCancel: () => void;
   onSubmit: (reason: ClientFeedbackReason, note: string) => void;
   review: ClientReviewItem;
 }) {
   const [reason, setReason] = useState<ClientFeedbackReason | ''>('');
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState(initialNote);
   const options = feedbackReasonOptions(decision);
   const noteRequired = reason ? isCalibrationReason(reason) : false;
   const canSubmit = Boolean(reason) && (!noteRequired || note.trim().length >= 3);
 
   useEffect(() => {
     setReason('');
-    setNote('');
-  }, [decision]);
+    setNote(initialNote);
+  }, [decision, initialNote]);
 
   return (
     <form
@@ -1104,6 +1201,12 @@ function FeedbackForm({ decision, isSaving, onCancel, onSubmit, review }: {
 
 function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; onDecide: (input: DecisionInput) => void; review: ClientReviewItem }) {
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
+  const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
+  const [isNoteOpen, setIsNoteOpen] = useState(false);
+
+  useEffect(() => {
+    setDraftNote(review.decision?.feedback_note ?? '');
+  }, [review.decision?.feedback_note, review.job_id]);
 
   function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
     if (decision !== aiDecision(review)) {
@@ -1111,30 +1214,133 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
       return;
     }
     setDraftDecision(null);
-    onDecide({ decision });
+    onDecide({ decision, ...(draftNote.trim() ? { feedbackNote: draftNote.trim() } : {}) });
   }
 
   return (
     <div className="grid justify-items-end gap-2">
       <div className="flex flex-wrap items-center justify-end gap-1">
-        <Button type="button" size="xs" variant={review.decision?.decision === 'approved' ? 'default' : 'outline'} disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
-        <Button type="button" size="xs" variant={review.decision?.decision === 'disapproved' ? 'destructive' : 'outline'} disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X /> Disapprove</Button>
-        {review.decision ? <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => onDecide({ decision: 'pending' })}>Reset to pending</Button> : null}
+        {review.decision ? (
+          <>
+            <ClientDecisionBadge decision={review.decision.decision} />
+            <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
+              <MessageSquareText />{review.decision.feedback_note ? 'Edit note' : 'Add note'}
+            </Button>
+            <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => {
+              setDraftDecision(null);
+              setIsNoteOpen(false);
+              onDecide({ decision: 'pending' });
+            }}><RotateCcw />Reset to pending</Button>
+          </>
+        ) : (
+          <>
+            <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
+            <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X /> Disapprove</Button>
+            <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}><MessageSquareText />{draftNote ? 'Edit note' : 'Add note'}</Button>
+          </>
+        )}
         {isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}
       </div>
+      {isNoteOpen ? (
+        <DecisionNoteEditor
+          initialNote={draftNote}
+          isSaving={isSaving}
+          onCancel={() => setIsNoteOpen(false)}
+          onSave={(note) => {
+            setDraftNote(note);
+            setIsNoteOpen(false);
+            if (review.decision) {
+              onDecide({
+                decision: review.decision.decision,
+                feedbackNote: note,
+                ...(review.decision.feedback_reason ? { feedbackReason: review.decision.feedback_reason } : {}),
+              });
+            }
+          }}
+          pending={!review.decision}
+          review={review}
+        />
+      ) : null}
       {draftDecision ? (
         <FeedbackForm
           decision={draftDecision}
+          initialNote={draftNote}
           isSaving={isSaving}
           review={review}
           onCancel={() => setDraftDecision(null)}
           onSubmit={(feedbackReason, feedbackNote) => {
+            setDraftNote(feedbackNote);
             onDecide({ decision: draftDecision, feedbackNote, feedbackReason });
             setDraftDecision(null);
           }}
         />
       ) : null}
     </div>
+  );
+}
+
+function DecisionNoteEditor({ initialNote, isSaving, onCancel, onSave, pending, review }: {
+  initialNote: string;
+  isSaving: boolean;
+  onCancel: () => void;
+  onSave: (note: string) => void;
+  pending: boolean;
+  review: ClientReviewItem;
+}) {
+  const [note, setNote] = useState(initialNote);
+  const noteRequired = Boolean(
+    review.decision?.feedback_reason
+    && isCalibrationReason(review.decision.feedback_reason)
+  );
+  const canSave = !noteRequired || note.trim().length >= 3;
+
+  useEffect(() => setNote(initialNote), [initialNote]);
+
+  return (
+    <form
+      className="grid w-full min-w-72 max-w-xl gap-2 rounded-lg border bg-background p-3 text-left shadow-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(note.trim());
+      }}
+    >
+      <div className="grid gap-1">
+        <Label htmlFor={`decision-note-${review.job_id}`}>Decision note{noteRequired ? '' : ' (optional)'}</Label>
+        <p className="text-xs leading-5 text-muted-foreground">
+          {pending
+            ? 'This note will be saved with the decision you choose.'
+            : noteRequired
+              ? 'Required for the selected feedback reason and visible to your team and AdChecked administrators.'
+            : 'Visible to your team and AdChecked administrators.'}
+        </p>
+      </div>
+      <Textarea
+        id={`decision-note-${review.job_id}`}
+        maxLength={1000}
+        placeholder="Add helpful context for this decision."
+        value={note}
+        onChange={(event) => setNote(event.currentTarget.value)}
+      />
+      <div className="flex justify-end gap-2">
+        <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={onCancel}>Cancel</Button>
+        <Button type="submit" size="xs" disabled={isSaving || !canSave}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}{pending ? 'Keep note' : 'Save note'}</Button>
+      </div>
+    </form>
+  );
+}
+
+function ClientDecisionBadge({ decision }: { decision: 'approved' | 'disapproved' }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        decision === 'approved' && 'border-emerald-600/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+        decision === 'disapproved' && 'border-red-600/35 bg-red-500/10 text-red-700 dark:text-red-300',
+      )}
+    >
+      {decision === 'approved' ? <CheckCircle2 /> : <XCircle />}
+      {decision === 'approved' ? 'Approved' : 'Disapproved'}
+    </Badge>
   );
 }
 
@@ -1213,6 +1419,57 @@ function MetricBadge({ label, tone = 'neutral', value }: { label: string; tone?:
   return <Badge variant="outline" className={cn('px-2.5 py-1 tabular-nums', tone === 'danger' && 'border-red-600/35 bg-red-500/10 text-red-700 dark:text-red-300', tone === 'warning' && 'border-yellow-600/35 bg-yellow-400/10 text-yellow-700 dark:text-yellow-300', tone === 'success' && 'border-emerald-600/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300')}>{value} {label}</Badge>;
 }
 
+function QueueMetric({ detail, icon: Icon, label, tone = 'neutral', value }: {
+  detail: string;
+  icon: typeof Files;
+  label: string;
+  tone?: 'danger' | 'neutral' | 'success' | 'warning';
+  value: number;
+}) {
+  return (
+    <div className="flex items-start gap-3 bg-card p-4">
+      <span className={cn(
+        'grid size-9 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground',
+        tone === 'success' && 'border-emerald-600/30 bg-emerald-500/10 text-emerald-700',
+        tone === 'warning' && 'border-yellow-600/30 bg-yellow-400/10 text-yellow-700',
+        tone === 'danger' && 'border-red-600/30 bg-red-500/10 text-red-700',
+      )}><Icon className="size-4" /></span>
+      <span className="min-w-0">
+        <span className="block text-xs font-medium text-muted-foreground">{label}</span>
+        <span className="block text-2xl font-semibold tabular-nums tracking-tight">{value}</span>
+        <span className="block truncate text-xs text-muted-foreground">{detail}</span>
+      </span>
+    </div>
+  );
+}
+
+function DecisionLayerLine({ label, values }: {
+  label: string;
+  values: Array<{ label: string; tone: 'danger' | 'success' | 'warning'; value: number }>;
+}) {
+  const total = values.reduce((sum, item) => sum + item.value, 0);
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{total} results</span>
+      </div>
+      <div className="flex h-2 overflow-hidden rounded-full bg-muted" role="img" aria-label={`${label}: ${values.map((item) => `${item.value} ${item.label}`).join(', ')}`}>
+        {values.map((item) => item.value ? (
+          <span
+            key={item.label}
+            className={cn(item.tone === 'success' && 'bg-emerald-500', item.tone === 'warning' && 'bg-yellow-400', item.tone === 'danger' && 'bg-red-500')}
+            style={{ width: `${total ? (item.value / total) * 100 : 0}%` }}
+          />
+        ) : null)}
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs">
+        {values.map((item) => <span key={item.label} className="flex items-center gap-1.5"><span className={cn('size-2 rounded-full', item.tone === 'success' && 'bg-emerald-500', item.tone === 'warning' && 'bg-yellow-400', item.tone === 'danger' && 'bg-red-500')} /><span className="text-muted-foreground">{item.label}</span><span className="font-semibold tabular-nums">{item.value}</span></span>)}
+      </div>
+    </div>
+  );
+}
+
 function AiRecommendation({ status }: { status: OverallStatus }) {
   const approved = status !== 'red';
   return <Badge className={cn(status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300')} variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}>{approved ? <CheckCircle2 /> : <XCircle />}{approved ? 'Approve' : 'Disapprove'}</Badge>;
@@ -1275,10 +1532,10 @@ function aiDecision(review: ClientReviewItem): Exclude<ClientDecisionValue, 'pen
 export function effectiveReviewStatus(review: ClientReviewItem): OverallStatus {
   if (review.decision?.decision === 'approved') return 'green';
   if (review.decision?.decision === 'disapproved') return 'red';
-  return review.effective_status ?? review.ai_status;
+  return 'yellow';
 }
 
-function isClientOverride(review: ClientReviewItem) {
+export function isClientOverride(review: ClientReviewItem) {
   if (!review.decision) return false;
   return review.decision.decision !== aiDecision(review);
 }

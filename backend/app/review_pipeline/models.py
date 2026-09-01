@@ -222,6 +222,8 @@ class OfferOutcome(BaseModel):
     effective_status: ResultStatus | None = None
     client_decision: Literal['approved','disapproved'] | None = None
     client_decided_at: int | None = None
+    client_feedback_note: str | None = None
+    client_feedback_reason: str | None = None
     message: str = ''
 
     @field_validator(

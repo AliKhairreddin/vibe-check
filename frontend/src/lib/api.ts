@@ -161,6 +161,8 @@ export type OfferOutcome = {
   effective_status?: OverallStatus | null;
   client_decision?: 'approved' | 'disapproved' | null;
   client_decided_at?: number | null;
+  client_feedback_note?: string | null;
+  client_feedback_reason?: ClientFeedbackReason | null;
   message: string;
 };
 
@@ -232,7 +234,7 @@ export type ClientFeedbackReason =
 
 export type ClientReviewDecision = {
   decided_at: number;
-  decision: ClientDecisionValue;
+  decision: Exclude<ClientDecisionValue, 'pending'>;
   feedback_note: string | null;
   feedback_reason: ClientFeedbackReason | null;
 };
@@ -255,6 +257,7 @@ export type ClientReviewItem = {
     google_drive_url: string | null;
     summary: string;
   };
+  previous_decision: ClientReviewDecision | null;
   vertical: ReviewVertical;
 };
 
@@ -1121,7 +1124,7 @@ export async function decideClientReview(
       headers: clientHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         decision,
-        ...(feedback?.note ? { feedback_note: feedback.note } : {}),
+        ...(feedback ? { feedback_note: feedback.note ?? '' } : {}),
         ...(feedback?.reason ? { feedback_reason: feedback.reason } : {}),
       }),
     }

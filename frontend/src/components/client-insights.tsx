@@ -30,6 +30,7 @@ import {
 import {
   ClientPortalFrame,
   effectiveReviewStatus,
+  isClientOverride,
   useClientAuth,
 } from '@/components/client-dashboard';
 import { Badge } from '@/components/ui/badge';
@@ -203,7 +204,7 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
   const batches = buildInsightBatches(entries);
   const counts = statusCounts(reviews);
   const pending = reviews.filter((review) => !review.decision).length;
-  const overrides = reviews.filter((review) => review.decision && effectiveReviewStatus(review) !== review.ai_status).length;
+  const overrides = reviews.filter(isClientOverride).length;
   const approvalRate = reviews.length ? Math.round((counts.green / reviews.length) * 100) : 0;
   const isLoading = queries.some((query) => query.isLoading);
   const selectedVertical = vertical ? VERTICALS.find((item) => item.id === vertical) : null;
@@ -229,7 +230,7 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
             <InsightMetric icon={Gauge} label="Creatives" value={reviews.length} detail={`${batches.length} batch${batches.length === 1 ? '' : 'es'}`} />
             <InsightMetric icon={CheckCircle2} label="Effective green" value={counts.green} detail={`${approvalRate}% ready rate`} tone="success" />
             <InsightMetric icon={Clock3} label="Needs decision" value={pending} detail={pending ? 'Waiting for client review' : 'Everything reviewed'} />
-            <InsightMetric icon={Sparkles} label="Client overrides" value={overrides} detail="Final decisions different from AI" />
+            <InsightMetric icon={Sparkles} label="Decision overrides" value={overrides} detail="Different from AdChecked recommendation" />
           </div>
         )}
 

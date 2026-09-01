@@ -1,12 +1,20 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+type ResultStatus = "green" | "yellow" | "red";
 
 type BatchItem = {
   offerOutcomes?: Array<{
     adCopyResult?: string;
+    automatedStatus?: string;
+    clientDecidedAt?: number;
+    clientDecision?: "approved" | "disapproved";
+    clientFeedbackNote?: string;
+    clientFeedbackReason?: string;
     creativeResult?: string;
+    effectiveStatus?: string;
     evaluationState: string;
     message: string;
     offerId: string;
@@ -72,7 +80,13 @@ type BatchReviewState = {
 
 const publicOfferOutcomeValidator = v.object({
   ad_copy_result: v.union(v.string(), v.null()),
+  automated_status: v.union(v.string(), v.null()),
+  client_decided_at: v.union(v.number(), v.null()),
+  client_decision: v.union(v.literal("approved"), v.literal("disapproved"), v.null()),
+  client_feedback_note: v.union(v.string(), v.null()),
+  client_feedback_reason: v.union(v.string(), v.null()),
   creative_result: v.union(v.string(), v.null()),
+  effective_status: v.union(v.string(), v.null()),
   evaluation_state: v.string(),
   message: v.string(),
   offer_id: v.string(),
@@ -124,6 +138,7 @@ const purgeCountsValidator = v.object({
   batchArtifacts: v.number(),
   batchItems: v.number(),
   batches: v.number(),
+  clientDecisionHistory: v.number(),
   clientDecisions: v.number(),
   evidenceFiles: v.number(),
   evidenceFrameSets: v.number(),
@@ -147,6 +162,7 @@ type PurgeCounts = {
   batchArtifacts: number;
   batchItems: number;
   batches: number;
+  clientDecisionHistory: number;
   clientDecisions: number;
   evidenceFiles: number;
   evidenceFrameSets: number;
@@ -171,6 +187,7 @@ function emptyPurgeCounts(): PurgeCounts {
     batchArtifacts: 0,
     batchItems: 0,
     batches: 0,
+    clientDecisionHistory: 0,
     clientDecisions: 0,
     evidenceFiles: 0,
     evidenceFrameSets: 0,
@@ -227,7 +244,13 @@ function publicBatch(batch: {
       message: item.message,
       offer_outcomes: (item.offerOutcomes ?? []).map((outcome) => ({
         ad_copy_result: outcome.adCopyResult ?? null,
+        automated_status: outcome.automatedStatus ?? outcome.overallStatus ?? null,
+        client_decided_at: outcome.clientDecidedAt ?? null,
+        client_decision: outcome.clientDecision ?? null,
+        client_feedback_note: outcome.clientFeedbackNote ?? null,
+        client_feedback_reason: outcome.clientFeedbackReason ?? null,
         creative_result: outcome.creativeResult ?? null,
+        effective_status: outcome.effectiveStatus ?? outcome.overallStatus ?? null,
         evaluation_state: outcome.evaluationState,
         message: outcome.message,
         offer_id: outcome.offerId,
@@ -285,6 +308,7 @@ async function purgeJob(
     payloads,
     evidenceFrameSets,
     clientDecisions,
+    clientDecisionHistory,
     reportArtifacts,
     automationJobStates,
     liveScanClaims,
@@ -299,6 +323,7 @@ async function purgeJob(
     ctx.db.query("reviewPayloads").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(2),
     ctx.db.query("reviewEvidenceFrames").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(2),
     ctx.db.query("clientReviewDecisions").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(100),
+    ctx.db.query("clientReviewDecisionHistory").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(100),
     findArtifactsForOwner(ctx, "review", jobId),
     ctx.db.query("automationJobStates").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(10),
     ctx.db.query("liveScanReviewClaims").withIndex("by_job_id", (q) => q.eq("jobId", jobId)).take(10),
@@ -324,6 +349,7 @@ async function purgeJob(
   for (const document of payloads) await ctx.db.delete(document._id);
   for (const document of evidenceFrameSets) await ctx.db.delete(document._id);
   for (const document of clientDecisions) await ctx.db.delete(document._id);
+  for (const document of clientDecisionHistory) await ctx.db.delete(document._id);
   for (const document of reportArtifacts) await ctx.db.delete(document._id);
   for (const document of automationJobStates) await ctx.db.delete(document._id);
   for (const document of liveScanClaims) await ctx.db.delete(document._id);
@@ -335,6 +361,7 @@ async function purgeJob(
   counts.apiReviewLinks += apiReviewLinks.length;
   counts.apiWebhookDeliveries += apiWebhookDeliveries.length;
   counts.automationJobStates += automationJobStates.length;
+  counts.clientDecisionHistory += clientDecisionHistory.length;
   counts.clientDecisions += clientDecisions.length;
   counts.evidenceFrameSets += evidenceFrameSets.length;
   counts.liveScanClaims += liveScanClaims.length;
@@ -350,11 +377,12 @@ async function hydrateBatchItems(
   ctx: QueryCtx,
   batchId: string,
   items: BatchItem[],
+  includeClientDecisions = false,
 ) {
   const reviews = await ctx.db
     .query("reviews")
     .withIndex("by_batch_id", (q) => q.eq("batchId", batchId))
-    .collect() as BatchReviewState[];
+    .take(1000) as BatchReviewState[];
   const reviewByItemId = new Map(
     reviews.flatMap((review) =>
       review.deletedAt === undefined && review.batchItemId
@@ -362,22 +390,82 @@ async function hydrateBatchItems(
         : []
     ),
   );
+  const jobIds = includeClientDecisions ? [...new Set([
+    ...items.flatMap((item) => item.jobId ? [item.jobId] : []),
+    ...reviews.map((review) => review.jobId),
+  ])] : [];
+  const decisions = includeClientDecisions
+    ? (await Promise.all(jobIds.map((jobId) =>
+        ctx.db
+          .query("clientReviewDecisions")
+          .withIndex("by_job_id", (q) => q.eq("jobId", jobId))
+          .order("desc")
+          .take(20)
+      ))).flat()
+    : [];
+  const decisionByJobAndOffer = new Map<string, Doc<"clientReviewDecisions">>();
+  for (const decision of decisions) {
+    const key = `${decision.jobId}:${decision.offerId}`;
+    const current = decisionByJobAndOffer.get(key);
+    if (!current || decision.decidedAt > current.decidedAt) {
+      decisionByJobAndOffer.set(key, decision);
+    }
+  }
   return items.map((item) => {
     const review = reviewByItemId.get(item.itemId);
-    if (!review) return item;
-    if (
+    const hydratedItem = !review || (
       TERMINAL_BATCH_STATUSES.has(item.status)
       && !TERMINAL_BATCH_STATUSES.has(review.status)
-    ) {
-      return item;
-    }
+    ) ? item : {
+        ...item,
+        jobId: review.jobId,
+        message: review.message,
+        status: review.status,
+      };
     return {
-      ...item,
-      jobId: review.jobId,
-      message: review.message,
-      status: review.status,
+      ...hydratedItem,
+      offerOutcomes: (hydratedItem.offerOutcomes ?? []).map((outcome) => {
+        const automatedStatus = normalizeResultStatus(outcome.overallStatus);
+        const decision = hydratedItem.jobId
+          ? decisionByJobAndOffer.get(`${hydratedItem.jobId}:${outcome.offerId}`)
+          : undefined;
+        if (outcome.evaluationState !== "evaluated") {
+          return {
+            ...outcome,
+            automatedStatus: automatedStatus ?? undefined,
+            effectiveStatus: automatedStatus ?? undefined,
+          };
+        }
+        if (!decision) {
+          return {
+            ...outcome,
+            automatedStatus: automatedStatus ?? undefined,
+            effectiveStatus: "yellow" as const,
+            overallStatus: "yellow" as const,
+          };
+        }
+        const effectiveStatus: ResultStatus = decision.decision === "approved" ? "green" : "red";
+        return {
+          ...outcome,
+          automatedStatus: normalizeResultStatus(decision.aiStatus) ?? automatedStatus ?? undefined,
+          clientDecidedAt: decision.decidedAt,
+          clientDecision: decision.decision,
+          clientFeedbackNote: decision.feedbackNote,
+          clientFeedbackReason: decision.feedbackReason,
+          effectiveStatus,
+          overallStatus: effectiveStatus,
+        };
+      }),
     };
   });
+}
+
+function normalizeResultStatus(value: unknown): ResultStatus | null {
+  if (value === "green" || value === "yellow" || value === "red") return value;
+  if (value === "pass") return "green";
+  if (value === "amber" || value === "orange" || value === "needs_review") return "yellow";
+  if (value === "likely_violation") return "red";
+  return null;
 }
 
 export const createBatch = mutation({
@@ -408,6 +496,7 @@ export const createBatch = mutation({
       }))),
     })),
   },
+  returns: publicBatchValidator,
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const existing = await findBatch(ctx, args.batchId);
@@ -432,11 +521,12 @@ export const createBatch = mutation({
 
 export const getBatch = query({
   args: { secret: v.string(), batchId: v.string() },
+  returns: v.union(publicBatchValidator, v.null()),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const batch = await findBatch(ctx, args.batchId);
     if (!batch) return null;
-    const items = await hydrateBatchItems(ctx, batch.batchId, batch.items);
+    const items = await hydrateBatchItems(ctx, batch.batchId, batch.items, true);
     return publicBatch({ ...batch, items });
   },
 });

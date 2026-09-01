@@ -1,3 +1,66 @@
+# Client Decision Result Model QA
+
+## Evidence
+
+- Source visual truth: the approved local design prototype at `/Users/alikheireddine/.codex/visualizations/2026/09/01/01a05d94-5eda-7c21-9bba-b5e672b68198/adchecked-result-model-prototype/`.
+- Browser-rendered implementation: `/Users/alikheireddine/.codex/visualizations/2026/09/01/01a05d94-5eda-7c21-9bba-b5e672b68198/adchecked-implementation-qa/`.
+- Combined comparison inputs: `compare-admin.jpg`, `compare-client.jpg`, `compare-pending.jpg`, and `compare-note.jpg` in the implementation QA directory, with the approved prototype on the left and the production implementation on the right.
+- Browser and viewport: Codex in-app browser, 1440 × 900 CSS px, light theme, browser density 1.
+- Source pixels: 1416 × 885. Implementation viewport pixels: 1440 × 900 (client captures were 1425 × 891 while the browser chrome was visible). Each comparison normalized both sides to 720 × 450 before horizontal composition.
+- States: completed Smart Financial batch; fully reviewed client queue; one reset-to-pending creative; open optional-note editor; detailed creative after reset with its previous note retained.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain.
+- Fonts and typography: the implementation preserves the product's Geist typography, heading hierarchy, tabular counts, compact control labels, and truncation behavior.
+- Spacing and layout rhythm: the admin result layers remain a clear left-to-right sequence, while the production table uses the existing compact result rail and explicit per-row expansion instead of the prototype's wider exploratory columns. The client summary, parallel result layers, filters, and three-column creative grid retain the approved hierarchy at the existing product density.
+- Colors and visual tokens: AdChecked assessment, client decision, and effective disposition use the existing green/yellow/red semantic tokens consistently. Pending is operationally yellow, approved is green, and disapproved is red without mutating the original assessment.
+- Image quality and asset fidelity: existing creative previews and Lucide icons are reused. No replacement imagery, custom SVG approximation, placeholder art, emoji, gradient, or CSS-drawn asset was added.
+- Copy and content: the UI names the three concepts explicitly—`AdChecked assessment`, `Client decision`, and `Effective disposition`—and explains that a client decision resolves a result operationally while preserving the source evaluation for audit history.
+- Accessibility and affordances: every client card exposes an explicit `Open full review` link; every admin row exposes an explicit `Open report` link and labeled decision-context expander. Note fields, reset controls, decision controls, filters, and result bars expose accessible names and state.
+- Responsiveness: the implementation uses the existing responsive sidebar, wrapping toolbars, grid breakpoints, and horizontally contained admin table. No viewport overflow or cropped primary action was observed at the reference desktop viewport.
+
+## Comparison history
+
+1. Initial implementation comparison: the production build matched the prototype's information architecture and state behavior. One P2 logic mismatch appeared when a previously approved green creative was reset: the queue counted it as both ready and pending. Fix: a missing client decision now maps to the operational `Needs decision`/yellow state while the original green assessment remains visible separately.
+2. Post-fix comparison: queue totals became mutually exclusive and internally consistent—29 ready, 1 needs decision, and 6 hold in the exercised reset state. No further P0/P1/P2 visual or interaction findings remained.
+
+## Primary interactions tested
+
+- Verified the completed 36-creative batch as 8 green / 28 yellow / 0 red original assessments, 30 approved / 0 pending / 6 disapproved client decisions, and 30 ready / 0 needs decision / 6 hold effective dispositions.
+- Expanded an admin creative's decision context and verified original assessment, client decision, timestamp, optional note, effective disposition, and explicit full-report navigation.
+- Verified 36 unique client creatives and 36 explicit `Open full review` links with no duplicate creative.
+- Verified decided cards hide Approve and Disapprove while showing Add/Edit note and Reset.
+- Reset a decided creative and verified Approve, Disapprove, and Add note reappear while Reset disappears.
+- Added an optional note, saved a new decision, verified the decided-state controls returned, and confirmed the note on the detailed review.
+- Reset that detailed review and verified the previous note remained visible for context.
+- Confirmed a clean browser console and no warning or error logs during the flow.
+
+## Residual test gaps
+
+- QA used realistic local API data matching the production response shapes; production authentication and real media delivery were not exercised in this visual pass.
+- The admin batch outcome lookup currently reflects the latest decision for an offer/job pair. If a future batch is intentionally shared with multiple client workspaces, the admin surface should add an explicit client-workspace selector rather than silently combining those decisions.
+
+## Implementation checklist
+
+- [x] Preserve the original AdChecked assessment as an immutable audit layer.
+- [x] Treat Approve/Disapprove as the client's final decision and map it to effective green/red.
+- [x] Treat a missing client decision as operationally yellow/Needs decision.
+- [x] Remove duplicated client creatives and calculate actual decision overrides.
+- [x] Add optional notes to pending and decided workflows.
+- [x] Retain the previous note after reset.
+- [x] Show client decision context and notes in the admin batch and detailed report.
+- [x] Keep explicit detailed-report navigation on both surfaces.
+- [x] Verify state transitions, browser rendering, console output, backend tests, routing tests, and TypeScript checks.
+
+## Follow-up polish
+
+- No blocking visual polish remains.
+
+final result: passed
+
+---
+
 # Client Dashboard Density Redesign QA
 
 ## Evidence

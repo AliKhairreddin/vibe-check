@@ -571,6 +571,8 @@ function outcomesWithClientDecisions(
       automated_status: automatedStatus,
       client_decided_at: decision.decidedAt,
       client_decision: decision.decision,
+      client_feedback_note: decision.feedbackNote ?? null,
+      client_feedback_reason: decision.feedbackReason ?? null,
       effective_status: effectiveStatus,
       overall_status: effectiveStatus,
     };
@@ -1227,7 +1229,8 @@ export const getStats = query({
         ? decision.decision === "approved" ? "green" : "red"
         : automatedStatus;
       if (resultStatus) outcomes[resultStatus] += 1;
-      if (decision && automatedStatus && resultStatus !== automatedStatus) {
+      const expectedDecision = automatedStatus === "red" ? "disapproved" : "approved";
+      if (decision && automatedStatus && decision.decision !== expectedDecision) {
         clientOverrides += 1;
       }
       if (review.internalDisposition === "accepted_with_override") {

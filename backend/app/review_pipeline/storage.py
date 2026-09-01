@@ -38,6 +38,7 @@ CONVEX_HTTP_SECRET = os.getenv('CONVEX_HTTP_SECRET', '')
 OFFER_SETTINGS_FILE = 'offer_profiles.json'
 OFFER_REVISIONS_FILE = 'offer_profile_revisions.json'
 CLIENT_DECISIONS_FILE = 'client_review_decisions.json'
+CLIENT_DECISION_HISTORY_FILE = 'client_review_decision_history.json'
 PROCESSING_METRICS_FILE = 'processing_metrics.json'
 REPORT_PDF_LAYOUT_VERSION = 3
 MAX_OFFER_PROFILE_BYTES = 850_000
@@ -806,6 +807,8 @@ def _local_reviews()->list[ReviewHistoryItem]:
                     'automated_status':automated_status,
                     'client_decided_at':decision.get('decidedAt'),
                     'client_decision':decision.get('decision'),
+                    'client_feedback_note':decision.get('feedbackNote'),
+                    'client_feedback_reason':decision.get('feedbackReason'),
                     'effective_status':effective_status,
                     'overall_status':effective_status,
                 })
@@ -858,6 +861,10 @@ def _client_decisions_path()->Path:
     return JOB_DATA_DIR/'settings'/CLIENT_DECISIONS_FILE
 
 
+def _client_decision_history_path()->Path:
+    return JOB_DATA_DIR/'settings'/CLIENT_DECISION_HISTORY_FILE
+
+
 def _read_local_client_decisions()->dict[str, dict[str, Any]]:
     path=_client_decisions_path()
     if not path.exists():
@@ -867,6 +874,39 @@ def _read_local_client_decisions()->dict[str, dict[str, Any]]:
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _read_local_client_decision_history()->list[dict[str, Any]]:
+    path=_client_decision_history_path()
+    if not path.exists():
+        return []
+    try:
+        value=read_json(path)
+    except (OSError, ValueError):
+        return []
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _archive_local_client_decision(decision:dict[str, Any])->None:
+    history=_read_local_client_decision_history()
+    history.append({**decision, 'archivedAt':now_ms()})
+    write_json(_client_decision_history_path(), history)
+
+
+def _latest_local_previous_decisions()->dict[tuple[str, str, str], dict[str, Any]]:
+    latest={}
+    for decision in _read_local_client_decision_history():
+        key=(
+            str(decision.get('clientId') or ''),
+            str(decision.get('offerId') or ''),
+            str(decision.get('jobId') or ''),
+        )
+        if not all(key):
+            continue
+        current=latest.get(key)
+        if current is None or int(decision.get('archivedAt') or 0) > int(current.get('archivedAt') or 0):
+            latest[key]=decision
+    return latest
 
 
 def _latest_local_client_decisions()->dict[tuple[str, str], dict[str, Any]]:
@@ -934,6 +974,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
     if isinstance(remote, list):
         return remote
     decisions=_read_local_client_decisions()
+    previous_decisions=_latest_local_previous_decisions()
     reviews=[]
     for review in list_reviews(limit):
         if review.status != JobStatus.complete:
@@ -977,7 +1018,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
             'effectiveStatus':(
                 'green' if decision and decision.get('decision') == 'approved'
                 else 'red' if decision and decision.get('decision') == 'disapproved'
-                else outcome.overall_status
+                else 'yellow'
             ),
             'batchCreatedAt':batch_created_at,
             'batchId':review.batch_id,
@@ -989,6 +1030,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[
             'jobId':review.job_id,
             'mediaKind':media_kind,
             'preview':_client_review_preview(report, outcome.overall_status, review),
+            'previousDecision':previous_decisions.get((client_id, offer_id, review.job_id)),
             'vertical':review.vertical,
         })
     return reviews
@@ -1100,9 +1142,12 @@ def set_client_review_decision(
     }
     if is_override and feedback_reason is not None:
         value['feedbackReason']=feedback_reason
-    if is_override and feedback_note:
+    if feedback_note:
         value['feedbackNote']=feedback_note
     decisions=_read_local_client_decisions()
+    existing=decisions.get(f'{client_id}:{offer_id}:{job_id}')
+    if isinstance(existing, dict):
+        _archive_local_client_decision(existing)
     decisions[f'{client_id}:{offer_id}:{job_id}']=value
     write_json(_client_decisions_path(), decisions)
     return value
@@ -1170,7 +1215,9 @@ def clear_client_review_decision(
     if report is None:
         raise FileNotFoundError(job_id)
     decisions=_read_local_client_decisions()
-    decisions.pop(f'{client_id}:{offer_id}:{job_id}', None)
+    existing=decisions.pop(f'{client_id}:{offer_id}:{job_id}', None)
+    if isinstance(existing, dict):
+        _archive_local_client_decision(existing)
     write_json(_client_decisions_path(), decisions)
 
 
@@ -1497,7 +1544,10 @@ def get_review_stats(
             )
             if effective_status:
                 outcomes[effective_status] += 1
-            if decision and automated_status and effective_status != automated_status:
+            expected_decision=(
+                'disapproved' if automated_status == 'red' else 'approved'
+            )
+            if decision and automated_status and decision.get('decision') != expected_decision:
                 stats.client_overrides += 1
             if isinstance(result, dict) and result.get('internal_disposition') == 'accepted_with_override':
                 stats.accepted_overrides += 1

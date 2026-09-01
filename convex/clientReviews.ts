@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { classifyReviewVertical } from "./reviewVerticals";
+import type { Doc } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 
 type ResultStatus = "green" | "yellow" | "red";
 
@@ -61,6 +63,7 @@ const reviewValidator = v.object({
   batchSourceLabel: v.union(v.string(), v.null()),
   createdAt: v.number(),
   decision: v.union(decisionValidator, v.null()),
+  previousDecision: v.union(decisionValidator, v.null()),
   fileName: v.string(),
   issueSummary: v.union(v.string(), v.null()),
   jobId: v.string(),
@@ -70,10 +73,10 @@ const reviewValidator = v.object({
 });
 
 function effectiveStatus(
-  aiStatus: ResultStatus,
+  _aiStatus: ResultStatus,
   decision: { decision: "approved" | "disapproved" } | undefined,
 ): ResultStatus {
-  if (!decision) return aiStatus;
+  if (!decision) return "yellow";
   return decision.decision === "approved" ? "green" : "red";
 }
 
@@ -154,6 +157,40 @@ function driveUrl(value: {
     : null;
 }
 
+function publicDecision(decision: {
+  decidedAt: number;
+  decision: "approved" | "disapproved";
+  feedbackNote?: string;
+  feedbackReason?: "false_positive" | "missed_policy_issue" | "partner_preference" | "one_off_exception" | "business_decision";
+} | undefined) {
+  return decision ? {
+    decidedAt: decision.decidedAt,
+    decision: decision.decision,
+    ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
+    ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
+  } : null;
+}
+
+async function archiveDecision(
+  ctx: MutationCtx,
+  decision: Doc<"clientReviewDecisions">,
+  archivedAt: number,
+) {
+  await ctx.db.insert("clientReviewDecisionHistory", {
+    ...(decision.aiFindings ? { aiFindings: decision.aiFindings } : {}),
+    ...(decision.aiStatus ? { aiStatus: decision.aiStatus } : {}),
+    ...(decision.aiSummary ? { aiSummary: decision.aiSummary } : {}),
+    archivedAt,
+    clientId: decision.clientId,
+    decidedAt: decision.decidedAt,
+    decision: decision.decision,
+    ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
+    ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
+    jobId: decision.jobId,
+    offerId: decision.offerId,
+  });
+}
+
 export const list = query({
   args: {
     secret: v.string(),
@@ -165,7 +202,7 @@ export const list = query({
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const limit = Math.max(1, Math.min(args.limit, 1000));
-    const stats = await ctx.db
+    const rawStats = await ctx.db
       .query("reviewOfferStats")
       .withIndex("by_offer_id_and_deleted_at_and_status_and_created_at", (q) =>
         q
@@ -175,7 +212,12 @@ export const list = query({
       )
       .order("desc")
       .take(limit);
-    const [legacyReviews, legacyReports, decisions] = await Promise.all([
+    const statsByJobId = new Map<string, (typeof rawStats)[number]>();
+    for (const stat of rawStats) {
+      if (!statsByJobId.has(stat.jobId)) statsByJobId.set(stat.jobId, stat);
+    }
+    const stats = [...statsByJobId.values()];
+    const [legacyReviews, legacyReports, decisions, decisionHistory] = await Promise.all([
       Promise.all(stats.map((stat) => stat.previewReady && stat.fileName !== undefined
         ? null
         : ctx.db
@@ -196,8 +238,21 @@ export const list = query({
           q.eq("clientId", args.clientId).eq("offerId", args.offerId)
         )
         .take(1000),
+      ctx.db
+        .query("clientReviewDecisionHistory")
+        .withIndex("by_client_id_and_offer_id_and_archived_at", (q) =>
+          q.eq("clientId", args.clientId).eq("offerId", args.offerId)
+        )
+        .order("desc")
+        .take(1000),
     ]);
     const decisionByJobId = new Map(decisions.map((decision) => [decision.jobId, decision]));
+    const previousDecisionByJobId = new Map<string, (typeof decisionHistory)[number]>();
+    for (const decision of decisionHistory) {
+      if (!previousDecisionByJobId.has(decision.jobId)) {
+        previousDecisionByJobId.set(decision.jobId, decision);
+      }
+    }
     const batchIds = [...new Set(stats.flatMap((stat, index) => {
       const batchId = stat.batchId ?? legacyReviews[index]?.batchId;
       return batchId ? [batchId] : [];
@@ -243,17 +298,13 @@ export const list = query({
           ? batch?.sourceLabel ?? null
           : null,
         createdAt: stat.createdAt,
-        decision: decision ? {
-          decidedAt: decision.decidedAt,
-          decision: decision.decision,
-          ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
-          ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
-        } : null,
+        decision: publicDecision(decision),
         fileName,
         issueSummary: aiStatus === "green" ? null : preview.summary.slice(0, 300),
         jobId: stat.jobId,
         mediaKind: mediaKind(fileName, stat.hasCreative),
         preview: { ...preview, googleDriveUrl },
+        previousDecision: publicDecision(previousDecisionByJobId.get(stat.jobId)),
         vertical: stat.vertical ?? classifyReviewVertical(fileName),
       }];
     });
@@ -277,7 +328,7 @@ export const getDetail = query({
       )
       .unique();
     if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") return null;
-    const [review, storedReport, decision, evidence] = await Promise.all([
+    const [review, storedReport, decision, previousDecision, evidence] = await Promise.all([
       ctx.db
         .query("reviews")
         .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
@@ -297,6 +348,16 @@ export const getDetail = query({
             .eq("jobId", args.jobId)
         )
         .unique(),
+      ctx.db
+        .query("clientReviewDecisionHistory")
+        .withIndex("by_client_id_and_offer_id_and_job_id_and_archived_at", (q) =>
+          q
+            .eq("clientId", args.clientId)
+            .eq("offerId", args.offerId)
+            .eq("jobId", args.jobId)
+        )
+        .order("desc")
+        .first(),
       ctx.db
         .query("reviewEvidenceFrames")
         .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
@@ -327,17 +388,13 @@ export const getDetail = query({
         batchId: review.batchId ?? null,
         batchSourceLabel: review.batchId ? batch?.sourceLabel ?? null : null,
         createdAt: review.createdAt,
-        decision: decision ? {
-          decidedAt: decision.decidedAt,
-          decision: decision.decision,
-          ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
-          ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
-        } : null,
+        decision: publicDecision(decision ?? undefined),
         fileName: review.fileName,
         issueSummary: issueSummary(report, aiStatus),
         jobId: review.jobId,
         mediaKind: mediaKind(review.fileName, review.hasCreative),
         preview: { ...preview, googleDriveUrl: driveUrl(review) },
+        previousDecision: publicDecision(previousDecision ?? undefined),
         vertical: stat.vertical ?? classifyReviewVertical(review.fileName),
       },
     };
@@ -484,10 +541,11 @@ export const decide = mutation({
       jobId: args.jobId,
       offerId: args.offerId,
       updatedAt: now,
-      ...(isOverride && feedbackNote ? { feedbackNote } : {}),
+      ...(feedbackNote ? { feedbackNote } : {}),
       ...(isOverride && args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
     };
     if (existing) {
+      await archiveDecision(ctx, existing, now);
       await ctx.db.replace(existing._id, { ...value, createdAt: existing.createdAt });
     } else {
       await ctx.db.insert("clientReviewDecisions", { ...value, createdAt: now });
@@ -495,7 +553,7 @@ export const decide = mutation({
     return {
       decidedAt: now,
       decision: args.decision,
-      ...(isOverride && feedbackNote ? { feedbackNote } : {}),
+      ...(feedbackNote ? { feedbackNote } : {}),
       ...(isOverride && args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
     };
   },
@@ -570,6 +628,7 @@ export const clearDecision = mutation({
       )
       .unique();
     if (!existing) return { cleared: false };
+    await archiveDecision(ctx, existing, Date.now());
     await ctx.db.delete(existing._id);
     return { cleared: true };
   },

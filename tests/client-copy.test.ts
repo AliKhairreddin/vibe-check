@@ -49,11 +49,21 @@ test('uses direct customer-facing sign-in and decision copy', () => {
 });
 
 test('keeps red, yellow, and green review counts separate', () => {
-  assert.match(clientDashboardSource, /label="red" tone="danger" value=\{statusCounts\.red\}/);
-  assert.match(clientDashboardSource, /label="yellow" tone="warning" value=\{statusCounts\.yellow\}/);
-  assert.match(clientDashboardSource, /label="green" tone="success" value=\{statusCounts\.green\}/);
+  assert.match(clientDashboardSource, /label="hold" tone="danger" value=\{statusCounts\.red\}/);
+  assert.match(clientDashboardSource, /label="needs decision" tone="warning" value=\{statusCounts\.yellow\}/);
+  assert.match(clientDashboardSource, /label="ready" tone="success" value=\{statusCounts\.green\}/);
+  assert.match(clientDashboardSource, /Original AdChecked assessment/);
+  assert.match(clientDashboardSource, /Final client decisions/);
   assert.doesNotMatch(clientDashboardSource, /ai_status !== 'green'/);
   assert.doesNotMatch(clientDashboardSource, /label="flagged"/);
+});
+
+test('keeps decision actions state-aware and supports optional notes', () => {
+  assert.match(clientDashboardSource, /review\.decision \? \(/);
+  assert.match(clientDashboardSource, /Reset to pending/);
+  assert.match(clientDashboardSource, /Decision note\{noteRequired \? '' : ' \(optional\)'\}/);
+  assert.match(clientDashboardSource, /Previous decision note:/);
+  assert.match(clientDashboardSource, /Open full review/);
 });
 
 test('uses neutral client workspace labels and exposes result filtering', () => {
