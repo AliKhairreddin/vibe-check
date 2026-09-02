@@ -377,9 +377,12 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/reviews',
     title: 'List review history',
-    description: 'Return a cursor-paginated list containing only reviews owned by this partner.',
+    description: 'Return owned history, or durable internal history for an explicitly authorized offer.',
     scope: 'history:read',
-    fields: paginationFields,
+    fields: [
+      { name: 'offer_id', label: 'Shared offer ID', location: 'query', placeholder: 'acp', description: 'Optional. Requires shared internal history access for this offer.' },
+      ...paginationFields,
+    ],
   },
   {
     id: 'review-status',
@@ -397,9 +400,12 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/reviews/{job_id}/result',
     title: 'Get full review results',
-    description: 'Return the complete AdChecked report, findings, decisions, and artifact links.',
+    description: 'Return an owned report or one explicitly authorized shared-offer report, findings, decisions, and artifact links.',
     scope: 'reviews:read',
-    fields: [jobIdField],
+    fields: [
+      jobIdField,
+      { name: 'offer_id', label: 'Offer ID', location: 'query', placeholder: 'Optional authorized offer slug' },
+    ],
   },
   {
     id: 'review-evidence',
@@ -419,7 +425,10 @@ const endpoints: Endpoint[] = [
     title: 'Download JSON report',
     description: 'Download the stored machine-readable report for a completed review.',
     scope: 'reports:download',
-    fields: [jobIdField],
+    fields: [
+      jobIdField,
+      { name: 'offer_id', label: 'Offer ID', location: 'query', placeholder: 'Optional authorized offer slug' },
+    ],
   },
   {
     id: 'report-pdf',

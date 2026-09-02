@@ -179,9 +179,9 @@ The server-to-server Partner API is rooted at `https://api.adchecked.com/api/v1`
 | `GET /api/v1/scans/ads/{ad_id}` | Read tenant-owned current fingerprint and linked review state |
 | `GET /api/v1/scans/ads/{ad_id}/observations` | Browse the tenant-owned scan audit trail |
 | `POST /api/v1/uploads` | Start an authenticated resumable creative upload |
-| `GET /api/v1/reviews/{job_id}/result` | Read an owned structured report and artifact links |
+| `GET /api/v1/reviews/{job_id}/result` | Read an owned or explicitly shared offer report and artifact links |
 | `GET /api/v1/reviews/{job_id}/evidence` | Read owned transcript, OCR, visual observations, and protected frames |
-| `GET /api/v1/reviews` | Browse cursor-paginated partner-owned history |
+| `GET /api/v1/reviews` | Browse owned history, or authorized durable offer history with `offer_id` |
 | `POST /api/reviews` | Create a creative or copy-only review |
 | `POST /api/batches` | Register a durable multi-item batch |
 | `GET /api/batches/{batch_id}` | Read aggregate and item progress |

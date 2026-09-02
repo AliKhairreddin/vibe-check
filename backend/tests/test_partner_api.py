@@ -28,6 +28,7 @@ def anyio_backend():
 def api_principal(
     partner_id: str = 'partner_' + 'a' * 32,
     scopes: frozenset[str] | None = None,
+    shared_review_offer_ids: tuple[str, ...] = (),
 ) -> ApiPrincipal:
     return ApiPrincipal(
         partner_id=partner_id,
@@ -51,6 +52,7 @@ def api_principal(
         concurrent_review_limit=5,
         max_upload_mb=400,
         retention_days=90,
+        shared_review_offer_ids=shared_review_offer_ids,
         unlimited_reviews=True,
         unlimited_concurrency=True,
         webhook_configured=False,
@@ -102,6 +104,7 @@ def test_optional_convex_arguments_are_omitted_instead_of_sent_as_null(monkeypat
     )
 
     assert 'webhookUrl' not in calls[0][2]
+    assert calls[0][2]['sharedReviewOfferIds'] == []
     assert 'expiresAt' not in calls[1][2]
     assert 'externalId' not in calls[2][2]
     assert 'idempotencyKey' not in calls[2][2]
@@ -132,6 +135,30 @@ def test_partner_list_supplies_a_caller_computed_utc_month_key(monkeypatch):
 
     assert partner_api.list_api_partners() == []
     assert calls == [('query', 'apiPartners:list', {'monthKey': '2026-08'})]
+
+
+def test_shared_offer_history_uses_offer_scoped_convex_query(monkeypatch):
+    calls = []
+    principal = api_principal(shared_review_offer_ids=('acp',))
+    monkeypatch.setattr(
+        partner_api,
+        '_convex_call',
+        lambda kind, path, args: calls.append((kind, path, args)) or {
+            'page': [{'review_id': '1' * 32}],
+            'isDone': True,
+        },
+    )
+
+    result = partner_api.list_api_reviews(
+        principal,
+        limit=25,
+        cursor=None,
+        offer_id='acp',
+    )
+
+    assert result['data'] == [{'review_id': '1' * 32}]
+    assert calls[0][1] == 'apiPartners:listSharedOfferReviews'
+    assert calls[0][2]['offerId'] == 'acp'
 
 
 @pytest.mark.parametrize('url', [
@@ -462,7 +489,7 @@ async def test_simple_job_status_normalizes_pipeline_states(monkeypatch):
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
         for internal_status, expected_status in statuses.items():
             monkeypatch.setattr(
-                'app.main.get_api_review',
+                'app.main.get_owned_api_review',
                 lambda _principal, _job_id, status=internal_status: {
                     'creative_name': 'Monday Creative',
                     'external_id': 'asset_12345',
@@ -492,7 +519,7 @@ async def test_simple_job_result_includes_creative_name_and_complete_report(monk
     monkeypatch.delenv('APP_PASSWORD', raising=False)
     monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
     monkeypatch.setattr(
-        'app.main.get_api_review',
+        'app.main.get_owned_api_review',
         lambda _principal, _job_id: {
             'creative_name': 'Monday Creative',
             'external_id': 'asset_12345',
@@ -558,6 +585,102 @@ async def test_partner_review_ownership_isolated_between_tokens(monkeypatch):
 
     assert owned.status_code == 200
     assert hidden.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_shared_offer_history_requires_explicit_partner_permission(monkeypatch):
+    principal = api_principal(shared_review_offer_ids=('acp',))
+    calls = []
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr(
+        'app.main.list_api_reviews',
+        lambda _principal, **kwargs: calls.append(kwargs) or {
+            'data': [],
+            'has_more': False,
+            'next_cursor': None,
+        },
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        allowed = await client.get(
+            '/api/v1/reviews?offer_id=ACP',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+        )
+        denied = await client.get(
+            '/api/v1/reviews?offer_id=kissterra',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+        )
+
+    assert allowed.status_code == 200
+    assert calls == [{'limit': 50, 'cursor': None, 'offer_id': 'acp'}]
+    assert denied.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_shared_review_returns_only_requested_authorized_offer_report(monkeypatch):
+    principal = api_principal(shared_review_offer_ids=('acp', 'kissterra'))
+    job_id = '8' * 32
+    calls = []
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr(
+        'app.main.get_api_review',
+        lambda _principal, _job_id: {
+            'access_type': 'shared_offer',
+            'accessible_offer_ids': ['acp', 'kissterra'],
+            'job_id': job_id,
+            'offer_ids': ['acp', 'kissterra'],
+            'primary_offer_id': 'acp',
+            'report_ready': True,
+            'review_id': job_id,
+            'status': 'complete',
+        },
+    )
+    monkeypatch.setattr(
+        'app.main.get_shared_api_offer_report',
+        lambda _principal, requested_job_id, offer_id: calls.append(
+            (requested_job_id, offer_id)
+        ) or {'offer_id': offer_id, 'overall_status': 'green'},
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        allowed = await client.get(
+            f'/api/v1/reviews/{job_id}/result?offer_id=kissterra',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+        )
+        denied = await client.get(
+            f'/api/v1/reviews/{job_id}/result?offer_id=smart-financial',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+        )
+
+    assert allowed.status_code == 200
+    assert allowed.json()['report']['offer_id'] == 'kissterra'
+    assert allowed.json()['artifacts']['evidence_url'] is None
+    assert allowed.json()['artifacts']['pdf_url'].endswith('offer_id=kissterra')
+    assert calls == [(job_id, 'kissterra')]
+    assert denied.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_shared_review_access_never_allows_partner_deletion(monkeypatch):
+    scopes = frozenset({'reviews:delete', 'reviews:read'})
+    principal = api_principal(scopes=scopes, shared_review_offer_ids=('acp',))
+    job_id = '9' * 32
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr('app.main.get_owned_api_review', lambda _principal, _job_id: None)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        response = await client.delete(
+            f'/api/v1/reviews/{job_id}',
+            headers={'authorization': 'Bearer vc_live_test-key'},
+        )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.anyio

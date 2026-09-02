@@ -62,8 +62,8 @@ const DEFAULT_SCOPES: ApiScope[] = [
 ];
 const SCOPE_LABELS: Record<ApiScope, { label: string; description: string }> = {
   'reviews:create': { label: 'Create reviews', description: 'Upload creatives and submit ad copy.' },
-  'reviews:read': { label: 'Read results', description: 'Read owned review status and JSON results.' },
-  'history:read': { label: 'List history', description: 'Browse this partner’s previous reviews.' },
+  'reviews:read': { label: 'Read results', description: 'Read owned and explicitly shared offer results.' },
+  'history:read': { label: 'List history', description: 'Browse owned or authorized shared offer history.' },
   'evidence:read': { label: 'Read evidence', description: 'Access transcripts, OCR, observations, and frames.' },
   'reports:download': { label: 'Download reports', description: 'Download report JSON and PDFs.' },
   'scans:write': { label: 'Submit live scans', description: 'Hash observed ad media and queue reviews only when content changes.' },
@@ -88,6 +88,7 @@ function emptyPartnerDraft(internal = false): ApiPartnerInput {
     monthly_review_limit: 500,
     name: internal ? 'Internal company integration' : '',
     retention_days: internal ? 90 : 30,
+    shared_review_offer_ids: [],
     status: 'active',
     unlimited_concurrency: internal,
     unlimited_reviews: internal,
@@ -105,6 +106,7 @@ function partnerToDraft(partner: ApiPartner): ApiPartnerInput {
     monthly_review_limit: partner.monthly_review_limit,
     name: partner.name,
     retention_days: partner.retention_days,
+    shared_review_offer_ids: [...partner.shared_review_offer_ids],
     status: partner.status,
     unlimited_concurrency: partner.unlimited_concurrency,
     unlimited_reviews: partner.unlimited_reviews,
@@ -278,6 +280,14 @@ export function ApiAccessPanel() {
       ? [...new Set([...draft.allowed_offer_ids, offerId])]
       : draft.allowed_offer_ids.filter((value) => value !== offerId);
     updateDraft({ allowed_offer_ids: next });
+  }
+
+  function toggleSharedReviewOffer(offerId: string, checked: boolean) {
+    if (!draft) return;
+    const next = checked
+      ? [...new Set([...draft.shared_review_offer_ids, offerId])]
+      : draft.shared_review_offer_ids.filter((value) => value !== offerId);
+    updateDraft({ shared_review_offer_ids: next });
   }
 
   function toggleScope(scope: ApiScope, checked: boolean) {
@@ -546,6 +556,31 @@ export function ApiAccessPanel() {
                       checked={draft.allow_custom_policy}
                       onCheckedChange={(checked) => updateDraft({ allow_custom_policy: checked })}
                     />
+                  </div>
+                  <div className="grid gap-3 rounded-lg border p-3">
+                    <div>
+                      <h4 className="text-sm font-medium">Shared internal review history</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Allow this internal account to read durable admin-dashboard reports for selected offers.
+                        This never grants deletion or expanded API evidence access.
+                      </p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {(offersQuery.data ?? []).map((offer) => (
+                        <label key={offer.offer_id} className="flex items-start gap-3 rounded-lg border bg-background p-3">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 size-4 accent-primary"
+                            checked={draft.shared_review_offer_ids.includes(offer.offer_id)}
+                            onChange={(event) => toggleSharedReviewOffer(offer.offer_id, event.currentTarget.checked)}
+                          />
+                          <span className="grid gap-0.5">
+                            <span className="font-medium">{offer.display_name}</span>
+                            <span className="text-xs text-muted-foreground">Read shared durable history and reports</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </section>
 

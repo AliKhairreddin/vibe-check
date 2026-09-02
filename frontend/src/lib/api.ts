@@ -414,6 +414,7 @@ export type ApiPartner = {
   name: string;
   partner_id: string;
   retention_days: number;
+  shared_review_offer_ids: string[];
   status: 'active' | 'suspended';
   unlimited_concurrency: boolean;
   unlimited_reviews: boolean;
@@ -432,6 +433,7 @@ export type ApiPartnerInput = Pick<
   | 'monthly_review_limit'
   | 'name'
   | 'retention_days'
+  | 'shared_review_offer_ids'
   | 'status'
   | 'unlimited_concurrency'
   | 'unlimited_reviews'

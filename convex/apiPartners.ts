@@ -1,5 +1,5 @@
 import { paginationOptsValidator } from "convex/server";
-import { type MutationCtx, mutation, query } from "./_generated/server";
+import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 
@@ -65,6 +65,7 @@ function publicPartner(partner: {
   name: string;
   partnerId: string;
   retentionDays: number;
+  sharedReviewOfferIds?: string[];
   status: "active" | "suspended";
   unlimitedConcurrency: boolean;
   unlimitedReviews: boolean;
@@ -83,6 +84,7 @@ function publicPartner(partner: {
     name: partner.name,
     partner_id: partner.partnerId,
     retention_days: partner.retentionDays,
+    shared_review_offer_ids: partner.sharedReviewOfferIds ?? [],
     status: partner.status,
     unlimited_concurrency: partner.unlimitedConcurrency,
     unlimited_reviews: partner.unlimitedReviews,
@@ -117,6 +119,8 @@ function publicReview(
 ) {
   const deleted = link.status === "deleted";
   return {
+    access_type: "owned",
+    accessible_offer_ids: review?.offerIds ?? [],
     created_at: link.createdAt,
     creative_name: link.creativeName ?? null,
     external_id: link.externalId ?? null,
@@ -134,6 +138,55 @@ function publicReview(
     terminal_at: link.terminalAt ?? null,
     updated_at: Math.max(link.updatedAt, review?.updatedAt ?? 0),
   };
+}
+
+function reviewMediaKind(review: Doc<"reviews">) {
+  if (review.hasCreative === false) return "copy_only";
+  const suffix = review.fileName.toLocaleLowerCase().match(/\.[^.]+$/)?.[0];
+  return suffix && [".jpg", ".jpeg", ".png", ".webp"].includes(suffix) ? "image" : "video";
+}
+
+function publicSharedReview(review: Doc<"reviews">, accessibleOfferIds: string[]) {
+  const primaryOfferId = review.primaryOfferId && accessibleOfferIds.includes(review.primaryOfferId)
+    ? review.primaryOfferId
+    : accessibleOfferIds[0] ?? null;
+  return {
+    access_type: "shared_offer",
+    accessible_offer_ids: accessibleOfferIds,
+    created_at: review.createdAt,
+    creative_name: null,
+    external_id: null,
+    file_name: review.fileName,
+    file_size: review.fileSize ?? null,
+    job_id: review.jobId,
+    media_kind: reviewMediaKind(review),
+    message: review.message,
+    offer_ids: accessibleOfferIds,
+    primary_offer_id: primaryOfferId,
+    progress: review.progress,
+    report_ready: review.reportReady,
+    review_id: review.jobId,
+    status: review.status,
+    terminal_at: ["complete", "failed"].includes(review.status) ? review.updatedAt : null,
+    updated_at: review.updatedAt,
+  };
+}
+
+async function sharedOfferAccessForJob(
+  ctx: QueryCtx,
+  partner: Doc<"apiPartners">,
+  jobId: string,
+) {
+  const permitted = new Set(partner.sharedReviewOfferIds ?? []);
+  if (!permitted.size) return [];
+  const stats = await ctx.db
+    .query("reviewOfferStats")
+    .withIndex("by_job_id", (q) => q.eq("jobId", jobId))
+    .take(10);
+  return stats
+    .filter((stat) => stat.deletedAt === undefined && permitted.has(stat.offerId))
+    .map((stat) => stat.offerId)
+    .sort();
 }
 
 function publicScanAd(scan: Doc<"apiScanAds">) {
@@ -267,6 +320,7 @@ export const upsert = mutation({
     name: v.string(),
     partnerId: v.string(),
     retentionDays: v.number(),
+    sharedReviewOfferIds: v.optional(v.array(v.string())),
     secret: v.string(),
     status: v.union(v.literal("active"), v.literal("suspended")),
     unlimitedConcurrency: v.boolean(),
@@ -291,6 +345,9 @@ export const upsert = mutation({
       name: args.name,
       partnerId: args.partnerId,
       retentionDays: args.retentionDays,
+      sharedReviewOfferIds: [
+        ...new Set(args.sharedReviewOfferIds ?? existing?.sharedReviewOfferIds ?? []),
+      ].sort(),
       status: args.status,
       unlimitedConcurrency: args.unlimitedConcurrency,
       unlimitedReviews: args.unlimitedReviews,
@@ -840,6 +897,33 @@ export const getReview = query({
   },
 });
 
+export const getAccessibleReview = query({
+  args: { jobId: v.string(), partnerId: v.string(), secret: v.string() },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const [link, partner] = await Promise.all([
+      ctx.db
+        .query("apiReviewLinks")
+        .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+        .unique(),
+      ctx.db
+        .query("apiPartners")
+        .withIndex("by_partner_id", (q) => q.eq("partnerId", args.partnerId))
+        .unique(),
+    ]);
+    if (!partner || partner.status !== "active") return null;
+    const review = await ctx.db
+      .query("reviews")
+      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+      .unique();
+    if (link?.partnerId === args.partnerId) return publicReview(link, review);
+    if (!review || review.deletedAt !== undefined) return null;
+    const accessibleOfferIds = await sharedOfferAccessForJob(ctx, partner, args.jobId);
+    return accessibleOfferIds.length ? publicSharedReview(review, accessibleOfferIds) : null;
+  },
+});
+
 export const listReviews = query({
   args: {
     paginationOpts: paginationOptsValidator,
@@ -862,6 +946,102 @@ export const listReviews = query({
       return publicReview(link, review);
     }));
     return { ...result, page };
+  },
+});
+
+export const listSharedOfferReviews = query({
+  args: {
+    offerId: v.string(),
+    paginationOpts: paginationOptsValidator,
+    partnerId: v.string(),
+    secret: v.string(),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const partner = await ctx.db
+      .query("apiPartners")
+      .withIndex("by_partner_id", (q) => q.eq("partnerId", args.partnerId))
+      .unique();
+    if (
+      !partner
+      || partner.status !== "active"
+      || !(partner.sharedReviewOfferIds ?? []).includes(args.offerId)
+    ) {
+      throw new Error("API partner is not permitted to read this offer's shared review history");
+    }
+    const result = await ctx.db
+      .query("reviewOfferStats")
+      .withIndex("by_offer_id_deleted_at", (q) =>
+        q.eq("offerId", args.offerId).eq("deletedAt", undefined)
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+    const page = await Promise.all(result.page.map(async (stat) => {
+      const review = await ctx.db
+        .query("reviews")
+        .withIndex("by_job_id", (q) => q.eq("jobId", stat.jobId))
+        .unique();
+      return review && review.deletedAt === undefined
+        ? publicSharedReview(review, [args.offerId])
+        : null;
+    }));
+    return { ...result, page: page.filter((review) => review !== null) };
+  },
+});
+
+export const getSharedOfferReport = query({
+  args: {
+    jobId: v.string(),
+    offerId: v.string(),
+    partnerId: v.string(),
+    secret: v.string(),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const partner = await ctx.db
+      .query("apiPartners")
+      .withIndex("by_partner_id", (q) => q.eq("partnerId", args.partnerId))
+      .unique();
+    if (
+      !partner
+      || partner.status !== "active"
+      || !(partner.sharedReviewOfferIds ?? []).includes(args.offerId)
+    ) {
+      return null;
+    }
+    const [stat, review, stored] = await Promise.all([
+      ctx.db
+        .query("reviewOfferStats")
+        .withIndex("by_job_id_and_offer_id", (q) =>
+          q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+        )
+        .unique(),
+      ctx.db
+        .query("reviews")
+        .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+        .unique(),
+      ctx.db
+        .query("reviewOfferReports")
+        .withIndex("by_job_id_offer_id", (q) =>
+          q.eq("jobId", args.jobId).eq("offerId", args.offerId)
+        )
+        .unique(),
+    ]);
+    if (
+      !stat
+      || stat.deletedAt !== undefined
+      || stat.status !== "complete"
+      || !review
+      || review.deletedAt !== undefined
+      || !review.reportReady
+    ) {
+      return null;
+    }
+    if (stored) return stored.report;
+    const legacyOfferId = review.primaryOfferId ?? "acp";
+    return legacyOfferId === args.offerId ? review.report ?? null : null;
   },
 });
 

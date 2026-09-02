@@ -151,6 +151,8 @@ from .review_pipeline.partner_api import (
     get_api_evidence,
     get_api_review,
     get_api_scan_ad,
+    get_owned_api_review,
+    get_shared_api_offer_report,
     issue_api_key,
     list_api_partners,
     list_api_reviews,
@@ -700,6 +702,63 @@ async def owned_api_review(principal:ApiPrincipal, job_id:str)->dict:
     if value is None:
         raise HTTPException(404, 'Review not found.')
     return value
+
+
+async def strictly_owned_api_review(principal:ApiPrincipal, job_id:str)->dict:
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(404, 'Review not found.')
+    try:
+        value=await asyncio.to_thread(get_owned_api_review, principal, job_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    if value is None:
+        raise HTTPException(404, 'Review not found.')
+    return value
+
+
+def shared_review_offer_ids(review:dict)->list[str]:
+    if review.get('access_type') != 'shared_offer':
+        return []
+    return [
+        str(offer_id)
+        for offer_id in review.get('accessible_offer_ids', [])
+        if isinstance(offer_id, str) and OFFER_ID_PATTERN.fullmatch(offer_id)
+    ]
+
+
+def selected_shared_review_offer_id(review:dict, offer_id:str|None=None)->str|None:
+    accessible_offer_ids=shared_review_offer_ids(review)
+    if not accessible_offer_ids:
+        return None
+    normalized_offer_id=(offer_id or '').strip().lower()
+    selected_offer_id=(
+        normalized_offer_id
+        or (
+            str(review.get('primary_offer_id'))
+            if review.get('primary_offer_id') in accessible_offer_ids
+            else accessible_offer_ids[0]
+        )
+    )
+    if selected_offer_id not in accessible_offer_ids:
+        raise HTTPException(404,'Offer report not found.')
+    return selected_offer_id
+
+
+async def partner_accessible_report(
+    principal:ApiPrincipal,
+    review:dict,
+    job_id:str,
+    offer_id:str|None=None,
+)->dict|None:
+    selected_offer_id=selected_shared_review_offer_id(review,offer_id)
+    if selected_offer_id:
+        return await asyncio.to_thread(
+            get_shared_api_offer_report,
+            principal,
+            job_id,
+            selected_offer_id,
+        )
+    return await asyncio.to_thread(get_stored_report,job_id)
 
 
 def client_portal(client_id:str)->dict[str, str]:
@@ -1682,8 +1741,8 @@ def partner_api_openapi():
         version='1.0.0',
         description=(
             'Server-to-server API for fingerprinting live ad media, reviewing changed '
-            'creatives, and retrieving owned status, reports, transcripts, OCR, visual '
-            'observations, and evidence.'
+            'creatives, and retrieving owned or explicitly shared offer reports. Expanded '
+            'transcripts, OCR, visual observations, and evidence remain owner-only.'
         ),
         routes=routes,
     )
@@ -1717,6 +1776,7 @@ async def partner_api_me(request:Request):
             'monthly_review_limit':principal.monthly_review_limit,
             'monthly_reviews_created':principal.monthly_reviews_created,
             'retention_days':principal.retention_days,
+            'shared_review_offer_ids':list(principal.shared_review_offer_ids),
             'unlimited_concurrency':principal.unlimited_concurrency,
             'unlimited_reviews':principal.unlimited_reviews,
             'webhook_configured':principal.webhook_configured,
@@ -2320,14 +2380,26 @@ async def partner_complete_upload(
 
 
 @app.get('/api/v1/reviews')
-async def partner_review_history(request:Request,limit:int=50,cursor:str|None=None):
+async def partner_review_history(
+    request:Request,
+    limit:int=50,
+    cursor:str|None=None,
+    offer_id:str|None=None,
+):
     principal=await require_api_principal(request,'history:read')
+    normalized_offer_id=(offer_id or '').strip().lower()
+    if offer_id is not None:
+        if not OFFER_ID_PATTERN.fullmatch(normalized_offer_id):
+            raise HTTPException(400,'Offer ID is invalid.')
+        if normalized_offer_id not in principal.shared_review_offer_ids:
+            raise HTTPException(403,'This API partner cannot read shared history for that offer.')
     try:
         return await asyncio.to_thread(
             list_api_reviews,
             principal,
             limit=limit,
             cursor=cursor,
+            offer_id=normalized_offer_id or None,
         )
     except Exception as exc:
         raise partner_storage_error(exc) from None
@@ -2336,20 +2408,20 @@ async def partner_review_history(request:Request,limit:int=50,cursor:str|None=No
 @app.get('/api/v1/jobs/{job_id}')
 async def partner_job_status(job_id:str,request:Request):
     principal=await require_api_principal(request,'reviews:read')
-    review=await owned_api_review(principal,job_id)
+    review=await strictly_owned_api_review(principal,job_id)
     return simple_job_response(review)
 
 
 @app.get('/api/v1/jobs/{job_id}/result')
 async def partner_job_result(job_id:str,request:Request):
     principal=await require_api_principal(request,'reviews:read')
-    review=await owned_api_review(principal,job_id)
+    review=await strictly_owned_api_review(principal,job_id)
     normalized_status=simple_job_status(str(review.get('status') or 'queued'))
     if normalized_status == 'failed':
         raise HTTPException(409,'Job processing failed; inspect the status response for details.')
     if not review.get('report_ready'):
         raise HTTPException(409,'Job result is not ready yet.',headers={'Retry-After':'5'})
-    report=await asyncio.to_thread(get_stored_report,job_id)
+    report=await partner_accessible_report(principal,review,job_id)
     if report is None:
         raise HTTPException(404,'Job result not found.')
     return {
@@ -2368,23 +2440,32 @@ async def partner_review_status(job_id:str,request:Request):
 
 
 @app.get('/api/v1/reviews/{job_id}/result')
-async def partner_review_result(job_id:str,request:Request):
+async def partner_review_result(job_id:str,request:Request,offer_id:str|None=None):
     principal=await require_api_principal(request,'reviews:read')
     review=await owned_api_review(principal,job_id)
     if review.get('status') == 'failed':
         raise HTTPException(409,'Review processing failed; inspect the status response for details.')
     if not review.get('report_ready'):
         raise HTTPException(409,'Review result is not ready yet.',headers={'Retry-After':'5'})
-    report=await asyncio.to_thread(get_stored_report,job_id)
+    report=await partner_accessible_report(principal,review,job_id,offer_id)
     if report is None:
         raise HTTPException(404,'Review result not found.')
+    shared_offer_id=selected_shared_review_offer_id(review,offer_id)
     return {
         'review':review,
         'report':report,
         'artifacts':{
-            'evidence_url':f'/api/v1/reviews/{job_id}/evidence',
+            'evidence_url':(
+                None
+                if review.get('access_type') == 'shared_offer'
+                else f'/api/v1/reviews/{job_id}/evidence'
+            ),
             'json_url':f'/api/v1/reviews/{job_id}/report.json',
-            'pdf_url':f'/api/v1/reviews/{job_id}/report.pdf',
+            'pdf_url':(
+                f'/api/v1/reviews/{job_id}/report.pdf?offer_id={shared_offer_id}'
+                if shared_offer_id
+                else f'/api/v1/reviews/{job_id}/report.pdf'
+            ),
         },
     }
 
@@ -2392,7 +2473,7 @@ async def partner_review_result(job_id:str,request:Request):
 @app.get('/api/v1/reviews/{job_id}/evidence')
 async def partner_review_evidence(job_id:str,request:Request):
     principal=await require_api_principal(request,'evidence:read')
-    await owned_api_review(principal,job_id)
+    await strictly_owned_api_review(principal,job_id)
     try:
         evidence=await asyncio.to_thread(get_api_evidence,principal,job_id)
     except Exception as exc:
@@ -2413,12 +2494,12 @@ async def partner_review_evidence(job_id:str,request:Request):
 
 
 @app.get('/api/v1/reviews/{job_id}/report.json')
-async def partner_report_json(job_id:str,request:Request):
+async def partner_report_json(job_id:str,request:Request,offer_id:str|None=None):
     principal=await require_api_principal(request,'reports:download')
     review=await owned_api_review(principal,job_id)
     if not review.get('report_ready'):
         raise HTTPException(409,'Review result is not ready yet.',headers={'Retry-After':'5'})
-    report=await asyncio.to_thread(get_stored_report,job_id)
+    report=await partner_accessible_report(principal,review,job_id,offer_id)
     if report is None:
         raise HTTPException(404,'Review result not found.')
     return JSONResponse(
@@ -2433,8 +2514,17 @@ async def partner_report_pdf(job_id:str,request:Request,offer_id:str|None=None):
     review=await owned_api_review(principal,job_id)
     if not review.get('report_ready'):
         raise HTTPException(409,'Review result is not ready yet.',headers={'Retry-After':'5'})
-    normalized=(offer_id or review.get('primary_offer_id') or '').strip().lower()
-    if not OFFER_ID_PATTERN.fullmatch(normalized) or normalized not in review.get('offer_ids',[]):
+    shared_offer_ids=shared_review_offer_ids(review)
+    normalized=(
+        offer_id
+        or (shared_offer_ids[0] if shared_offer_ids else review.get('primary_offer_id'))
+        or ''
+    ).strip().lower()
+    if (
+        not OFFER_ID_PATTERN.fullmatch(normalized)
+        or normalized not in review.get('offer_ids',[])
+        or (shared_offer_ids and normalized not in shared_offer_ids)
+    ):
         raise HTTPException(404,'Offer report not found.')
     try:
         artifact=await asyncio.to_thread(ensure_review_pdf,job_id,normalized)
@@ -2463,7 +2553,7 @@ async def partner_review_frame(job_id:str,filename:str,request:Request):
 @app.delete('/api/v1/reviews/{job_id}')
 async def partner_delete_review(job_id:str,request:Request):
     principal=await require_api_principal(request,'reviews:delete')
-    review=await owned_api_review(principal,job_id)
+    review=await strictly_owned_api_review(principal,job_id)
     if review.get('status') not in {'complete','failed'}:
         raise HTTPException(409,'Only completed or failed reviews can be deleted.')
     try:

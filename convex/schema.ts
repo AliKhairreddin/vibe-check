@@ -397,6 +397,7 @@ export default defineSchema({
     name: v.string(),
     partnerId: v.string(),
     retentionDays: v.number(),
+    sharedReviewOfferIds: v.optional(v.array(v.string())),
     status: v.union(v.literal("active"), v.literal("suspended")),
     unlimitedConcurrency: v.boolean(),
     unlimitedReviews: v.boolean(),

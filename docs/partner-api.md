@@ -18,7 +18,7 @@ Human-facing documentation uses one hub on the branded application domain:
 
 The dedicated API hostname remains the server-to-server base so machine traffic stays separate from the browser application and admin console.
 
-An administrator creates an account in **Settings → API access**, chooses offer access and limits, and issues one or more API keys. The full key is shown once. Store it only in the integrating service's secret manager and send it on every request:
+An administrator creates an account in **Settings → API access**, chooses offer access and limits, and issues one or more API keys. Internal accounts can also receive explicit **Shared internal review history** access for selected offers. The full key is shown once. Store it only in the integrating service's secret manager and send it on every request:
 
 ```http
 Authorization: Bearer vc_live_...
@@ -29,8 +29,8 @@ Keys are hashed before storage and can be independently scoped, expired, and rev
 | Scope | Access |
 | --- | --- |
 | `reviews:create` | Submit reviews and upload creative chunks |
-| `reviews:read` | Read owned review status and structured results |
-| `history:read` | Browse the account's review history |
+| `reviews:read` | Read owned reviews plus explicitly authorized shared-offer results |
+| `history:read` | Browse owned history or an explicitly authorized offer's shared history |
 | `evidence:read` | Read transcripts, OCR, visual observations, thumbnails, and evidence frames |
 | `reports:download` | Download JSON and offer-specific PDF reports |
 | `scans:write` | Upload live ad media, calculate fingerprints, and create reviews when content changes |
@@ -178,7 +178,7 @@ Poll the returned status URL. Once `report_ready` is `true`, retrieve:
 - `GET /reviews/{review_id}/report.pdf?offer_id=...` for an offer-specific PDF;
 - `GET /reviews/{review_id}/thumbnail` or `/frames/{filename}` for protected evidence images.
 
-Every ownership check is enforced server-side. A key from one account receives `404` for another account's review, even if the review ID is known.
+Every access check is enforced server-side. A key receives `404` for another account's review unless its partner account has explicit shared-history access to an offer evaluated by that review. Shared access returns only an authorized offer's report; it never grants access to another offer result stored on the same review.
 
 ## Resumable uploads
 
@@ -192,7 +192,11 @@ Chunks are retryable and an already-complete chunk is accepted idempotently. Inc
 
 ## History, deletion, and retention
 
-`GET /reviews?limit=50&cursor=...` returns cursor-paginated history when the key has `history:read`. `DELETE /reviews/{review_id}` requires `reviews:delete` and only accepts terminal reviews.
+`GET /reviews?limit=50&cursor=...` returns cursor-paginated partner-owned history when the key has `history:read`. An internal account with configured shared-history access can add `offer_id`, for example `GET /reviews?offer_id=acp&limit=50`, to list every durable admin or API review evaluated for that offer. Use the returned review ID with the normal status and report endpoints. On a shared multi-offer review, add `offer_id` to the result or JSON-report request to select one of the account's authorized offers.
+
+CoveragePro is authorized for shared ACP history. LemmonMaxx is authorized for shared ACP, Kissterra, Lead Economy, and Smart Financial history. These permissions are attached to the partner accounts, so existing keys inherit them without rotation as long as the key has the required read scope.
+
+Shared history is read-only. `DELETE /reviews/{review_id}` requires `reviews:delete` and still accepts only terminal reviews originally submitted by that API partner. Expanded evidence bundles are also owner-only; a shared dashboard review exposes its durable offer report and retained thumbnail/frame artifacts, not a reconstructed transcript or OCR bundle.
 
 Reports remain in the normal durable review store. The expanded API evidence bundle follows the account's configured 1–365 day retention window and returns HTTP `410` after expiry. Uploaded media and working extraction files remain temporary and are removed after processing.
 

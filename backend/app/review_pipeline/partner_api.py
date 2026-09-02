@@ -92,6 +92,7 @@ class ApiPartnerInput(BaseModel):
     concurrent_review_limit: int = Field(default=5, ge=1, le=50)
     max_upload_mb: int = Field(default=400, ge=1, le=400)
     retention_days: int = Field(default=30, ge=1, le=365)
+    shared_review_offer_ids: list[str] = Field(default_factory=list, max_length=10)
     unlimited_reviews: bool = False
     unlimited_concurrency: bool = False
     webhook_url: str | None = Field(default=None, max_length=2_000)
@@ -101,7 +102,7 @@ class ApiPartnerInput(BaseModel):
     def strip_text(cls, value: str) -> str:
         return value.strip()
 
-    @field_validator('allowed_offer_ids')
+    @field_validator('allowed_offer_ids', 'shared_review_offer_ids')
     @classmethod
     def normalize_offer_ids(cls, values: list[str]) -> list[str]:
         normalized = []
@@ -156,6 +157,7 @@ class ApiPrincipal:
     concurrent_review_limit: int
     max_upload_mb: int
     retention_days: int
+    shared_review_offer_ids: tuple[str, ...]
     unlimited_reviews: bool
     unlimited_concurrency: bool
     webhook_configured: bool
@@ -387,6 +389,7 @@ def save_api_partner(partner_id: str, payload: ApiPartnerInput) -> dict[str, Any
         'name': payload.name,
         'partnerId': partner_id,
         'retentionDays': payload.retention_days,
+        'sharedReviewOfferIds': payload.shared_review_offer_ids,
         'status': payload.status,
         'unlimitedConcurrency': payload.unlimited_concurrency,
         'unlimitedReviews': payload.unlimited_reviews,
@@ -469,6 +472,9 @@ def authenticate_api_token(token: str) -> ApiPrincipal | None:
         concurrent_review_limit=int(value.get('concurrent_review_limit') or 0),
         max_upload_mb=int(value.get('max_upload_mb') or 0),
         retention_days=int(value.get('retention_days') or 0),
+        shared_review_offer_ids=tuple(
+            str(offer_id) for offer_id in value.get('shared_review_offer_ids', [])
+        ),
         unlimited_reviews=bool(value.get('unlimited_reviews')),
         unlimited_concurrency=bool(value.get('unlimited_concurrency')),
         webhook_configured=bool(value.get('webhook_configured')),
@@ -605,6 +611,14 @@ def list_api_scan_observations(
 
 
 def get_api_review(principal: ApiPrincipal, job_id: str) -> dict[str, Any] | None:
+    value = _convex_call('query', 'apiPartners:getAccessibleReview', {
+        'jobId': job_id,
+        'partnerId': principal.partner_id,
+    })
+    return value if isinstance(value, dict) else None
+
+
+def get_owned_api_review(principal: ApiPrincipal, job_id: str) -> dict[str, Any] | None:
     value = _convex_call('query', 'apiPartners:getReview', {
         'jobId': job_id,
         'partnerId': principal.partner_id,
@@ -617,11 +631,16 @@ def list_api_reviews(
     *,
     limit: int,
     cursor: str | None,
+    offer_id: str | None = None,
 ) -> dict[str, Any]:
-    value = _convex_call('query', 'apiPartners:listReviews', {
+    function_name = 'apiPartners:listSharedOfferReviews' if offer_id else 'apiPartners:listReviews'
+    args: dict[str, Any] = {
         'paginationOpts': {'cursor': cursor, 'numItems': max(1, min(limit, 100))},
         'partnerId': principal.partner_id,
-    })
+    }
+    if offer_id:
+        args['offerId'] = offer_id
+    value = _convex_call('query', function_name, args)
     if not isinstance(value, dict):
         raise RuntimeError('Partner API storage returned an invalid review page.')
     return {
@@ -629,6 +648,19 @@ def list_api_reviews(
         'has_more': not bool(value.get('isDone')),
         'next_cursor': None if value.get('isDone') else value.get('continueCursor'),
     }
+
+
+def get_shared_api_offer_report(
+    principal: ApiPrincipal,
+    job_id: str,
+    offer_id: str,
+) -> dict[str, Any] | None:
+    value = _convex_call('query', 'apiPartners:getSharedOfferReport', {
+        'jobId': job_id,
+        'offerId': offer_id,
+        'partnerId': principal.partner_id,
+    })
+    return value if isinstance(value, dict) else None
 
 
 def persist_api_evidence(

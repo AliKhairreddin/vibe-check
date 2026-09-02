@@ -76,6 +76,13 @@ const endpoints: Array<{
     title: 'List scan observations',
   },
   {
+    description: 'List durable internal review history for an offer explicitly shared with this account, for example ?offer_id=acp.',
+    method: 'GET',
+    path: '/reviews?offer_id=acp',
+    scope: 'history:read',
+    title: 'List shared offer history',
+  },
+  {
     description: 'Poll an owned review until report_ready is true.',
     method: 'GET',
     path: '/reviews/{review_id}',
