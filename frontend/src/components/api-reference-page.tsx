@@ -117,7 +117,7 @@ const groups: EndpointGroup[] = [
   {
     id: 'reviews-results',
     title: 'Reviews & results',
-    description: 'Create reviews and retrieve status, findings, evidence frames, and reports.',
+    description: 'Create reviews and retrieve traffic-light results, media, evidence frames, and reports.',
     icon: FileSearch,
   },
   {
@@ -377,7 +377,7 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/reviews',
     title: 'List review history',
-    description: 'Return owned history, or durable internal history for an explicitly authorized offer.',
+    description: 'Return owned or authorized offer history with overall_status, summary, finding_count, preview findings, and media links.',
     scope: 'history:read',
     fields: [
       { name: 'offer_id', label: 'Shared offer ID', location: 'query', placeholder: 'acp', description: 'Optional. Requires shared internal history access for this offer.' },
@@ -449,9 +449,28 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/reviews/{job_id}/thumbnail',
     title: 'Get review thumbnail',
-    description: 'Return the first available owned evidence frame as an image.',
+    description: 'Return the first available evidence frame for an owned or authorized shared review.',
     scope: 'evidence:read',
     fields: [jobIdField],
+  },
+  {
+    id: 'review-media',
+    group: 'reviews-results',
+    method: 'GET',
+    path: '/api/v1/reviews/{job_id}/media',
+    title: 'Stream review media',
+    description: 'Stream an authorized Google Drive creative with HTTP byte-range support. Keep the Bearer key on your backend and proxy Range requests from the browser.',
+    scope: 'evidence:read',
+    fields: [
+      jobIdField,
+      {
+        name: 'Range',
+        label: 'Byte range',
+        location: 'header',
+        defaultValue: 'bytes=0-1048575',
+        description: 'Optional. The default interactive test downloads only the first MiB.',
+      },
+    ],
   },
   {
     id: 'review-frame',
@@ -1081,7 +1100,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
       const elapsedMs = Math.round(performance.now() - started);
       const contentType = response.headers.get('content-type') ?? '';
       const disposition = response.headers.get('content-disposition') ?? '';
-      const binary = contentType.startsWith('image/') || contentType.includes('application/pdf') || contentType.includes('application/octet-stream');
+      const binary = contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.includes('application/pdf') || contentType.includes('application/octet-stream');
 
       if (binary && response.ok) {
         const blob = await response.blob();

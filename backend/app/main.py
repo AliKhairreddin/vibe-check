@@ -2461,11 +2461,13 @@ async def partner_review_result(job_id:str,request:Request,offer_id:str|None=Non
                 else f'/api/v1/reviews/{job_id}/evidence'
             ),
             'json_url':f'/api/v1/reviews/{job_id}/report.json',
+            'media_url':review.get('media_url'),
             'pdf_url':(
                 f'/api/v1/reviews/{job_id}/report.pdf?offer_id={shared_offer_id}'
                 if shared_offer_id
                 else f'/api/v1/reviews/{job_id}/report.pdf'
             ),
+            'thumbnail_url':review.get('thumbnail_url'),
         },
     }
 
@@ -2541,6 +2543,22 @@ async def partner_review_thumbnail(job_id:str,request:Request):
     if not frames:
         raise HTTPException(404,'Creative thumbnail not found.')
     return evidence_frame_response(job_id,str(frames[0].get('filename') or ''))
+
+
+async def authorized_partner_review_media(job_id:str,request:Request):
+    principal=await require_api_principal(request,'evidence:read')
+    await owned_api_review(principal,job_id)
+    return await asyncio.to_thread(review_media_response,job_id,request)
+
+
+@app.get('/api/v1/reviews/{job_id}/media')
+async def partner_review_media(job_id:str,request:Request):
+    return await authorized_partner_review_media(job_id,request)
+
+
+@app.head('/api/v1/reviews/{job_id}/media',include_in_schema=False)
+async def partner_review_media_head(job_id:str,request:Request):
+    return await authorized_partner_review_media(job_id,request)
 
 
 @app.get('/api/v1/reviews/{job_id}/frames/{filename}')

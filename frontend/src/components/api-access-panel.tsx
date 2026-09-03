@@ -64,7 +64,7 @@ const SCOPE_LABELS: Record<ApiScope, { label: string; description: string }> = {
   'reviews:create': { label: 'Create reviews', description: 'Upload creatives and submit ad copy.' },
   'reviews:read': { label: 'Read results', description: 'Read owned and explicitly shared offer results.' },
   'history:read': { label: 'List history', description: 'Browse owned or authorized shared offer history.' },
-  'evidence:read': { label: 'Read evidence', description: 'Access transcripts, OCR, observations, and frames.' },
+  'evidence:read': { label: 'Read evidence & media', description: 'Access source media, thumbnails, transcripts, OCR, observations, and frames.' },
   'reports:download': { label: 'Download reports', description: 'Download report JSON and PDFs.' },
   'scans:write': { label: 'Submit live scans', description: 'Hash observed ad media and queue reviews only when content changes.' },
   'scans:read': { label: 'Read live scans', description: 'Read this partner’s current ad fingerprints and observation history.' },

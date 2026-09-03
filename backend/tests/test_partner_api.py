@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from fastapi import Response
 
 from app.main import app
 from app.review_pipeline import storage as review_storage
@@ -303,6 +304,7 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
     assert '/api/v1/jobs/{job_id}' in schema['paths']
     assert '/api/v1/jobs/{job_id}/result' in schema['paths']
     assert '/api/v1/reviews' in schema['paths']
+    assert '/api/v1/reviews/{job_id}/media' in schema['paths']
     assert '/api/v1/scans/creative' in schema['paths']
     assert '/api/reviews' not in schema['paths']
     assert all(path.startswith('/api/v1') for path in schema['paths'])
@@ -596,7 +598,14 @@ async def test_shared_offer_history_requires_explicit_partner_permission(monkeyp
     monkeypatch.setattr(
         'app.main.list_api_reviews',
         lambda _principal, **kwargs: calls.append(kwargs) or {
-            'data': [],
+            'data': [{
+                'finding_count': 2,
+                'media_url': '/api/v1/reviews/review-id/media',
+                'overall_status': 'yellow',
+                'summary': 'Two claims need qualification.',
+                'thumbnail_url': '/api/v1/reviews/review-id/thumbnail',
+                'top_findings': ['Claim one', 'Claim two'],
+            }],
             'has_more': False,
             'next_cursor': None,
         },
@@ -614,6 +623,14 @@ async def test_shared_offer_history_requires_explicit_partner_permission(monkeyp
         )
 
     assert allowed.status_code == 200
+    assert allowed.json()['data'][0] == {
+        'finding_count': 2,
+        'media_url': '/api/v1/reviews/review-id/media',
+        'overall_status': 'yellow',
+        'summary': 'Two claims need qualification.',
+        'thumbnail_url': '/api/v1/reviews/review-id/thumbnail',
+        'top_findings': ['Claim one', 'Claim two'],
+    }
     assert calls == [{'limit': 50, 'cursor': None, 'offer_id': 'acp'}]
     assert denied.status_code == 403
 
@@ -631,11 +648,13 @@ async def test_shared_review_returns_only_requested_authorized_offer_report(monk
             'access_type': 'shared_offer',
             'accessible_offer_ids': ['acp', 'kissterra'],
             'job_id': job_id,
+            'media_url': f'/api/v1/reviews/{job_id}/media',
             'offer_ids': ['acp', 'kissterra'],
             'primary_offer_id': 'acp',
             'report_ready': True,
             'review_id': job_id,
             'status': 'complete',
+            'thumbnail_url': f'/api/v1/reviews/{job_id}/thumbnail',
         },
     )
     monkeypatch.setattr(
@@ -659,9 +678,93 @@ async def test_shared_review_returns_only_requested_authorized_offer_report(monk
     assert allowed.status_code == 200
     assert allowed.json()['report']['offer_id'] == 'kissterra'
     assert allowed.json()['artifacts']['evidence_url'] is None
+    assert allowed.json()['artifacts']['media_url'].endswith('/media')
     assert allowed.json()['artifacts']['pdf_url'].endswith('offer_id=kissterra')
+    assert allowed.json()['artifacts']['thumbnail_url'].endswith('/thumbnail')
     assert calls == [(job_id, 'kissterra')]
     assert denied.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_partner_media_requires_scope_and_forwards_range_for_shared_review(monkeypatch):
+    allowed = api_principal(shared_review_offer_ids=('acp',))
+    no_evidence = api_principal(
+        partner_id='partner_' + 'c' * 32,
+        scopes=frozenset({'reviews:read'}),
+        shared_review_offer_ids=('acp',),
+    )
+    hidden = api_principal(
+        partner_id='partner_' + 'd' * 32,
+        shared_review_offer_ids=(),
+    )
+    job_id = 'e' * 32
+    ranges = []
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr(
+        'app.main.authenticate_api_token',
+        lambda token: {
+            'allowed': allowed,
+            'no-evidence': no_evidence,
+            'hidden': hidden,
+        }.get(token),
+    )
+    monkeypatch.setattr(
+        'app.main.get_api_review',
+        lambda principal, requested_job_id: (
+            {
+                'access_type': 'shared_offer',
+                'accessible_offer_ids': ['acp'],
+                'job_id': requested_job_id,
+                'report_ready': True,
+                'status': 'complete',
+            }
+            if principal.partner_id == allowed.partner_id and requested_job_id == job_id
+            else None
+        ),
+    )
+
+    def fake_media_response(requested_job_id, request):
+        assert requested_job_id == job_id
+        ranges.append(request.headers.get('range'))
+        return Response(
+            content=b'5678',
+            status_code=206,
+            media_type='video/mp4',
+            headers={
+                'accept-ranges': 'bytes',
+                'content-range': 'bytes 4-7/12',
+            },
+        )
+
+    monkeypatch.setattr('app.main.review_media_response', fake_media_response)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        unauthorized = await client.get(f'/api/v1/reviews/{job_id}/media')
+        missing_scope = await client.get(
+            f'/api/v1/reviews/{job_id}/media',
+            headers={'authorization': 'Bearer no-evidence'},
+        )
+        inaccessible = await client.get(
+            f'/api/v1/reviews/{job_id}/media',
+            headers={'authorization': 'Bearer hidden'},
+        )
+        partial = await client.get(
+            f'/api/v1/reviews/{job_id}/media',
+            headers={
+                'authorization': 'Bearer allowed',
+                'range': 'bytes=4-7',
+            },
+        )
+
+    assert unauthorized.status_code == 401
+    assert missing_scope.status_code == 403
+    assert inaccessible.status_code == 404
+    assert partial.status_code == 206
+    assert partial.headers['accept-ranges'] == 'bytes'
+    assert partial.headers['content-range'] == 'bytes 4-7/12'
+    assert partial.content == b'5678'
+    assert ranges == ['bytes=4-7']
 
 
 @pytest.mark.anyio

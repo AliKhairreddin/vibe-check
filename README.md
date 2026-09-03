@@ -167,7 +167,7 @@ Production uses separate SaaS surfaces: `adchecked.com` for the public product s
 
 ## API Overview
 
-The server-to-server Partner API is rooted at `https://api.adchecked.com/api/v1`. The dedicated API hostname keeps machine traffic separate from the browser application. Human-facing documentation lives in the private admin hub at `https://admin.adchecked.com/developers/api`, with URL-backed **Guide** and **Interactive reference** views. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) for the full integration flow.
+The server-to-server Partner API is rooted at `https://api.adchecked.com/api/v1`. The dedicated API hostname keeps machine traffic separate from the browser application. Human-facing documentation lives at `https://admin.adchecked.com/developers/api`, with URL-backed **Guide** and **Interactive reference** views. Administrators manage partner accounts, unlimited or bounded usage, offer entitlements, scoped keys, expiry/revocation, evidence retention, and signed webhooks in **Settings → API access**. See [the Partner API guide](docs/partner-api.md) for the full integration flow.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -175,13 +175,15 @@ The server-to-server Partner API is rooted at `https://api.adchecked.com/api/v1`
 | `GET /api/v1/jobs/{job_id}` | Read normalized `queued/processing/completed/failed` status |
 | `GET /api/v1/jobs/{job_id}/result` | Read the complete JSON analysis with the asset ID and creative name |
 | `POST /api/v1/reviews` | Authenticated partner creative or copy-only submission |
+| `GET /api/v1/reviews?offer_id=acp` | Browse authorized offer history with traffic-light results, summaries, preview findings, and artifact URLs |
 | `POST /api/v1/scans/creative` | Hash currently served ad media and review it only when media, copy, or policy changed |
 | `GET /api/v1/scans/ads/{ad_id}` | Read tenant-owned current fingerprint and linked review state |
 | `GET /api/v1/scans/ads/{ad_id}/observations` | Browse the tenant-owned scan audit trail |
 | `POST /api/v1/uploads` | Start an authenticated resumable creative upload |
 | `GET /api/v1/reviews/{job_id}/result` | Read an owned or explicitly shared offer report and artifact links |
 | `GET /api/v1/reviews/{job_id}/evidence` | Read owned transcript, OCR, visual observations, and protected frames |
-| `GET /api/v1/reviews` | Browse owned history, or authorized durable offer history with `offer_id` |
+| `GET /api/v1/reviews/{job_id}/thumbnail` | Download a protected thumbnail for an owned or explicitly shared review |
+| `GET /api/v1/reviews/{job_id}/media` | Stream linked Google Drive media with HTTP byte-range support |
 | `POST /api/reviews` | Create a creative or copy-only review |
 | `POST /api/batches` | Register a durable multi-item batch |
 | `GET /api/batches/{batch_id}` | Read aggregate and item progress |

@@ -1,6 +1,6 @@
 # AdChecked Partner API v1
 
-The Partner API lets another server submit video, image, or copy-only creatives to the same review pipeline used by the AdChecked application. Processing is asynchronous: a submission returns immediately with a review ID, and the caller polls or receives a signed webhook before downloading results.
+The Partner API lets another server submit video, image, or copy-only creatives or read explicitly shared offer history from the same review pipeline used by the AdChecked application. Processing is asynchronous: a submission returns immediately with a review ID, and the caller polls or receives a signed webhook before downloading results.
 
 ## Access and credentials
 
@@ -31,13 +31,62 @@ Keys are hashed before storage and can be independently scoped, expired, and rev
 | `reviews:create` | Submit reviews and upload creative chunks |
 | `reviews:read` | Read owned reviews plus explicitly authorized shared-offer results |
 | `history:read` | Browse owned history or an explicitly authorized offer's shared history |
-| `evidence:read` | Read transcripts, OCR, visual observations, thumbnails, and evidence frames |
+| `evidence:read` | Read transcripts, OCR, visual observations, thumbnails, source media, and evidence frames |
 | `reports:download` | Download JSON and offer-specific PDF reports |
 | `scans:write` | Upload live ad media, calculate fingerprints, and create reviews when content changes |
 | `scans:read` | Read the account's current ad fingerprints and observation history |
 | `reviews:delete` | Permanently delete owned terminal reviews |
 
 The admin account can use **Unlimited monthly reviews** and **Unlimited queued submissions**. These remove per-account admission quotas; they do not remove file-size limits or the platform's bounded worker concurrency.
+
+## ACP shared-review dashboard
+
+Use the shared-history endpoint to populate ACP's creative list. The filename is display metadata, not a media identifier; always use `review_id` and the protected URLs returned by the API.
+
+```bash
+curl 'https://api.adchecked.com/api/v1/reviews?offer_id=acp&limit=50' \
+  -H 'Authorization: Bearer YOUR_API_KEY'
+```
+
+Each completed row includes a compact, offer-specific result preview:
+
+```json
+{
+  "access_type": "shared_offer",
+  "review_id": "56b8e68d0c3c4d7b935b6d85055bee31",
+  "file_name": "creative.mp4",
+  "status": "complete",
+  "report_ready": true,
+  "overall_status": "yellow",
+  "summary": "Two claims need additional qualification.",
+  "finding_count": 2,
+  "top_findings": ["Claim one", "Claim two"],
+  "result_url": "/api/v1/reviews/56b8e68d0c3c4d7b935b6d85055bee31/result?offer_id=acp",
+  "thumbnail_url": "/api/v1/reviews/56b8e68d0c3c4d7b935b6d85055bee31/thumbnail",
+  "media_url": "/api/v1/reviews/56b8e68d0c3c4d7b935b6d85055bee31/media"
+}
+```
+
+`status` describes processing: `complete` means the analysis finished. `overall_status` is the compliance result and is always `green`, `yellow`, or `red` when a result is ready. While a review is processing, `overall_status`, `summary`, and `finding_count` are `null`, and `top_findings` is empty.
+
+Returned paths are relative to `https://api.adchecked.com`. Use `summary` and `top_findings` in the list and request `result_url` only when a user opens the full detail view.
+
+Thumbnail and media requests require the same Bearer header:
+
+```bash
+curl 'https://api.adchecked.com/api/v1/reviews/REVIEW_ID/thumbnail' \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  --output thumbnail.jpg
+
+curl 'https://api.adchecked.com/api/v1/reviews/REVIEW_ID/media' \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Range: bytes=0-1048575' \
+  --output media-part.bin
+```
+
+The media endpoint supports `GET`, `HEAD`, and standard single HTTP byte ranges so video players can seek. It is available when a review retains a linked, downloadable Google Drive source; otherwise `media_url` is `null`.
+
+Keep the API key in the ACP backend. Browser `<img>` and `<video>` elements cannot safely attach a secret Bearer header, so ACP should expose its own authenticated same-origin proxy. That proxy should forward the browser's `Range` header and preserve AdChecked's `200`/`206` status plus `Content-Type`, `Content-Length`, `Content-Range`, and `Accept-Ranges` response headers.
 
 ## LemmonMaxx phase-one test: three endpoints
 
@@ -177,6 +226,7 @@ Poll the returned status URL. Once `report_ready` is `true`, retrieve:
 - `GET /reviews/{review_id}/report.json` for a downloadable JSON report;
 - `GET /reviews/{review_id}/report.pdf?offer_id=...` for an offer-specific PDF;
 - `GET /reviews/{review_id}/thumbnail` or `/frames/{filename}` for protected evidence images.
+- `GET` or `HEAD /reviews/{review_id}/media` for a linked Google Drive creative with byte-range streaming.
 
 Every access check is enforced server-side. A key receives `404` for another account's review unless its partner account has explicit shared-history access to an offer evaluated by that review. Shared access returns only an authorized offer's report; it never grants access to another offer result stored on the same review.
 
@@ -192,7 +242,7 @@ Chunks are retryable and an already-complete chunk is accepted idempotently. Inc
 
 ## History, deletion, and retention
 
-`GET /reviews?limit=50&cursor=...` returns cursor-paginated partner-owned history when the key has `history:read`. An internal account with configured shared-history access can add `offer_id`, for example `GET /reviews?offer_id=acp&limit=50`, to list every durable admin or API review evaluated for that offer. Use the returned review ID with the normal status and report endpoints. On a shared multi-offer review, add `offer_id` to the result or JSON-report request to select one of the account's authorized offers.
+`GET /reviews?limit=50&cursor=...` returns cursor-paginated partner-owned history when the key has `history:read`. An internal account with configured shared-history access can add `offer_id`, for example `GET /reviews?offer_id=acp&limit=50`, to list every durable admin or API review evaluated for that offer. History rows include the compact traffic-light preview and protected artifact URLs described above. Use the returned review ID with the normal status and report endpoints. On a shared multi-offer review, add `offer_id` to the result or JSON-report request to select one of the account's authorized offers.
 
 CoveragePro is authorized for shared ACP history. LemmonMaxx is authorized for shared ACP, Kissterra, Lead Economy, and Smart Financial history. These permissions are attached to the partner accounts, so existing keys inherit them without rotation as long as the key has the required read scope.
 
@@ -235,5 +285,6 @@ Reject stale timestamps in the receiving application and deduplicate events with
 - Authentication failures return `401`; missing scopes and suspended access return `403`.
 - Account quota or queued-submission limits return `429` with `Retry-After`.
 - Results or evidence that are still processing return `409` with `Retry-After`.
+- Media supports `HEAD` and one standard `Range: bytes=...` request; an invalid range returns `416`.
 - Every V1 response includes `x-request-id` and `cache-control: no-store`.
 - API keys must stay on a server. They are not safe to embed in a browser, mobile app, extension, or distributed desktop binary.

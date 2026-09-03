@@ -76,7 +76,7 @@ const endpoints: Array<{
     title: 'List scan observations',
   },
   {
-    description: 'List durable internal review history for an offer explicitly shared with this account, for example ?offer_id=acp.',
+    description: 'List shared creatives with overall_status, summary, finding_count, top_findings, and protected media links.',
     method: 'GET',
     path: '/reviews?offer_id=acp',
     scope: 'history:read',
@@ -90,9 +90,9 @@ const endpoints: Array<{
     title: 'Check review status',
   },
   {
-    description: 'Return the complete compliance report once processing finishes.',
+    description: 'Return the complete offer-specific compliance report once processing finishes.',
     method: 'GET',
-    path: '/reviews/{review_id}/result',
+    path: '/reviews/{review_id}/result?offer_id=acp',
     scope: 'reviews:read',
     title: 'Read review results',
   },
@@ -102,6 +102,20 @@ const endpoints: Array<{
     path: '/reviews/{review_id}/evidence',
     scope: 'evidence:read',
     title: 'Read evidence and frames',
+  },
+  {
+    description: 'Return the first available evidence frame as a protected thumbnail image.',
+    method: 'GET',
+    path: '/reviews/{review_id}/thumbnail',
+    scope: 'evidence:read',
+    title: 'Download a thumbnail',
+  },
+  {
+    description: 'Stream the linked Google Drive creative with HTTP Range support for video seeking.',
+    method: 'GET',
+    path: '/reviews/{review_id}/media',
+    scope: 'evidence:read',
+    title: 'Stream creative media',
   },
 ];
 
@@ -131,11 +145,11 @@ function CopyButton({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CodeBlock({ code }: { code: string }) {
+function CodeBlock({ code, label = 'Shell' }: { code: string; label?: string }) {
   return (
     <div className="relative overflow-hidden rounded-xl border bg-zinc-950 text-zinc-100 shadow-sm">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-xs text-zinc-400">
-        <span>Shell</span>
+        <span>{label}</span>
         <CopyButton label="Copy" value={code} />
       </div>
       <pre className="overflow-x-auto p-4 text-[13px] leading-6"><code>{code}</code></pre>
@@ -158,6 +172,24 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
   -H 'Content-Type: application/json' \\
   -H 'Idempotency-Key: lemmonmaxx-monday-001' \\
   --data '{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'`;
+  const sharedHistoryExample = `curl '${baseUrl}/reviews?offer_id=acp&limit=50' \\
+  -H 'Authorization: Bearer YOUR_API_KEY'`;
+  const sharedHistoryResponse = `{
+  "data": [{
+    "review_id": "56b8e68d0c3c4d7b935b6d85055bee31",
+    "file_name": "creative.mp4",
+    "status": "complete",
+    "overall_status": "yellow",
+    "summary": "Two claims need additional qualification.",
+    "finding_count": 2,
+    "top_findings": ["Claim one", "Claim two"],
+    "result_url": "/api/v1/reviews/56b8e68d0c3c4d7b935b6d85055bee31/result?offer_id=acp",
+    "thumbnail_url": "/api/v1/reviews/56b8e68d0c3c4d7b935b6d85055bee31/thumbnail",
+    "media_url": "/api/v1/reviews/56b8e68d0c3c4d7b935b6d85055bee31/media"
+  }],
+  "has_more": false,
+  "next_cursor": null
+}`;
 
   return (
     <div className={embedded ? 'grid gap-6 pb-16' : 'grid gap-8 pb-16'}>
@@ -170,11 +202,11 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
           </div>
           <div className="grid gap-3">
             <h1 className="max-w-3xl font-heading text-3xl font-semibold tracking-tight sm:text-5xl">
-              Put the full AdChecked workflow inside LemmonMaxx.
+              Put the full AdChecked workflow inside your application.
             </h1>
             <p className="max-w-3xl text-base leading-7 text-muted-foreground sm:text-lg">
-              Monday testing needs only three calls: submit a creative URL, poll its normalized status,
-              and retrieve the complete JSON analysis with the creative name.
+              Submit new creatives or list an authorized offer’s existing reviews with traffic-light results,
+              concise explanations, thumbnails, streaming media, and full reports.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -204,7 +236,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
 
       <Alert>
         <KeyRound />
-        <AlertTitle>Keep the key in the LemmonMaxx backend</AlertTitle>
+        <AlertTitle>Keep the key in your backend</AlertTitle>
         <AlertDescription>
           Never ship it to browser JavaScript. The three-endpoint flow needs
           <code className="mx-1 rounded bg-muted px-1.5 py-0.5">reviews:create</code> and
@@ -248,10 +280,51 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
 
       <Separator />
 
+      <section id="shared-history" className="grid gap-4">
+        <div>
+          <p className="text-sm font-medium text-muted-foreground">ACP dashboard</p>
+          <h2 className="font-heading text-2xl font-semibold tracking-tight">List results, then open media or details</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+            Use the review ID and returned URLs; do not construct a Google Drive URL from the filename.
+            The list response is already scoped to the requested offer.
+          </p>
+        </div>
+        <CodeBlock code={sharedHistoryExample} />
+        <CodeBlock code={sharedHistoryResponse} label="Example response" />
+        <div className="grid gap-3 md:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle>Processing vs. result</CardTitle>
+              <CardDescription className="leading-6">
+                <code>status: complete</code> means processing finished. Use <code>overall_status</code> for green, yellow, or red.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Keep listings compact</CardTitle>
+              <CardDescription className="leading-6">
+                Render summary and preview findings in the list. Call <code>result_url</code> only when the user opens full details.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Proxy protected media</CardTitle>
+              <CardDescription className="leading-6">
+                The ACP backend should call thumbnail and media URLs with the Bearer key and forward video Range headers. Never expose the key to browser code.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </div>
+      </section>
+
+      <Separator />
+
       <section className="grid gap-4">
         <div>
           <p className="text-sm font-medium text-muted-foreground">Endpoints</p>
-          <h2 className="font-heading text-2xl font-semibold tracking-tight">The LemmonMaxx integration surface</h2>
+          <h2 className="font-heading text-2xl font-semibold tracking-tight">The partner integration surface</h2>
         </div>
         <div className="grid gap-3">
           {endpoints.map((endpoint) => (

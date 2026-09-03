@@ -94,6 +94,57 @@ function publicPartner(partner: {
   };
 }
 
+type ReviewOfferStat = Doc<"reviewOfferStats">;
+
+function publicResultStatus(status: ReviewOfferStat["resultStatus"]) {
+  if (status === "amber" || status === "orange") return "yellow";
+  return status ?? null;
+}
+
+function defaultResultSummary(status: "green" | "yellow" | "red") {
+  if (status === "green") return "No policy issues were identified.";
+  if (status === "red") return "Critical issue";
+  return "Needs review";
+}
+
+function reviewPreview(
+  review: Doc<"reviews">,
+  stats: ReviewOfferStat[],
+  preferredOfferId: string | null,
+) {
+  const stat = (
+    preferredOfferId
+      ? stats.find((candidate) => candidate.offerId === preferredOfferId)
+      : null
+  ) ?? stats[0] ?? null;
+  const overallStatus = review.reportReady ? publicResultStatus(stat?.resultStatus) : null;
+  const hasResult = overallStatus !== null;
+  const hasCreative = review.hasCreative !== false;
+  const jobId = review.jobId;
+  return {
+    finding_count: hasResult ? stat?.previewFindingCount ?? 0 : null,
+    media_url: (
+      hasCreative
+      && review.sourceKind === "google_drive_file"
+      && review.sourceStatus === "linked"
+      && Boolean(review.sourceFileId)
+    ) ? `/api/v1/reviews/${jobId}/media` : null,
+    overall_status: overallStatus,
+    summary: hasResult ? stat?.previewSummary ?? defaultResultSummary(overallStatus) : null,
+    thumbnail_url: hasCreative && review.reportReady
+      ? `/api/v1/reviews/${jobId}/thumbnail`
+      : null,
+    top_findings: hasResult ? stat?.previewFindings ?? [] : [],
+  };
+}
+
+async function offerStatsForJob(ctx: QueryCtx, jobId: string) {
+  return ctx.db
+    .query("reviewOfferStats")
+    .withIndex("by_job_id", (q) => q.eq("jobId", jobId))
+    .take(10);
+}
+
 function publicReview(
   link: {
     createdAt: number;
@@ -107,17 +158,20 @@ function publicReview(
     terminalAt?: number;
     updatedAt: number;
   },
-  review: {
-    message: string;
-    offerIds?: string[];
-    primaryOfferId?: string;
-    progress: number;
-    reportReady: boolean;
-    status: string;
-    updatedAt: number;
-  } | null,
+  review: Doc<"reviews"> | null,
+  stats: ReviewOfferStat[],
 ) {
   const deleted = link.status === "deleted";
+  const preview = review
+    ? reviewPreview(review, stats, review.primaryOfferId ?? review.offerIds?.[0] ?? null)
+    : {
+        finding_count: null,
+        media_url: null,
+        overall_status: null,
+        summary: null,
+        thumbnail_url: null,
+        top_findings: [],
+      };
   return {
     access_type: "owned",
     accessible_offer_ids: review?.offerIds ?? [],
@@ -130,9 +184,11 @@ function publicReview(
     media_kind: link.mediaKind,
     message: deleted ? "Deleted" : review?.message ?? "Review unavailable",
     offer_ids: review?.offerIds ?? [],
+    ...preview,
     primary_offer_id: review?.primaryOfferId ?? null,
     progress: deleted ? 100 : review?.progress ?? (link.status === "active" ? 0 : 100),
     report_ready: deleted ? false : review?.reportReady ?? false,
+    result_url: `/api/v1/reviews/${link.jobId}/result`,
     review_id: link.jobId,
     status: deleted ? "deleted" : review?.status ?? link.status,
     terminal_at: link.terminalAt ?? null,
@@ -146,10 +202,15 @@ function reviewMediaKind(review: Doc<"reviews">) {
   return suffix && [".jpg", ".jpeg", ".png", ".webp"].includes(suffix) ? "image" : "video";
 }
 
-function publicSharedReview(review: Doc<"reviews">, accessibleOfferIds: string[]) {
+function publicSharedReview(
+  review: Doc<"reviews">,
+  accessibleOfferIds: string[],
+  stats: ReviewOfferStat[],
+) {
   const primaryOfferId = review.primaryOfferId && accessibleOfferIds.includes(review.primaryOfferId)
     ? review.primaryOfferId
     : accessibleOfferIds[0] ?? null;
+  const preview = reviewPreview(review, stats, primaryOfferId);
   return {
     access_type: "shared_offer",
     accessible_offer_ids: accessibleOfferIds,
@@ -162,9 +223,13 @@ function publicSharedReview(review: Doc<"reviews">, accessibleOfferIds: string[]
     media_kind: reviewMediaKind(review),
     message: review.message,
     offer_ids: accessibleOfferIds,
+    ...preview,
     primary_offer_id: primaryOfferId,
     progress: review.progress,
     report_ready: review.reportReady,
+    result_url: primaryOfferId
+      ? `/api/v1/reviews/${review.jobId}/result?offer_id=${encodeURIComponent(primaryOfferId)}`
+      : `/api/v1/reviews/${review.jobId}/result`,
     review_id: review.jobId,
     status: review.status,
     terminal_at: ["complete", "failed"].includes(review.status) ? review.updatedAt : null,
@@ -172,7 +237,7 @@ function publicSharedReview(review: Doc<"reviews">, accessibleOfferIds: string[]
   };
 }
 
-async function sharedOfferAccessForJob(
+async function sharedOfferStatsForJob(
   ctx: QueryCtx,
   partner: Doc<"apiPartners">,
   jobId: string,
@@ -185,8 +250,7 @@ async function sharedOfferAccessForJob(
     .take(10);
   return stats
     .filter((stat) => stat.deletedAt === undefined && permitted.has(stat.offerId))
-    .map((stat) => stat.offerId)
-    .sort();
+    .sort((left, right) => left.offerId.localeCompare(right.offerId));
 }
 
 function publicScanAd(scan: Doc<"apiScanAds">) {
@@ -889,11 +953,14 @@ export const getReview = query({
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
     if (!link || link.partnerId !== args.partnerId) return null;
-    const review = await ctx.db
-      .query("reviews")
-      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
-      .unique();
-    return publicReview(link, review);
+    const [review, stats] = await Promise.all([
+      ctx.db
+        .query("reviews")
+        .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+        .unique(),
+      offerStatsForJob(ctx, args.jobId),
+    ]);
+    return publicReview(link, review, stats);
   },
 });
 
@@ -917,10 +984,16 @@ export const getAccessibleReview = query({
       .query("reviews")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
-    if (link?.partnerId === args.partnerId) return publicReview(link, review);
+    if (link?.partnerId === args.partnerId) {
+      const stats = await offerStatsForJob(ctx, args.jobId);
+      return publicReview(link, review, stats);
+    }
     if (!review || review.deletedAt !== undefined) return null;
-    const accessibleOfferIds = await sharedOfferAccessForJob(ctx, partner, args.jobId);
-    return accessibleOfferIds.length ? publicSharedReview(review, accessibleOfferIds) : null;
+    const accessibleStats = await sharedOfferStatsForJob(ctx, partner, args.jobId);
+    const accessibleOfferIds = accessibleStats.map((stat) => stat.offerId);
+    return accessibleOfferIds.length
+      ? publicSharedReview(review, accessibleOfferIds, accessibleStats)
+      : null;
   },
 });
 
@@ -939,11 +1012,14 @@ export const listReviews = query({
       .order("desc")
       .paginate(args.paginationOpts);
     const page = await Promise.all(result.page.map(async (link) => {
-      const review = await ctx.db
-        .query("reviews")
-        .withIndex("by_job_id", (q) => q.eq("jobId", link.jobId))
-        .unique();
-      return publicReview(link, review);
+      const [review, stats] = await Promise.all([
+        ctx.db
+          .query("reviews")
+          .withIndex("by_job_id", (q) => q.eq("jobId", link.jobId))
+          .unique(),
+        offerStatsForJob(ctx, link.jobId),
+      ]);
+      return publicReview(link, review, stats);
     }));
     return { ...result, page };
   },
@@ -983,7 +1059,7 @@ export const listSharedOfferReviews = query({
         .withIndex("by_job_id", (q) => q.eq("jobId", stat.jobId))
         .unique();
       return review && review.deletedAt === undefined
-        ? publicSharedReview(review, [args.offerId])
+        ? publicSharedReview(review, [args.offerId], [stat])
         : null;
     }));
     return { ...result, page: page.filter((review) => review !== null) };
