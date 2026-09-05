@@ -25,6 +25,7 @@ from .telegram import (
     finish_batch_item_and_notify,
     send_live_scan_message,
     send_review_message,
+    send_job_event,
 )
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
@@ -556,7 +557,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
     except Exception as e:
         error_type=type(e).__name__
         failure_message=_failure_message(e)
-        set_status(job_id, JobStatus.failed, 100, failure_message)
+        failed_record = set_status(job_id, JobStatus.failed, 100, failure_message)
         if meta.live_scan_kind and meta.live_scan_key:
             try:
                 await asyncio.to_thread(
@@ -588,6 +589,8 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 )
             except Exception:
                 logger.exception('Batch failure notification failed for job %s', job_id)
+        elif not meta.api_partner_id:
+            await asyncio.to_thread(send_job_event, failed_record, meta, 'failed', failure_message)
     finally:
         if transcript_task is not None:
             with contextlib.suppress(Exception):

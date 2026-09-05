@@ -20,6 +20,7 @@ import type * as reviewPayloads from "../reviewPayloads.js";
 import type * as reviewProcessingMetrics from "../reviewProcessingMetrics.js";
 import type * as reviewVerticals from "../reviewVerticals.js";
 import type * as reviews from "../reviews.js";
+import type * as telegramNotifications from "../telegramNotifications.js";
 
 import type {
   ApiFromModules,
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   reviewProcessingMetrics: typeof reviewProcessingMetrics;
   reviewVerticals: typeof reviewVerticals;
   reviews: typeof reviews;
+  telegramNotifications: typeof telegramNotifications;
 }>;
 
 /**

@@ -32,7 +32,7 @@ The system is intentionally hybrid:
 - Admits up to ten browser uploads at once and processes production review jobs with five workers (configurable from one to eight).
 - Persists batches, job state, report JSON, and source metadata in Convex.
 - Supports folder-first Google Drive browsing, whole-folder selection, drill-down file selection, and exact-ID deduplication.
-- Sends one multi-offer Telegram summary after every item in a batch reaches a terminal state.
+- Sends client-by-client red/yellow/green Telegram totals with filtered review links after every batch item finishes, plus durable lifecycle and issue alerts. See [Telegram notification coverage](docs/telegram-notifications.md).
 - Generates combined PDFs with offer labels and partner-specific PDFs without the partner name inside the pages; partner names remain in download filenames.
 - Provides an offer-filtered dashboard, cursor-paginated history, recoverable history removal, and direct report/source links.
 - Saves disabled-by-default Drive review automations with timezone, weekday, time, subfolder, and filename-glob controls.

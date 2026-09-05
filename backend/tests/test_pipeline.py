@@ -2059,7 +2059,7 @@ async def test_partial_automation_enqueue_failure_stays_retryable(monkeypatch):
     monkeypatch.setattr(review_automations, 'heartbeat_automation_run', lambda *args: None)
     monkeypatch.setattr(review_automations, 'claim_automation_files', lambda _automation_id, _run_id, values: values)
     monkeypatch.setattr(review_automations, 'attach_automation_batch_items', lambda *args: None)
-    monkeypatch.setattr(review_automations, 'create_batch', lambda *args: None)
+    monkeypatch.setattr(review_automations, 'create_batch', lambda *args, **kwargs: None)
     monkeypatch.setattr(review_automations, 'release_automation_files', lambda *args: None)
     retry_markers=[]
     monkeypatch.setattr(
@@ -2133,7 +2133,7 @@ async def test_partial_automation_cleanup_failure_stays_recoverable(monkeypatch)
     monkeypatch.setattr(review_automations, 'heartbeat_automation_run', lambda *args: None)
     monkeypatch.setattr(review_automations, 'claim_automation_files', lambda _automation_id, _run_id, values: values)
     monkeypatch.setattr(review_automations, 'attach_automation_batch_items', lambda *args: None)
-    monkeypatch.setattr(review_automations, 'create_batch', lambda *args: created.append(args))
+    monkeypatch.setattr(review_automations, 'create_batch', lambda *args, **kwargs: created.append(args))
     monkeypatch.setattr(review_automations, 'release_automation_files', lambda *args: released.append(args))
     monkeypatch.setattr(review_automations, 'mark_automation_run_retry_required', lambda *args: None)
 
@@ -4339,9 +4339,9 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
     assert '<b>Type:</b> Creative Vid' in message
     assert '<b>Type:</b> Ad copy' in message
     assert '<b>Name:</b>' in message
-    assert '<b>Result:</b>' in message
-    assert '🟢 Green — Ready to run' in message
-    assert '🔴 Red — Critical stop' in message
+    assert '<b>Client: ACP</b>' in message
+    assert 'Creative: 🟢 Green — Ready to run' in message
+    assert '🔴 1 red' in message
     assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
     assert '<b>Findings</b>' not in message
@@ -4349,11 +4349,9 @@ def test_telegram_message_includes_minimal_split_results_and_report_links(monkey
     assert 'Ad copy: Save $600 this month' in message
     assert 'Unsupported guaranteed savings claim' not in message
     assert 'Caption includes a guaranteed' not in message
-    assert message.count('/reviews/abc123/report') == 1
-    assert message.index('<b>ACP:</b>') < message.index('<b>Kissterra:</b>')
-    assert message.index('<b>Kissterra:</b>') < message.index('<b>Lead Economy:</b>')
-    assert message.index('<b>Lead Economy:</b>') < message.index('<b>Smart Financial:</b>')
-    assert message.count('N/A — Not reviewed') == 3
+    assert '/reviews/abc123/report?offer=acp' in message
+    assert 'Client: Kissterra' not in message
+    assert 'N/A — Not reviewed' not in message
 
 def test_telegram_message_omits_missing_source_sections(monkeypatch):
     monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
@@ -4380,8 +4378,8 @@ def test_telegram_message_omits_missing_source_sections(monkeypatch):
     assert 'Creative Image' not in message
     assert '<b>Type:</b> Ad copy' in message
     assert '<b>Name:</b>' in message
-    assert '<b>Result:</b>' in message
-    assert '🟢 Green — Ready to run' in message
+    assert '<b>Client: ACP</b>' in message
+    assert '🟢 1 green' in message
     assert '<b>Report Link:</b>' in message
     assert 'Open report' in message
 
@@ -4406,7 +4404,7 @@ def test_telegram_message_labels_image_creatives(monkeypatch):
     }, media_kind='image')
     assert '<b>Type:</b> Creative Image' in message
     assert 'static-ad.png' in message
-    assert '🟡 Yellow — Fix or review before publishing' in message
+    assert '🟡 1 yellow' in message
 
 def test_telegram_message_identifies_green_internal_exception(monkeypatch):
     monkeypatch.setenv('APP_PUBLIC_URL', 'https://admin.adchecked.com')
@@ -4426,7 +4424,8 @@ def test_telegram_message_identifies_green_internal_exception(monkeypatch):
         },
         'findings':[],
     }, media_kind='image')
-    assert '🟢 Green — Ready to run · Approved internal exception' in message
+    assert '🟢 1 green' in message
+    assert '1 green under an approved internal exception.' in message
 
 def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
@@ -4456,18 +4455,16 @@ def test_batch_notification_waits_for_all_items_and_sends_once(tmp_path, monkeyp
     assert len(sent) == 1
 
     message=build_batch_message(sent[0])
-    assert '<b>Batch Uploaded ' in message
-    assert '<b>Google Drive source:</b>' in message
+    assert 'review ' in message
+    assert 'done with issues' in message
+    assert '<b>Source:</b>' in message
     assert 'Q3 Growth &amp; Retargeting' in message
-    assert '<b>Type:</b> Creative Vid' in message
-    assert '<b>Type:</b> Creative Image' in message
-    assert '<b>Type:</b> Ad copy' in message
-    assert 'creative-one.mp4' in message
-    assert '🔴 Red — Critical stop' in message
-    assert '⚫ Failed — Review did not complete' in message
-    assert 'Network upload failed' in message
-    assert '🟢 Green — Ready to run' in message
-    assert message.count('/batches/batch1') == 1
+    assert '2/3 reviewed' in message
+    assert '🔴 1 red' in message
+    assert '⚫ 1 upload/import failed' in message
+    assert 'result=upload_failed' in message
+    assert '🟢 1 green' in message
+    assert '/batches/batch1?offer=acp&amp;result=red' in message
     assert message.count('<b>Report Link:</b>') == 1
 
 
@@ -4526,10 +4523,11 @@ def test_batch_persists_and_formats_per_offer_outcomes(tmp_path, monkeypatch):
         'smart-financial',
     ]
     message=build_batch_message(batch)
-    assert '🟢 Green — Ready to run · Approved internal exception' in message
-    assert 'N/A — Turned off' in message
-    assert message.count('N/A — Guidelines not saved') == 2
-    assert 'Import failed' in message
+    assert '🟢 1 green' in message
+    assert '1 green under an approved internal exception.' in message
+    assert '1 not reviewed — turned off' in message
+    assert message.count('1 not reviewed — guidelines not saved') == 2
+    assert '⚫ 1 upload/import failed' in message
 
 
 def test_batch_telegram_loads_report_when_ready_snapshot_has_no_verdict(tmp_path, monkeypatch):
@@ -4557,7 +4555,8 @@ def test_batch_telegram_loads_report_when_ready_snapshot_has_no_verdict(tmp_path
 
     message=build_batch_message(batch)
 
-    assert '<b>ACP:</b> 🟢 Green — Ready to run' in message
+    assert '<b>Client: ACP</b>' in message
+    assert '🟢 1 green' in message
 
 
 def test_batch_telegram_bulk_hydrates_offer_summaries_once(tmp_path, monkeypatch):
@@ -4601,10 +4600,12 @@ def test_batch_telegram_bulk_hydrates_offer_summaries_once(tmp_path, monkeypatch
         lambda message, context: sent.append((message, context)) or True,
     )
 
+    monkeypatch.setattr(review_telegram, '_attach_batch_pdf', lambda batch: True)
     assert review_telegram.send_batch_message(batch)
     assert lookups == [['job-1']]
     assert len(sent) == 1
-    assert '<b>ACP:</b> 🟢 Green — Ready to run' in sent[0][0]
+    assert '<b>Client: ACP</b>' in sent[0][0]
+    assert '🟢 1 green' in sent[0][0]
 
 
 def test_telegram_429_uses_response_retry_after():
@@ -4857,7 +4858,7 @@ def test_telegram_document_uses_new_chat_and_thread_without_logging_token(monkey
 
         def post(self, url, data, files):
             calls.append((url, data, files))
-            return httpx.Response(200, request=httpx.Request('POST', url))
+            return httpx.Response(200, request=httpx.Request('POST', url), json={'ok':True})
 
     monkeypatch.setattr('app.review_pipeline.telegram.httpx.Client', FakeClient)
 
@@ -4891,7 +4892,7 @@ def test_batch_telegram_attaches_unified_pdf_after_message(tmp_path, monkeypatch
     monkeypatch.setattr(review_telegram, '_attach_batch_pdf', lambda value: attached.append(value) or True)
 
     assert review_telegram.send_batch_message(batch)
-    assert attached == [batch]
+    assert attached == []  # No report PDF exists when every upload failed.
 
 def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     token='secret-token-that-must-not-be-logged'
@@ -4922,7 +4923,7 @@ def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     caplog.set_level(logging.ERROR, logger='app.review_pipeline.telegram')
 
     assert not send_review_message(record, {'overall_status':'pass', 'findings':[]})
-    assert 'job_id=telegram-failure' in caplog.text
+    assert 'event=review:telegram-failure:complete' in caplog.text
     assert 'error_type=HTTPStatusError' in caplog.text
     assert 'http_status=502' in caplog.text
     assert token not in caplog.text
@@ -5563,7 +5564,7 @@ def test_live_scan_telegram_message_links_live_page(monkeypatch):
         meta,
         'copy_only',
     )
-    assert 'Live Primary text Result' in message
+    assert 'Live primary text review done' in message
     assert 'Winning Creative' in message
     assert 'Save up to 20%.' in message
     assert '/live-scans' in message

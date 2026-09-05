@@ -776,6 +776,7 @@ export const claimItemRetry = mutation({
       notificationLeaseExpiresAt: undefined,
       notificationReady: false,
       notificationStatus: "pending",
+      attentionNotifiedAt: undefined,
       updatedAt,
     });
     return { claimed: true, status: "retrying" };

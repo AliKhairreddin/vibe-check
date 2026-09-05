@@ -908,13 +908,14 @@ export const getBatchOfferSummaries = query({
       const rows = await ctx.db
         .query("reviewOfferStats")
         .withIndex("by_job_id", (query) => query.eq("jobId", jobId))
-        .collect();
+        .take(10);
       const offerResults = rows.flatMap((row) => {
         const status = normalizeResultStatus(row.resultStatus);
         return status ? [{
           evaluation_state: "evaluated",
           offer_id: row.offerId,
           overall_status: status,
+          internal_disposition: row.internalDisposition ?? null,
         }] : [];
       });
       if (offerResults.length) {

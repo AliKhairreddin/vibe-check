@@ -2,6 +2,19 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  telegramNotifications: defineTable({
+    eventKey: v.string(),
+    message: v.string(),
+    pdfJobId: v.optional(v.string()),
+    status: v.union(v.literal('pending'), v.literal('claimed'), v.literal('sent'), v.literal('exhausted')),
+    attempts: v.number(),
+    claimId: v.optional(v.string()),
+    nextAttemptAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_event_key', ['eventKey'])
+    .index('by_status_and_next_attempt_at', ['status', 'nextAttemptAt']),
   maintenanceState: defineTable({
     complete: v.boolean(),
     cursor: v.optional(v.string()),
@@ -314,12 +327,14 @@ export default defineSchema({
     notificationClaimId: v.optional(v.string()),
     notificationLeaseExpiresAt: v.optional(v.number()),
     notificationReady: v.optional(v.boolean()),
+    attentionNotifiedAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
     .index("by_batch_id", ["batchId"])
     .index("by_created_at", ["createdAt"])
     .index("by_notification_status", ["notificationStatus"])
-    .index("by_notification_ready_status_lease", ["notificationReady", "notificationStatus", "notificationLeaseExpiresAt"]),
+    .index("by_notification_ready_status_lease", ["notificationReady", "notificationStatus", "notificationLeaseExpiresAt"])
+    .index('by_notification_ready_and_attention_notified_at_and_updated_at', ['notificationReady', 'attentionNotifiedAt', 'updatedAt']),
   liveScanAccounts: defineTable({
     accountId: v.string(),
     accountName: v.string(),

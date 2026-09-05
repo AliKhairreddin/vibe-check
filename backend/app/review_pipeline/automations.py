@@ -49,7 +49,7 @@ from .storage import (
     resolve_review_offer_snapshot,
     set_review_source,
 )
-from .telegram import finish_batch_item_and_notify
+from .telegram import finish_batch_item_and_notify, send_automation_event
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +291,7 @@ async def run_review_automation(
                 matched_count=matched_count,
                 queued_count=0,
             )
+            await asyncio.to_thread(send_automation_event, automation, run_id, 'no_matches', message)
             return AutomationRunResult(
                 automation=updated,
                 status='no_matches',
@@ -334,7 +335,7 @@ async def run_review_automation(
                     for file,item in zip(files, batch_items, strict=True)
                 ],
             )
-            create_batch(batch_id, batch_items, offer_outcomes)
+            create_batch(batch_id, batch_items, offer_outcomes, source_label=automation.name)
 
         for file,item in zip(files, batch_items, strict=True):
             try:
@@ -491,6 +492,8 @@ async def run_review_automation(
             job_ids=tracked_job_ids,
             retry_required=bool(unqueued_claims),
         )
+        if status == 'failed':
+            await asyncio.to_thread(send_automation_event, automation, run_id, 'failed', message)
         return AutomationRunResult(
             automation=updated,
             status=status,

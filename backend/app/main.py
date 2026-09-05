@@ -228,6 +228,11 @@ background_tasks:set[asyncio.Task]=set()
 
 
 async def deliver_batch_notifications_in_background()->None:
+    from .review_pipeline.telegram import deliver_pending_telegram_notifications
+    try:
+        await asyncio.to_thread(deliver_pending_telegram_notifications)
+    except Exception:
+        logger.exception('Could not deliver pending Telegram review events.')
     try:
         await asyncio.to_thread(deliver_pending_batch_notifications, limit=1)
     except Exception:

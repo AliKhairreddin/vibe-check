@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { matchesReviewFilter, REVIEW_RESULT_FILTERS, validateReviewSearch, type ReviewResultFilter } from '@/lib/review-filters';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
 import { Menu } from '@base-ui/react/menu';
 import { createRoot, type Root } from 'react-dom/client';
@@ -2537,7 +2538,9 @@ function AuthenticatedDownloadButton({ fallbackName, href, label }: {
 
 function ReportPage() {
   const { jobId } = useParams({ from: '/reviews/$jobId/report' });
-  const [selectedOfferId, setSelectedOfferId] = useState('');
+  const reportSearch = reportRoute.useSearch();
+  const [selectedOfferId, setSelectedOfferId] = useState(reportSearch.offer ?? '');
+  useEffect(() => setSelectedOfferId(reportSearch.offer ?? ''), [reportSearch.offer, jobId]);
   const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId) });
   const statusQuery = useQuery({ queryKey: ['status', jobId], queryFn: () => getStatus(jobId) });
   const sourceQuery = useQuery({
@@ -2906,7 +2909,11 @@ function ReportPage() {
 
 function BatchPage() {
   const { batchId } = useParams({ from: '/batches/$batchId' });
-  const [selectedOfferId, setSelectedOfferId] = useState('all');
+  const search = batchRoute.useSearch();
+  const navigate = batchRoute.useNavigate();
+  const selectedOfferId = search.offer ?? 'all';
+  const selectedResult = search.result ?? 'all';
+  const setSelectedOfferId = (offer: string) => void navigate({ search: { ...search, offer } });
   const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
   const query = useQuery({
     queryKey: ['batch', batchId],
@@ -2951,6 +2958,7 @@ function BatchPage() {
   const pdfOffers = offerColumns.filter((offer) => query.data.items.some((item) =>
     findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
   ));
+  const visibleItems = query.data.items.filter(item => matchesReviewFilter(item, selectedOfferId, selectedResult));
 
   return (
     <Card className="min-w-0">
@@ -2994,8 +3002,21 @@ function BatchPage() {
         <div className="mb-4 grid gap-1">
           <h2 className="text-sm font-medium">Individual creative results</h2>
           <p className="text-xs text-muted-foreground">
-            Open any row for that creative’s detailed report and individual PDF options.
+            Showing {visibleItems.length} of {query.data.items.length} items. Color filters use the original AdChecked assessment.
           </p>
+          <label className="mt-2 grid max-w-64 gap-1 text-xs font-medium">
+            Filter by AdChecked result
+            <select
+              className="h-8 rounded-lg border border-input bg-background px-2 text-foreground"
+              value={selectedResult}
+              onChange={event => void navigate({ search: { ...search, result: event.target.value as ReviewResultFilter } })}
+            >
+              {REVIEW_RESULT_FILTERS.map(result => (
+                <option key={result} value={result}>{({ all: 'All results', red: 'Red', yellow: 'Yellow', green: 'Green', failed: 'Review failed', upload_failed: 'Upload / import failed', unavailable: 'Not reviewed / unavailable' })[result]}</option>
+              ))}
+            </select>
+          </label>
+          {selectedResult !== 'all' ? <Button className="mt-2 w-fit" variant="ghost" size="sm" onClick={() => void navigate({ search: { ...search, result: 'all' } })}>Clear result filter</Button> : null}
         </div>
         <Table className="table-fixed max-md:min-w-[58rem]">
           <colgroup>
@@ -3019,7 +3040,8 @@ function BatchPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {query.data.items.map((item) => {
+            {!visibleItems.length ? <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No items match this client and result.</TableCell></TableRow> : null}
+            {visibleItems.map((item) => {
               const isExpanded = expandedItemIds.has(item.item_id);
               const hasDecisionContext = visibleOfferColumns.some((offer) => {
                 const outcome = batchOutcomeForOffer(item, offer);
@@ -3074,6 +3096,7 @@ function BatchPage() {
                       <Link
                         to="/reviews/$jobId/report"
                         params={{ jobId: item.job_id }}
+                        search={{ offer: selectedOfferId === 'all' ? undefined : selectedOfferId }}
                         className={buttonVariants({ variant: 'outline', size: 'sm' })}
                       >
                         <FileJson data-icon="inline-start" />
@@ -3956,11 +3979,13 @@ const liveScansRoute = createRoute({
 const reportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reviews/$jobId/report',
+  validateSearch: validateReviewSearch,
   component: ReportPage,
 });
 const batchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/batches/$batchId',
+  validateSearch: validateReviewSearch,
   component: BatchPage,
 });
 const settingsRoute = createRoute({

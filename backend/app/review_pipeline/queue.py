@@ -13,7 +13,7 @@ from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
 from .storage import get_status, job_dir, set_status, write_json
 from .live_scan_storage import finish_live_review
-from .telegram import finish_batch_item_and_notify
+from .telegram import finish_batch_item_and_notify, send_job_event, send_review_started
 from .recovery import (
     RecoveredReviewPayload,
     delete_job_payload,
@@ -320,6 +320,8 @@ async def enqueue_job(
     except BaseException:
         await _release_automation_heartbeat(job_id)
         raise
+    if recovery_payload is None:
+        await asyncio.to_thread(send_review_started, record, meta)
     return record
 
 
@@ -375,10 +377,30 @@ async def recover_interrupted_jobs() -> dict[str, int]:
                 logger.exception('Could not requeue interrupted review %s.', job_id)
                 continue
             requeued += 1
+            await asyncio.to_thread(
+                send_job_event, job_id, payload.meta, 'recovered',
+                'Processing resumed from the saved review source. Final results will follow.',
+            )
         failed = await asyncio.to_thread(
             fail_unrecoverable_jobs,
             list(unrecoverable_ids),
         )
+        for job_id in failed:
+            review = next((value for value in interrupted if value.job_id == job_id), None)
+            if review is None or review.batch_id:
+                continue  # Terminal batch failures are sent by the batch outbox.
+            payload = payloads.get(job_id)
+            # An unavailable manifest can belong to an API tenant. Check the durable
+            # ownership link before sending anything to the shared admin Telegram.
+            from .storage import _convex_call
+            try:
+                owner = await asyncio.to_thread(_convex_call, 'query', 'telegramNotifications:isApiReview', {'jobId': job_id})
+                if owner is not False:
+                    continue
+                await asyncio.to_thread(send_job_event, job_id, payload.meta if payload else ReviewRequestMeta(), 'failed',
+                                        'Review was interrupted and its saved source is unavailable. Re-upload the creative to retry.')
+            except Exception:
+                logger.exception('Could not notify interrupted review %s.', job_id)
         return {'failed': len(failed), 'requeued': requeued}
 
 
@@ -522,7 +544,7 @@ async def _requeue_timed_out_job(job: QueuedReviewJob, worker_index: int) -> boo
         'Processing exceeded the hard job deadline; retrying automatically '
         f'(attempt {next_attempt} of {max_attempts})'
     )
-    set_status(job.job_id, JobStatus.queued, 0, message)
+    record = set_status(job.job_id, JobStatus.queued, 0, message)
     await _queue.put(replace(
         job,
         recovery_payload=retry_payload,
@@ -531,6 +553,7 @@ async def _requeue_timed_out_job(job: QueuedReviewJob, worker_index: int) -> boo
     _queue_diagnostics['retry_count'] = int(
         _queue_diagnostics['retry_count']
     ) + 1
+    await asyncio.to_thread(send_job_event, record, job.meta, 'retrying', message, attempt=next_attempt)
     logger.warning(
         'Queue worker %s requeued timed-out job %s for attempt %s of %s.',
         worker_index + 1,
@@ -594,7 +617,7 @@ async def _process_queue(worker_index: int) -> None:
                     if isinstance(exc, TimeoutError)
                     else f'Queue processing failed: {type(exc).__name__}'
                 )
-                set_status(
+                failed_record = set_status(
                     job.job_id,
                     JobStatus.failed,
                     100,
@@ -628,6 +651,8 @@ async def _process_queue(worker_index: int) -> None:
                         job_id=job.job_id,
                         message=message,
                     )
+                else:
+                    await asyncio.to_thread(send_job_event, failed_record, job.meta, 'failed', message)
             except Exception:
                 logger.exception(
                     'Queue worker %s could not mark job %s as failed',

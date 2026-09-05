@@ -147,6 +147,22 @@ export const tickState = query({
       }
     }
 
+    if (!needsNotification) {
+      for (const status of ['pending', 'claimed'] as const) {
+        const notifications = await ctx.db.query('telegramNotifications')
+          .withIndex('by_status_and_next_attempt_at', q => q.eq('status', status).lte('nextAttemptAt', args.now))
+          .take(1);
+        if (notifications.length) { needsNotification = true; break; }
+      }
+    }
+    if (!needsNotification) {
+      const stalled = await ctx.db.query('reviewBatches')
+        .withIndex('by_notification_ready_and_attention_notified_at_and_updated_at', q =>
+          q.eq('notificationReady', false).eq('attentionNotifiedAt', undefined).lte('updatedAt', args.now - 2 * 60 * 60_000))
+        .take(1);
+      needsNotification = stalled.length > 0;
+    }
+
     const [pendingApiWebhook, expiredApiWebhookClaim, expiredApiEvidence] = await Promise.all([
       ctx.db
         .query("apiWebhookDeliveries")
