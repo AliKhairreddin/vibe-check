@@ -99,7 +99,7 @@ function rateLimitedResponse(): Response {
 
 function secureResponse(response: Response, surface: HostSurface): Response {
   const secured = new Response(response.body, response);
-  secured.headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  secured.headers.set("referrer-policy", surface === "public" ? "strict-origin-when-cross-origin" : "no-referrer");
   secured.headers.set("x-content-type-options", "nosniff");
   secured.headers.set("x-frame-options", "DENY");
   secured.headers.set("permissions-policy", "camera=(), geolocation=(), microphone=(), payment=(), usb=()");
@@ -522,7 +522,7 @@ export default {
         return secureResponse(notFoundResponse(), surface);
       }
       const isClientSignIn = surface === "client" && (
-        url.pathname === "/api/client/session" && request.method === "POST"
+        (url.pathname === "/api/client/session" || url.pathname === "/api/client/invitations/accept") && request.method === "POST"
       );
       const isAdminSignIn = surface === "admin"
         && isAdminSessionPath(url.pathname)
@@ -538,7 +538,12 @@ export default {
         });
         if (!success) return secureResponse(rateLimitedResponse(), surface);
       }
-      const response = await fetchBackend(env, request);
+      const backendStartedAt = Date.now();
+      let response = await fetchBackend(env, request);
+      if (surface === "admin" && url.pathname === "/api/admin/platform" && response.ok) {
+        const data = await response.json() as Record<string, unknown>;
+        response = Response.json({ ...data, cloudflare: { status: "reachable", backend_latency_ms: Date.now() - backendStartedAt, configured_shards: backendShardCount(env), active_slot: backendSlot(env) } }, { headers: { "cache-control": "no-store" } });
+      }
       if (
         (surface === "admin" || isLegacyScannerRequest)
         && response.status === 401
@@ -568,7 +573,7 @@ export default {
     }
 
     if (surface === "public") {
-      if (url.pathname === "/") return secureResponse(await env.ASSETS.fetch(request), surface);
+      if (url.pathname === "/" || url.pathname === "/pricing") return secureResponse(await env.ASSETS.fetch(request), surface);
       if (url.pathname === "/login") {
         return secureResponse(redirectResponse(new URL("/login", CLIENT_ORIGIN)), surface);
       }

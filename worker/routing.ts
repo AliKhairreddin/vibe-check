@@ -39,6 +39,7 @@ export function isLegacyCompatibleApiPath(pathname: string): boolean {
 }
 
 export function apiRequestAllowed(surface: HostSurface, pathname: string): boolean {
+  if ((surface === 'admin' || surface === 'client') && pathname.startsWith('/api/public/shares/')) return true;
   if (surface === 'admin') {
     return pathname.startsWith('/api/')
       && !isClientApiPath(pathname)
@@ -77,6 +78,8 @@ export function isStaticAssetPath(pathname: string): boolean {
 export function isClientPagePath(pathname: string): boolean {
   return pathname === '/'
     || pathname === '/login'
+    || pathname.startsWith('/share/')
+    || pathname.startsWith('/invite/')
     || pathname === '/client'
     || pathname.startsWith('/client/')
     || pathname === '/kissterra'
@@ -116,6 +119,8 @@ export function isAdminPagePath(pathname: string): boolean {
     || pathname === '/live-scans'
     || pathname === '/automations'
     || pathname === '/settings'
+    || pathname === '/shares'
+    || pathname === '/publisher'
     || pathname.startsWith('/reviews/')
     || pathname.startsWith('/batches/')
     || pathname.startsWith('/developers/');
