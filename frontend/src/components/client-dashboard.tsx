@@ -323,7 +323,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
 function ClientDashboard() {
   const { session } = useClientAuth();
   const queryClient = useQueryClient();
-  const { clientId: selectedClientId, setClientId: setSelectedClientId, publisherId } = useWorkspace();
+  const { clientId: selectedClientId, publisherId } = useWorkspace();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   useEffect(() => setSelectedIds(new Set()), [selectedClientId, publisherId]);
   const [preferences, setPreferences] = useState<ClientPreferences>(() => readClientPreferences());
@@ -455,16 +455,6 @@ function ClientDashboard() {
     red: reviews.filter((review) => review.ai_status === 'red').length,
   };
   const decisionOverrides = reviews.filter(isClientOverride).length;
-  function selectClient(clientId: string) {
-    setSelectedClientId(clientId);
-    setSearch('');
-    setStatusFilter('all');
-    setResultFilter(preferences.defaultResultFilter);
-    setBatchFilter('all');
-    setExpandedGroups(new Set());
-    setExpandedCreatives(new Set());
-  }
-
   function prefetchCreative(review: ClientReviewItem) {
     if (!selectedPortal) return;
     preloadClientReviewImage(selectedPortal.client_id, review.job_id);
@@ -494,18 +484,6 @@ function ClientDashboard() {
               <p className="mt-1 text-sm text-muted-foreground">Review each creative, apply your final decision, and inspect every finding.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {session.portals.length > 1 ? (
-                <select
-                  aria-label="Advertiser workspace"
-                  className="h-8 rounded-md border bg-background px-2 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={selectedPortal.client_id}
-                  onChange={(event) => selectClient(event.currentTarget.value)}
-                >
-                  {session.portals.map((portal) => (
-                    <option key={portal.client_id} value={portal.client_id}>{portal.display_name}</option>
-                  ))}
-                </select>
-              ) : null}
               <MetricBadge label="total" value={reviews.length} />
               <MetricBadge label="hold" tone="danger" value={statusCounts.red} />
               <MetricBadge label="needs decision" tone="warning" value={statusCounts.yellow} />
@@ -774,7 +752,14 @@ export function ClientPortalFrame({ children, workspaceName }: {
             <SidebarTrigger className="md:hidden" aria-label="Close navigation" title="Close navigation" />
           </div>
           <div className="grid gap-3 border-t pt-3 group-data-[collapsible=icon]:hidden">
-            <div className="grid gap-1"><Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-advertiser">Advertiser</Label><select id="sidebar-advertiser" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm font-medium" value={clientId} onChange={event => { setClientId(event.target.value); void navigate({ to: '/client' }); }}>{session.portals.map(portal => <option key={portal.client_id} value={portal.client_id}>{portal.display_name}</option>)}</select></div>
+            {session.role === 'publisher' ? (
+              <div className="grid gap-1">
+                <Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-advertiser">Advertiser</Label>
+                <select id="sidebar-advertiser" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm font-medium" value={clientId} onChange={event => { setClientId(event.target.value); void navigate({ to: '/client' }); }}>
+                  {session.portals.map(portal => <option key={portal.client_id} value={portal.client_id}>{portal.display_name}</option>)}
+                </select>
+              </div>
+            ) : null}
             {session.role === 'publisher' ? <div><p className="text-[11px] text-muted-foreground">Publisher</p><p className="mt-1 truncate text-sm font-medium">{session.publisher_name}</p></div> : <div className="grid gap-1"><Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-publisher">Publisher</Label><select id="sidebar-publisher" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm" value={publisherId} onChange={event => { setPublisherId(event.target.value); if (!['/client', '/client/reviews'].includes(pathname) && !pathname.startsWith('/client/verticals/')) void navigate({ to: '/client/reviews' }); }}><option value="all">All publishers</option>{publishers.data?.map(publisher => <option key={publisher.publisherId} value={publisher.publisherId}>{publisher.name}{publisher.status === 'suspended' ? ' (suspended)' : ''}</option>)}</select>{publishers.error ? <p className="text-xs text-destructive">Publisher list unavailable</p> : null}</div>}
           </div>
         </SidebarHeader>
