@@ -35,6 +35,7 @@ import {
   LockKeyhole,
   LogOut,
   MessageSquareText,
+  Moon,
   RefreshCw,
   RotateCcw,
   Rows3,
@@ -45,6 +46,7 @@ import {
   Layers3,
   SlidersHorizontal,
   Settings2,
+  Sun,
   Upload,
   X,
   XCircle,
@@ -104,6 +106,7 @@ import {
   type ReviewEvidenceFrame,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useTheme } from '@/hooks/use-theme';
 import {
   readClientPreferences,
   saveClientPreferences,
@@ -744,6 +747,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
   workspaceName?: string;
 }) {
   const { error, isSigningOut, logout, session } = useClientAuth();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const { clientId, publisherId, setClientId, setPublisherId } = useWorkspace();
   const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) });
@@ -907,6 +911,12 @@ export function ClientPortalFrame({ children, workspaceName }: {
                 <SidebarMenuButton aria-current={pathname === '/client/settings' ? 'page' : undefined} isActive={pathname === '/client/settings'} tooltip="Settings" onClick={() => void navigate({ to: '/client/settings' })}>
                   <Settings2 />
                   <span>Settings</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggleTheme}>
+                  {theme === 'dark' ? <Sun /> : <Moon />}
+                  <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>

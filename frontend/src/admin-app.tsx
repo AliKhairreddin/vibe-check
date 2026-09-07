@@ -88,6 +88,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -111,6 +112,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { useTheme, type Theme } from '@/hooks/use-theme';
 import { DashboardPage } from '@/components/dashboard';
 import { DriveBrowser } from '@/components/drive-browser';
 import {
@@ -170,7 +172,6 @@ import {
   type Status,
 } from '@/lib/api';
 
-type Theme = 'light' | 'dark';
 type CreativeSource = 'drive' | 'computer';
 type UploadPhase = 'pending' | 'uploading' | 'importing' | 'queued' | 'failed';
 
@@ -262,25 +263,6 @@ function loadActiveBatch(): BatchItem[] {
   } catch {
     return [];
   }
-}
-
-function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof window === 'undefined') return 'light';
-    return window.localStorage.getItem('vibe-check-theme') === 'dark'
-      ? 'dark'
-      : 'light';
-  });
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
-    window.localStorage.setItem('vibe-check-theme', theme);
-  }, [theme]);
-
-  return {
-    theme,
-    toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
-  };
 }
 
 function AppShell() {
@@ -386,8 +368,9 @@ function AppSidebar({
             <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-sidebar-border bg-card shadow-sm">
               <ScanSearch className="size-4" strokeWidth={2.2} />
             </span>
-            <span className="truncate font-heading text-base font-semibold group-data-[collapsible=icon]:hidden">
-              AdChecked
+            <span className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
+              <span className="truncate font-heading text-sm font-semibold">AdChecked</span>
+              <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Admin console</span>
             </span>
           </Link>
           <SidebarTrigger
@@ -398,60 +381,72 @@ function AppSidebar({
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu aria-label="Primary navigation">
-              {canManageSettings ? <ShellLink to="/" label="Platform overview" icon={<LayoutDashboard />} /> : null}
-              <ShellLink to="/publisher" label="Digital Nudge" icon={<Users />} />
-              <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
-              <ShellLink to="/history" label="History" icon={<History />} />
-              <ShellLink to="/shares" label="Shared links" icon={<Link2 />} />
-              <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
-              {canManageSettings ? (
-                <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
-              ) : null}
-              <ShellLink to="/developers/api" label="API docs" icon={<Code2 />} />
-              {canManageSettings ? (
-                <ShellLink to="/settings" label="Settings" icon={<Settings />} />
-              ) : null}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        <nav aria-label="Primary navigation">
+          <SidebarGroup>
+            <SidebarGroupLabel className="uppercase tracking-[0.12em]">Performance</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {canManageSettings ? <ShellLink to="/" label="Platform overview" icon={<LayoutDashboard />} /> : null}
+                <ShellLink to={canManageSettings ? '/publisher' : '/'} label="Digital Nudge" icon={<Users />} />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel className="uppercase tracking-[0.12em]">Workspace</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
+                <ShellLink to="/history" label="Review history" icon={<History />} />
+                <ShellLink to="/shares" label="Shared links" icon={<Link2 />} />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel className="uppercase tracking-[0.12em]">Operations</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
+                {canManageSettings ? <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} /> : null}
+                <ShellLink to="/developers/api" label="API docs" icon={<Code2 />} />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </nav>
       </SidebarContent>
-      <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
+      <SidebarFooter className="gap-3 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+        <nav aria-label="Account navigation">
+          <SidebarMenu>
+            {canManageSettings ? <ShellLink to="/settings" label="Settings" icon={<Settings />} /> : null}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                onClick={onToggleTheme}
+              >
+                {theme === 'dark' ? <Sun /> : <Moon />}
+                <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Sign out"
+                disabled={isSigningOut}
+                onClick={() => void lock()}
+              >
+                {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
+                <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </nav>
         {error ? (
           <p role="alert" className="rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive group-data-[collapsible=icon]:hidden">
             {error}
           </p>
         ) : null}
-        <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 text-muted-foreground group-data-[collapsible=icon]:hidden">
-          {role === 'employee' ? (
-            <><span className="font-medium text-foreground">{username || 'Employee'} access</span> · Review submission and results only. Settings are locked.</>
-          ) : (
-            'Results reflect effective policy, with approved internal exceptions identified separately.'
-          )}
+        <div role="group" aria-label="Signed-in account" className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
+          <p className="truncate font-medium">AdChecked</p>
+          <p className="truncate text-muted-foreground" title={role === 'employee' ? username : undefined}>{role === 'employee' ? `${username || 'Employee'} · Employee` : 'Platform admin'}</p>
         </div>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Sign out"
-              disabled={isSigningOut}
-              onClick={() => void lock()}
-            >
-              {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
-              <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-              onClick={onToggleTheme}
-            >
-              {theme === 'dark' ? <Sun /> : <Moon />}
-              <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
       </SidebarFooter>
       <SidebarBorderTrigger />
       <SidebarRail />
