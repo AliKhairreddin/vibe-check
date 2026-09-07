@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { assertApiLease } from "./apiJobState.ts";
 
 const ownerTypeValidator = v.union(v.literal("review"), v.literal("batch"));
 
@@ -19,6 +20,7 @@ export const generateUploadUrl = mutation({
 
 export const save = mutation({
   args: {
+    apiLeaseId: v.optional(v.string()),
     secret: v.string(),
     contentType: v.string(),
     filename: v.string(),
@@ -29,6 +31,9 @@ export const save = mutation({
   returns: v.object({ ownerId: v.string(), ownerType: ownerTypeValidator }),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    if (args.apiLeaseId && args.ownerType === "review") {
+      await assertApiLease(ctx, args.ownerId.split(":", 1)[0], args.apiLeaseId);
+    }
     const existing = await ctx.db
       .query("reportArtifacts")
       .withIndex("by_owner_type_and_owner_id", (query) =>

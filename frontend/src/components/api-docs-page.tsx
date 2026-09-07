@@ -34,11 +34,11 @@ const endpoints: Array<{
   title: string;
 }> = [
   {
-    description: 'Send an asset ID, creative name, and public HTTPS media URL. Returns job_id after the media is validated and queued.',
+    description: 'Send offer_name and 1–100 creatives with asset_id, creative_name, and media_url. The batch is saved before downloading begins.',
     method: 'POST',
     path: '/jobs',
     scope: 'reviews:create',
-    title: '1. Submit creative URL',
+    title: '1. Submit a batch',
   },
   {
     description: 'Poll by job_id. Status is always queued, processing, completed, or failed.',
@@ -48,11 +48,18 @@ const endpoints: Array<{
     title: '2. Get job status',
   },
   {
-    description: 'Return the asset ID, creative name, and complete structured analysis result after processing finishes.',
-    method: 'GET',
-    path: '/jobs/{job_id}/result',
+    description: 'Refresh up to 100 card colors without loading reports. Pending, failed, or unknown assets have color=null.',
+    method: 'POST',
+    path: '/assets/status-colors',
     scope: 'reviews:read',
-    title: '3. Get job result',
+    title: '3. Refresh colors',
+  },
+  {
+    description: 'Read the latest owned asset’s offer analysis, exact findings, transcript, and evidence. Use review_id to pin a submission.',
+    method: 'GET',
+    path: '/jobs/{asset_id}/result',
+    scope: 'reviews:read + evidence:read',
+    title: '4. Open asset details',
   },
   {
     description: 'Upload the currently running media. AdChecked hashes the bytes and only creates a review when something relevant changed.',
@@ -171,7 +178,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
   -H 'Authorization: Bearer YOUR_API_KEY' \\
   -H 'Content-Type: application/json' \\
   -H 'Idempotency-Key: lemmonmaxx-monday-001' \\
-  --data '{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'`;
+  --data '{"offer_name":"acp","creatives":[{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}]}'`;
   const sharedHistoryExample = `curl '${baseUrl}/reviews?offer_id=acp&limit=50' \\
   -H 'Authorization: Bearer YOUR_API_KEY'`;
   const sharedHistoryResponse = `{
@@ -217,9 +224,9 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
 
       <section className="grid gap-4 lg:grid-cols-3">
         {[
-          [Fingerprint, '1. Accept', 'AdChecked validates the public HTTPS destination, follows only safe redirects, verifies the file bytes, and returns job_id.'],
+          [Fingerprint, '1. Accept', 'Submit up to 100 creatives for one offer. AdChecked saves the batch and returns job_id before downloading media.'],
           [ScanSearch, '2. Process', 'Poll by job_id and receive only queued, processing, completed, or failed while the full pipeline runs.'],
-          [ArrowRight, '3. Retrieve', 'When status is completed, request the result endpoint for the asset ID, creative name, and complete structured analysis.'],
+          [ArrowRight, '3. Retrieve', 'Refresh lightweight card colors and fetch a completed asset’s full analysis and transcript when its detail view opens.'],
         ].map(([Icon, title, description]) => {
           const StepIcon = Icon as typeof Fingerprint;
           return (
@@ -238,16 +245,17 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
         <KeyRound />
         <AlertTitle>Keep the key in your backend</AlertTitle>
         <AlertDescription>
-          Never ship it to browser JavaScript. The three-endpoint flow needs
+          Never ship it to browser JavaScript. Submission and polling need
           <code className="mx-1 rounded bg-muted px-1.5 py-0.5">reviews:create</code> and
           <code className="mr-1 rounded bg-muted px-1.5 py-0.5">reviews:read</code>.
+          Full asset details also require <code>evidence:read</code>.
         </AlertDescription>
       </Alert>
 
       <section id="quick-start" className="grid gap-4">
         <div>
           <p className="text-sm font-medium text-muted-foreground">Quick start</p>
-          <h2 className="font-heading text-2xl font-semibold tracking-tight">Submit a creative URL</h2>
+          <h2 className="font-heading text-2xl font-semibold tracking-tight">Submit creatives for one offer</h2>
         </div>
         <CodeBlock code={jobExample} />
         <div className="grid gap-3 sm:grid-cols-3">
@@ -255,7 +263,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             <CardHeader>
               <CardTitle>HTTP 202 — accepted</CardTitle>
               <CardDescription>
-                The response includes asset_id, job_id, creative_name, queued status, status_url, and result_url.
+                Receive a batch job_id, counts, status_url, and ordered assets with stable review_id and result_url values.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -263,7 +271,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             <CardHeader>
               <CardTitle>GET status — poll</CardTitle>
               <CardDescription>
-                Continue while queued or processing. Stop on completed or failed.
+                Continue while queued or processing. Once all assets finish, the batch is completed if all succeeded, or failed if any failed. Successful assets remain readable.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -271,11 +279,25 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             <CardHeader>
               <CardTitle>GET result — complete</CardTitle>
               <CardDescription>
-                Returns asset_id, creative_name, completed status, and the full report in result.
+                Use the returned result_url for offer-specific findings, transcript, and evidence. Green means clean; yellow needs review; red indicates a critical issue.
               </CardDescription>
             </CardHeader>
           </Card>
         </div>
+        <p className="text-sm leading-6 text-muted-foreground">
+          Get valid IDs and exact names from <code>GET /offers</code>. Each batch uses a frozen snapshot of that offer’s policies.
+          Duplicate asset IDs, unknown fields, or more than 100 creatives are rejected before acceptance.
+          Reuse the same Idempotency-Key and payload to retry; a changed payload returns 409. Account quotas apply per creative to the whole batch.
+        </p>
+        <CodeBlock code={`curl -X POST '${baseUrl}/assets/status-colors' -H 'Authorization: Bearer YOUR_API_KEY' -H 'Content-Type: application/json' --data '{"asset_ids":["asset_12345"],"offer_name":"acp"}'`} />
+        <p className="text-sm leading-6 text-muted-foreground">
+          The color response contains <code>data</code> in request order. Queued, processing, failed, and unknown assets return a null color;
+          unknown assets have <code>status: not_found</code>. Detail requests return 409 until ready.
+          Asset lookup uses the latest submission, even while it is processing. Use <code>/assets/&#123;asset_id&#125;/result?review_id=…</code>
+          to select a specific submission or disambiguate an asset ID shaped like a review ID. Expired transcripts return null with
+          <code> evidence_status: expired</code>; the compliance result remains available.
+          Existing single-creative requests and result lookup by review job_id remain supported.
+        </p>
       </section>
 
       <Separator />

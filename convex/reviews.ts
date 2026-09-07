@@ -1,8 +1,9 @@
 import { paginationOptsValidator } from "convex/server";
-import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
+import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server.js";
 import { getConvexSize, v, type Value } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { classifyReviewVertical } from "./reviewVerticals";
+import { classifyReviewVertical } from "./reviewVerticals.ts";
+import { assertApiLease, syncApiJobState } from "./apiJobState.ts";
 
 type ResultStatus = "green" | "yellow" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
@@ -50,6 +51,7 @@ type OfferReportForStorage = {
 };
 
 const statusArgs = {
+  apiLeaseId: v.optional(v.string()),
   automationRunId: v.optional(v.string()),
   batchId: v.optional(v.string()),
   batchItemId: v.optional(v.string()),
@@ -641,8 +643,10 @@ function publicReview(review: {
 
 export const upsertStatus = mutation({
   args: statusArgs,
+  returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    const apiLink = await assertApiLease(ctx, args.jobId, args.apiLeaseId);
     const now = Date.now();
     const existing = await ctx.db
       .query("reviews")
@@ -710,6 +714,7 @@ export const upsertStatus = mutation({
     const reviewId = existing?._id ?? await ctx.db.insert("reviews", review);
     if (existing) await ctx.db.patch(existing._id, value);
     await syncReviewOfferStats(ctx, review, now);
+    await syncApiJobState(ctx, apiLink, review);
 
     if (jobState && automationRun) {
       await ctx.db.patch(jobState._id, {
@@ -727,13 +732,16 @@ export const upsertStatus = mutation({
 
 export const setReport = mutation({
   args: {
+    apiLeaseId: v.optional(v.string()),
     automationRunId: v.optional(v.string()),
     secret: v.string(),
     jobId: v.string(),
     report: v.any(),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    const apiLink = await assertApiLease(ctx, args.jobId, args.apiLeaseId);
     const existing = await ctx.db
       .query("reviews")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
@@ -795,6 +803,8 @@ export const setReport = mutation({
       { ...existing, ...value, report: args.report },
       now
     );
+    await syncApiJobState(ctx, apiLink, { ...existing, ...value }, args.report);
+    return null;
   },
 });
 
@@ -981,6 +991,7 @@ export const listInterrupted = query({
     secret: v.string(),
     limit: v.number(),
   },
+  returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const limit = Math.max(1, Math.min(args.limit, 500));
@@ -990,11 +1001,12 @@ export const listInterrupted = query({
       if (remaining <= 0) break;
       const matches = await ctx.db
         .query("reviews")
-        .withIndex("by_status_deleted_automation_updated", (query) =>
+        .withIndex("by_status_deleted_automation_api_batch_updated", (query) =>
           query
             .eq("status", status)
             .eq("deletedAt", undefined)
             .eq("automationRunId", undefined)
+            .eq("apiBatchId", undefined)
         )
         .order("asc")
         .take(remaining);
@@ -1023,6 +1035,7 @@ export const failInterrupted = mutation({
     jobIds: v.array(v.string()),
     message: v.string(),
   },
+  returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const now = Date.now();
@@ -1037,6 +1050,7 @@ export const failInterrupted = mutation({
         !review
         || review.deletedAt !== undefined
         || review.automationRunId !== undefined
+        || review.apiBatchId !== undefined
         || TERMINAL_BATCH_STATUSES.has(review.status)
       ) {
         continue;

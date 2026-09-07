@@ -57,6 +57,7 @@ type RequestField = {
   placeholder?: string;
   description?: string;
   accept?: string;
+  jsonValue?: boolean;
 };
 
 type Endpoint = {
@@ -104,8 +105,8 @@ const groups: EndpointGroup[] = [
   },
   {
     id: 'simple-jobs',
-    title: '3-API test flow',
-    description: 'Submit a public media URL, poll one normalized status, and retrieve the complete JSON result.',
+    title: 'Batch jobs & asset cards',
+    description: 'Submit up to 100 creatives for one offer, poll batch progress, refresh card colors, and open asset details.',
     icon: Play,
   },
   {
@@ -256,6 +257,41 @@ const jobIdField: RequestField = {
 
 const endpoints: Endpoint[] = [
   {
+    id: 'job-offers', group: 'simple-jobs', method: 'GET', path: '/api/v1/offers',
+    title: 'List available offers', description: 'Use an enabled offer ID or its exact display name as offer_name.', scope: 'reviews:read',
+  },
+  {
+    id: 'create-batch-job', group: 'simple-jobs', method: 'POST', path: '/api/v1/jobs',
+    title: 'Submit a batch', description: 'Atomically queue 1–100 creatives for one offer. Returns before downloads. Retry the same payload with the same Idempotency-Key.',
+    scope: 'reviews:create', bodyEncoding: 'json',
+    fields: [
+      { name: 'offer_name', label: 'Offer name or ID', location: 'json', required: true, placeholder: 'acp' },
+      { name: 'creatives', label: 'Creatives (JSON array)', location: 'json', kind: 'textarea', jsonValue: true, required: true,
+        defaultValue: '[{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}]',
+        description: 'Up to 100 objects; asset_id must be unique within this batch. Media URLs must remain downloadable until processing finishes.' },
+      { name: 'Idempotency-Key', label: 'Idempotency key', location: 'header', placeholder: 'lemmonmaxx-batch-001' },
+    ],
+  },
+  {
+    id: 'asset-colors', group: 'simple-jobs', method: 'POST', path: '/api/v1/assets/status-colors',
+    title: 'Refresh asset colors', description: 'Completed assets return green, yellow, or red. Queued, processing, failed, and unknown assets have color=null.',
+    scope: 'reviews:read', bodyEncoding: 'json',
+    fields: [
+      { name: 'asset_ids', label: 'Asset IDs (JSON array)', location: 'json', kind: 'textarea', jsonValue: true, required: true, defaultValue: '["asset_12345"]' },
+      { name: 'offer_name', label: 'Offer name or ID', location: 'json', placeholder: 'acp', description: 'Optional filter; otherwise uses each asset’s latest submission.' },
+    ],
+  },
+  {
+    id: 'asset-result', group: 'simple-jobs', method: 'GET', path: '/api/v1/assets/{asset_id}/result',
+    title: 'Open asset details', description: 'Full offer analysis, issue breakdown, transcript, and evidence. Also available at /jobs/{asset_id}/result. Pending or failed assets return 409.',
+    scope: 'reviews:read + evidence:read',
+    fields: [
+      { name: 'asset_id', label: 'Asset ID', location: 'path', required: true, placeholder: 'asset_12345' },
+      { name: 'review_id', label: 'Review ID', location: 'query', description: 'Optional: pin to a specific submission using the review_id returned in the batch.' },
+      { name: 'offer_name', label: 'Offer name or ID', location: 'query', placeholder: 'acp' },
+    ],
+  },
+  {
     id: 'api-index',
     group: 'getting-started',
     method: 'GET',
@@ -286,6 +322,7 @@ const endpoints: Endpoint[] = [
       { name: 'asset_id', label: 'Asset ID', location: 'json', required: true, placeholder: 'asset_12345' },
       { name: 'creative_name', label: 'Creative name', location: 'json', required: true, placeholder: 'Monday Creative' },
       { name: 'media_url', label: 'Media URL', location: 'json', required: true, placeholder: 'https://cdn.example.com/creative.mp4' },
+      { name: 'offer_name', label: 'Offer name or ID', location: 'json', placeholder: 'acp', description: 'Restrict analysis to this offer. Omitted only for legacy multi-offer submissions.' },
       {
         name: 'Idempotency-Key',
         label: 'Idempotency key',
@@ -301,7 +338,7 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/jobs/{job_id}',
     title: 'Get job status',
-    description: 'Return exactly one of queued, processing, completed, or failed.',
+    description: 'Return queued, processing, completed, or failed. Batch jobs also return counts and ordered asset cards; failed means at least one asset failed after all assets finished.',
     scope: 'reviews:read',
     fields: [jobIdField],
   },
@@ -599,6 +636,7 @@ function resolvedPath(
 }
 
 function requestJsonValue(field: RequestField, value: string) {
+  if (field.jsonValue) return JSON.parse(value);
   if (field.kind === 'number') return Number(value);
   if (field.kind === 'boolean') return value === 'true';
   return value;
@@ -627,8 +665,11 @@ function curlFor(
     const payload: Record<string, unknown> = {};
     for (const field of endpoint.fields ?? []) {
       if (field.location !== 'json') continue;
-      const value = fieldValue(endpoint.id, field, values, files) || `{${field.name}}`;
-      payload[field.name] = field.kind === 'number' && !value.startsWith('{') ? Number(value) : value;
+      const entered = fieldValue(endpoint.id, field, values, files);
+      if (!entered && !field.required) continue;
+      const value = entered || `{${field.name}}`;
+      try { payload[field.name] = requestJsonValue(field, value); }
+      catch { payload[field.name] = value; }
     }
     parts.push("  -H 'Content-Type: application/json'");
     parts.push(`  --data ${shellQuote(JSON.stringify(payload))}`);
@@ -957,7 +998,7 @@ function normalizedKey(value: string) {
 export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [openEndpoints, setOpenEndpoints] = useState(() => new Set(['scan-creative']));
+  const [openEndpoints, setOpenEndpoints] = useState(() => new Set(['create-batch-job']));
   const [values, setValues] = useState<Record<string, Record<string, string>>>(initialValues);
   const [files, setFiles] = useState<Record<string, Record<string, File | null>>>({});
   const [responses, setResponses] = useState<Record<string, EndpointResponse>>({});
@@ -1171,7 +1212,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
             <div className="grid gap-2">
               <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">AdChecked Partner API</h1>
               <p className="max-w-3xl text-base leading-7 text-muted-foreground">
-                Start with the three LemmonMaxx test endpoints for URL submission, normalized job status,
+                Start with the LemmonMaxx batch endpoints for offer-specific submission, card colors, job status,
                 and complete JSON results. The richer upload, scan, evidence, and report APIs remain available below.
               </p>
             </div>
@@ -1258,7 +1299,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
           <Separator />
           <div className="grid gap-2 rounded-xl border bg-card p-3 text-xs leading-5 text-muted-foreground">
             <div className="flex items-center gap-2 font-medium text-foreground"><ScanSearch className="size-4" /> Recommended first test</div>
-            <p>Open “Submit creative URL,” send one public MP4 or image URL, then paste its job_id into the next two endpoints.</p>
+            <p>List available offers, submit a one-creative batch, then use its job_id for progress and its asset_id for colors and details.</p>
           </div>
         </aside>
 

@@ -30,6 +30,7 @@ from .automation_storage import (
     release_review_automation_claim,
 )
 from .partner_api import deliver_pending_api_webhooks, finalize_api_review
+from .partner_jobs import claim_next_partner_job, run_partner_job
 
 logger = logging.getLogger(__name__)
 
@@ -566,7 +567,17 @@ async def _requeue_timed_out_job(job: QueuedReviewJob, worker_index: int) -> boo
 
 async def _process_queue(worker_index: int) -> None:
     while True:
-        job = await _queue.get()
+        try:
+            job = await asyncio.wait_for(_queue.get(), timeout=2)
+        except TimeoutError:
+            claim = await claim_next_partner_job()
+            if claim is not None:
+                _active_jobs.add(claim['job_id'])
+                try:
+                    await run_partner_job(claim, _job_timeout_seconds())
+                finally:
+                    _active_jobs.discard(claim['job_id'])
+            continue
         _queue_diagnostics['dequeued_count'] = int(
             _queue_diagnostics['dequeued_count']
         ) + 1

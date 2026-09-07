@@ -136,6 +136,13 @@ from .review_pipeline.automations import (
 from .review_pipeline.partner_api import (
     API_SCOPES,
     ApiJobInput,
+    ApiBatchJobInput,
+    ApiStatusColorsInput,
+    ApiAssetResult,
+    ApiBatchJobResponse,
+    ApiLegacyJobResult,
+    ApiSimpleJobResponse,
+    ApiStatusColorsResponse,
     ApiKeyInput,
     ApiPartnerInput,
     ApiPrincipal,
@@ -165,6 +172,7 @@ from .review_pipeline.partner_api import (
     rotate_webhook_secret,
     save_api_partner,
 )
+from .review_pipeline import partner_jobs
 
 COPY_LABEL_MAX_LENGTH = 72
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
@@ -632,12 +640,17 @@ def partner_review_meta(
     frame_interval_seconds:float,
     scene_detection:bool,
     external_id:str,
+    offer_name:str|None=None,
 )->ReviewRequestMeta:
     if policy_text.strip() and not principal.allow_custom_policy:
         raise HTTPException(403, 'This partner is not permitted to submit custom policy supplements.')
     if not 0.25 <= frame_interval_seconds <= 30:
         raise HTTPException(400, 'frame_interval_seconds must be between 0.25 and 30.')
     profiles,outcomes=resolve_review_offer_snapshot()
+    if offer_name is not None:
+        selected_id=resolve_partner_offer_id(principal,offer_name)
+        profiles=[profile for profile in profiles if profile.offer_id == selected_id]
+        outcomes=[outcome for outcome in outcomes if outcome.offer_id == selected_id]
     if principal.allowed_offer_ids:
         allowed=set(principal.allowed_offer_ids)
         profiles=[profile for profile in profiles if profile.offer_id in allowed]
@@ -660,6 +673,20 @@ def partner_review_meta(
         api_key_id=principal.api_key_id,
         api_external_id=external_id,
     )
+
+
+def resolve_partner_offer_id(principal:ApiPrincipal,offer_name:str)->str:
+    name=' '.join(offer_name.split()).casefold()
+    if not name:
+        raise HTTPException(422,'offer_name must not be empty.')
+    profiles,_=resolve_review_offer_snapshot()
+    matches=[profile for profile in profiles if name in {profile.offer_id.casefold(),' '.join(profile.display_name.split()).casefold()}]
+    if len(matches) != 1:
+        raise HTTPException(422,'Unknown, disabled, or ambiguous offer_name. Use an offer ID or exact name from GET /api/v1/offers.')
+    selected=matches[0]
+    if principal.allowed_offer_ids and selected.offer_id not in principal.allowed_offer_ids:
+        raise HTTPException(403,'This API partner is not permitted to evaluate that offer.')
+    return selected.offer_id
 
 
 def validate_external_id(value:str)->str:
@@ -1743,7 +1770,7 @@ def partner_api_openapi():
     ]
     schema=get_openapi(
         title='AdChecked Partner API',
-        version='1.0.0',
+        version='1.1.0',
         description=(
             'Server-to-server API for fingerprinting live ad media, reviewing changed '
             'creatives, and retrieving owned or explicitly shared offer reports. Expanded '
@@ -1795,8 +1822,23 @@ async def partner_api_me(request:Request):
     }
 
 
-@app.post('/api/v1/jobs', status_code=202)
-async def partner_create_job(payload:ApiJobInput,request:Request):
+@app.get('/api/v1/offers')
+async def partner_job_offers(request:Request):
+    """List enabled, entitled offer IDs and exact display names for offer_name."""
+    principal=await require_api_principal(request,'reviews:read')
+    profiles,_=await asyncio.to_thread(resolve_review_offer_snapshot)
+    return {'data':[{'offer_id':p.offer_id,'offer_name':p.display_name,'policy_version':p.version}
+                    for p in profiles if not principal.allowed_offer_ids or p.offer_id in principal.allowed_offer_ids]}
+
+
+@app.post('/api/v1/jobs', status_code=202, response_model=ApiBatchJobResponse|ApiSimpleJobResponse,
+          responses={409:{'description':'Idempotency conflict or no eligible offer'},429:{'description':'Batch exceeds account admission quota; no assets accepted'}})
+async def partner_create_job(payload:ApiJobInput|ApiBatchJobInput,request:Request):
+    """Submit one creative, or atomically queue 1–100 creatives for a single offer.
+
+    Batch requests require offer_name and return before media downloading. Use
+    Idempotency-Key to replay a submission; changed batch payloads return 409.
+    """
     principal=await require_api_principal(request,'reviews:create')
     idempotency_key=api_idempotency_key(request)
     meta=partner_review_meta(
@@ -1807,12 +1849,20 @@ async def partner_create_job(payload:ApiJobInput,request:Request):
         manual_transcript='',
         frame_interval_seconds=1.0,
         scene_detection=False,
-        external_id=payload.asset_id,
+        external_id=payload.asset_id if isinstance(payload,ApiJobInput) else '',
+        offer_name=payload.offer_name,
     )
     max_bytes=min(
         principal.max_upload_mb,
         int(os.getenv('MAX_UPLOAD_MB','400')),
     )*1024*1024
+    if isinstance(payload,ApiBatchJobInput):
+        try:
+            result=await asyncio.to_thread(partner_jobs.submit_batch,principal,payload,meta,idempotency_key,max_bytes)
+        except Exception as exc:
+            raise partner_storage_error(exc) from None
+        partner_jobs.wake_partner_jobs()
+        return result
     job_id=uuid.uuid4().hex
     jd=job_dir(job_id)
     claimed=False
@@ -1834,6 +1884,8 @@ async def partner_create_job(payload:ApiJobInput,request:Request):
             media_kind=downloaded.media_kind,
             file_name=downloaded.file_name,
             file_size=downloaded.file_size,
+            requested_offer_id=meta.primary_offer_id if payload.offer_name is not None else None,
+            offer_name=meta.offer_profiles[0].display_name if payload.offer_name is not None else None,
         )
         if not claim.get('created'):
             shutil.rmtree(jd,ignore_errors=True)
@@ -2410,16 +2462,100 @@ async def partner_review_history(
         raise partner_storage_error(exc) from None
 
 
-@app.get('/api/v1/jobs/{job_id}')
+@app.get('/api/v1/jobs/{job_id}',response_model=ApiBatchJobResponse|ApiSimpleJobResponse)
 async def partner_job_status(job_id:str,request:Request):
+    """Return queued, processing, completed, or failed; batches include per-asset states and counts."""
     principal=await require_api_principal(request,'reviews:read')
+    if job_id.startswith('batch_'):
+        try:
+            batch=await asyncio.to_thread(partner_jobs.get_batch,principal,job_id)
+        except Exception as exc:
+            raise partner_storage_error(exc) from None
+        if batch is None:
+            raise HTTPException(404,'Job not found.')
+        return batch
     review=await strictly_owned_api_review(principal,job_id)
     return simple_job_response(review)
 
 
-@app.get('/api/v1/jobs/{job_id}/result')
-async def partner_job_result(job_id:str,request:Request):
+@app.post('/api/v1/assets/status-colors',response_model=ApiStatusColorsResponse)
+async def partner_asset_colors(payload:ApiStatusColorsInput|list[str],request:Request):
+    """Read compact colors for one asset or up to 100. Unfinished/unknown assets have color=null."""
     principal=await require_api_principal(request,'reviews:read')
+    if isinstance(payload,list):
+        try:
+            payload=ApiStatusColorsInput(asset_ids=payload)
+        except ValueError as exc:
+            raise HTTPException(422,str(exc)) from None
+    offer_id=resolve_partner_offer_id(principal,payload.offer_name) if payload.offer_name is not None else None
+    try:
+        return await asyncio.to_thread(partner_jobs.status_colors,principal,
+                                      [payload.asset_id] if payload.asset_id is not None else payload.asset_ids or [],offer_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+
+
+async def partner_asset_details(principal:ApiPrincipal,asset_id:str,offer_name:str|None=None,review_id:str|None=None):
+    try:
+        principal.require_scope('evidence:read')
+    except PermissionError as exc:
+        raise HTTPException(403,str(exc)) from None
+    offer_id=resolve_partner_offer_id(principal,offer_name) if offer_name is not None else None
+    try:
+        card=await asyncio.to_thread(partner_jobs.get_asset,principal,asset_id,offer_id,review_id)
+    except Exception as exc:
+        raise partner_storage_error(exc) from None
+    if card is None:
+        raise HTTPException(404,'Asset not found.')
+    if card['status'] == 'failed':
+        raise HTTPException(409,'Asset processing failed; inspect the job status for details.')
+    if card['status'] != 'completed' or not card['report_ready']:
+        raise HTTPException(409,'Asset result is not ready yet.',headers={'Retry-After':'5'})
+    job_id=card['review_id']
+    report,evidence=await asyncio.gather(
+        asyncio.to_thread(get_stored_report,job_id),
+        asyncio.to_thread(get_api_evidence,principal,job_id),
+    )
+    if report is None:
+        raise HTTPException(404,'Asset result not found.')
+    selected_id=card.get('offer_id')
+    if selected_id and isinstance(report.get('offer_results'),list):
+        selected=next((result for result in report['offer_results'] if result.get('offer_id') == selected_id),None)
+        if selected is None:
+            raise HTTPException(409,'The saved report does not contain the requested offer.')
+        report=selected
+    if selected_id and report.get('offer_id') != selected_id:
+        raise HTTPException(409,'The saved report does not match the requested offer.')
+    bundle=evidence.get('bundle') if evidence else None
+    if bundle:
+        bundle={**bundle,'frames':[{**frame,'url':f'/api/v1/reviews/{job_id}/frames/{frame.get("filename")}'}
+                                 for frame in bundle.get('visual_frame_references',[]) if frame.get('filename')]}
+    return {**card,'result':report,'transcript':bundle.get('audio_transcript') if bundle else None,
+            'evidence':bundle,'evidence_status':'available' if bundle else 'expired' if evidence and evidence.get('expired') else 'unavailable',
+            'evidence_expires_at':evidence.get('expires_at') if evidence else None}
+
+
+@app.get('/api/v1/assets/{asset_id:path}/result',response_model=ApiAssetResult,
+         responses={403:{'description':'Requires reviews:read and evidence:read'},404:{'description':'Owned asset not found'},409:{'description':'Asset pending or failed; pending responses include Retry-After: 5'}})
+async def partner_asset_result(asset_id:str,request:Request,offer_name:str|None=None,review_id:str|None=None):
+    """Full owned asset analysis, transcript and evidence. Latest submission unless review_id is provided.
+
+    Requires reviews:read and evidence:read. Pending or failed: 409; unknown: 404.
+    Expired evidence is null with evidence_status=expired; the durable result remains available.
+    """
+    principal=await require_api_principal(request,'reviews:read')
+    return await partner_asset_details(principal,asset_id,offer_name,review_id)
+
+
+@app.get('/api/v1/jobs/{job_id}/result',response_model=ApiAssetResult|ApiLegacyJobResult)
+async def partner_job_result(job_id:str,request:Request,offer_name:str|None=None,review_id:str|None=None):
+    """Accept an asset_id for full details or a legacy review job_id for the original result contract.
+
+    Use /assets/{asset_id}/result to disambiguate an asset ID shaped like an AdChecked review ID.
+    """
+    principal=await require_api_principal(request,'reviews:read')
+    if not JOB_ID_PATTERN.fullmatch(job_id) or offer_name is not None or review_id is not None:
+        return await partner_asset_details(principal,job_id,offer_name,review_id)
     review=await strictly_owned_api_review(principal,job_id)
     normalized_status=simple_job_status(str(review.get('status') or 'queued'))
     if normalized_status == 'failed':
@@ -2625,6 +2761,12 @@ def internal_queue_state(request:Request):
 async def internal_review_recovery(request:Request):
     require_automation_secret(request)
     return await recover_and_drain_review_queue()
+
+
+@app.post('/api/internal/partner-jobs')
+async def internal_partner_jobs(request:Request):
+    require_automation_secret(request)
+    return await partner_jobs.drain_partner_jobs()
 
 
 @app.get('/api/automations', response_model=ReviewAutomationList)

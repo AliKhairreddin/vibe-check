@@ -1,7 +1,8 @@
 import { paginationOptsValidator } from "convex/server";
-import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server";
+import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { assertApiLease } from "./apiJobState.ts";
 
 const API_SCOPES = new Set([
   "evidence:read",
@@ -290,7 +291,7 @@ function publicScanObservation(observation: Doc<"apiScanObservations">) {
   };
 }
 
-async function finalizeReviewRecord(
+export async function finalizeReviewRecord(
   ctx: MutationCtx,
   link: Doc<"apiReviewLinks">,
   status: "complete" | "failed",
@@ -551,6 +552,8 @@ export const authenticate = mutation({
 
 export const claimReview = mutation({
   args: {
+    requestedOfferId: v.optional(v.string()),
+    offerName: v.optional(v.string()),
     apiKeyId: v.string(),
     creativeName: v.optional(v.string()),
     externalId: v.optional(v.string()),
@@ -586,7 +589,10 @@ export const claimReview = mutation({
           q.eq("partnerId", partner.partnerId).eq("idempotencyKey", args.idempotencyKey)
         )
         .unique();
-      if (duplicate) return { created: false, review_id: duplicate.jobId };
+      if (duplicate) {
+        if (duplicate.requestedOfferId !== args.requestedOfferId) throw new Error("Idempotency-Key was already used for a different offer");
+        return { created: false, review_id: duplicate.jobId };
+      }
     }
     if (!partner.unlimitedConcurrency) {
       const active = await ctx.db
@@ -617,6 +623,8 @@ export const claimReview = mutation({
       .unique();
     if (existingJob) throw new Error("Review ID already exists");
     await ctx.db.insert("apiReviewLinks", {
+      requestedOfferId: args.requestedOfferId,
+      offerName: args.offerName,
       apiKeyId: key.keyId,
       createdAt: now,
       creativeName: args.creativeName,
@@ -1123,6 +1131,7 @@ export const getSharedOfferReport = query({
 
 export const saveEvidence = mutation({
   args: {
+    apiLeaseId: v.optional(v.string()),
     bundle: v.any(),
     jobId: v.string(),
     partnerId: v.string(),
@@ -1131,6 +1140,7 @@ export const saveEvidence = mutation({
   returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    await assertApiLease(ctx, args.jobId, args.apiLeaseId);
     const link = await ctx.db
       .query("apiReviewLinks")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
@@ -1156,6 +1166,7 @@ export const saveEvidence = mutation({
     };
     if (existing) await ctx.db.patch(existing._id, value);
     else await ctx.db.insert("apiEvidenceBundles", { ...value, createdAt: now });
+    await ctx.db.patch(link._id, { evidenceExpiresAt: expiresAt });
     return { expires_at: expiresAt, review_id: args.jobId };
   },
 });
@@ -1174,7 +1185,7 @@ export const getEvidence = query({
       .query("apiEvidenceBundles")
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
-    if (!evidence) return { bundle: null, expired: false, expires_at: null };
+    if (!evidence) return { bundle: null, expired: (link.evidenceExpiresAt ?? Infinity) <= args.now, expires_at: link.evidenceExpiresAt ?? null };
     if (evidence.expiresAt <= args.now) {
       return { bundle: null, expired: true, expires_at: evidence.expiresAt };
     }
@@ -1192,6 +1203,7 @@ export const finalizeReview = mutation({
       .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
       .unique();
     if (!link) return { finalized: false, reason: "not_api_review" };
+    if (link.queueManaged) return { finalized: false, reason: "managed_queue" };
     return await finalizeReviewRecord(ctx, link, args.status);
   },
 });
@@ -1208,6 +1220,7 @@ export const reconcileTerminalReviews = mutation({
       .take(Math.max(1, Math.min(args.limit, 100)));
     let finalized = 0;
     for (const link of active) {
+      if (link.queueManaged) continue;
       const review = await ctx.db
         .query("reviews")
         .withIndex("by_job_id", (q) => q.eq("jobId", link.jobId))

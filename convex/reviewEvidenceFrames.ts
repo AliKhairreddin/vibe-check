@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { assertApiLease } from "./apiJobState.ts";
 
 function requireSecret(secret: string) {
   const expected = process.env.CONVEX_HTTP_SECRET;
@@ -29,6 +30,7 @@ export const generateUploadUrl = mutation({
 
 export const save = mutation({
   args: {
+    apiLeaseId: v.optional(v.string()),
     secret: v.string(),
     jobId: v.string(),
     frames: v.array(storedFrameValidator),
@@ -36,6 +38,7 @@ export const save = mutation({
   returns: v.object({ jobId: v.string(), frameCount: v.number() }),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
+    if (args.apiLeaseId) await assertApiLease(ctx, args.jobId, args.apiLeaseId);
     if (args.frames.length > 30) {
       throw new Error("At most 30 evidence frames can be saved per review");
     }

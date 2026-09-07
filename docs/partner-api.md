@@ -88,69 +88,134 @@ The media endpoint supports `GET`, `HEAD`, and standard single HTTP byte ranges 
 
 Keep the API key in the ACP backend. Browser `<img>` and `<video>` elements cannot safely attach a secret Bearer header, so ACP should expose its own authenticated same-origin proxy. That proxy should forward the browser's `Range` header and preserve AdChecked's `200`/`206` status plus `Content-Type`, `Content-Length`, `Content-Range`, and `Accept-Ranges` response headers.
 
-## LemmonMaxx phase-one test: three endpoints
+## LemmonMaxx batch jobs and asset cards
 
-The smallest integration surface accepts an existing public media URL and exposes only four job states. It uses the same API key, ownership checks, quotas, and analysis pipeline as the richer upload API.
+The four-endpoint workflow accepts **1–100 creatives per batch**, evaluates only the requested offer, and provides lightweight card colors plus full asset details. Existing API keys work with their existing scopes and account limits; no key rotation is needed.
 
-### 1. Submit a creative URL
+### 1. Submit a batch for one offer
 
 ```bash
 curl -X POST 'https://api.adchecked.com/api/v1/jobs' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: lemmonmaxx-monday-001' \
-  --data '{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}'
+  -H 'Idempotency-Key: lemmonmaxx-batch-001' \
+  --data '{
+    "offer_name": "acp",
+    "creatives": [
+      {"asset_id":"asset_12345","creative_name":"Monday Video","media_url":"https://cdn.example.com/creative.mp4"},
+      {"asset_id":"asset_12346","creative_name":"Monday Image","media_url":"https://cdn.example.com/creative.png"}
+    ]
+  }'
 ```
 
-The URL must be public HTTPS and resolve to an MP4, JPG, PNG, or WebP file. AdChecked rejects embedded credentials, private/local destinations, unsafe redirects, empty responses, unsupported file signatures, and media larger than the API partner's upload limit. A successful request returns HTTP `202` after the media is validated and queued:
+Required scope: `reviews:create`. `offer_name` accepts an enabled offer ID or its exact display name, ignoring case and repeated whitespace. Use authenticated `GET /api/v1/offers` (`reviews:read`) to discover valid `offer_id`, `offer_name`, and `policy_version` values. Unknown, ambiguous, or disabled names return `422`; an offer outside the account's entitlement returns `403`. There is no fallback to a different offer. The selected policy and override snapshot is frozen at submission and reused for retries. No other offer is evaluated or included in the batch's findings.
+
+Each creative requires a nonempty `asset_id` (up to 200 characters), `creative_name` (300), and public HTTPS `media_url` (4,000). Asset IDs must be unique within a batch. Empty batches, more than 100 items, duplicate IDs, and unexpected fields return `422` before any job is created.
+
+Batch admission is atomic: all creatives are saved in Convex with their ownership, IDs, policy snapshot, and quota reservation before HTTP `202`. Monthly and queued-submission limits count each creative; a batch exceeding either limit returns `429` with `Retry-After: 60`, and none of it is accepted. LemmonMaxx's unlimited admission settings allow 100-item batches while execution remains bounded by worker capacity.
+
+The response includes:
 
 ```json
 {
-  "asset_id": "asset_12345",
-  "job_id": "ab12...",
-  "creative_name": "Monday Creative",
+  "job_id": "batch_0123456789abcdef0123456789abcdef",
   "status": "queued",
+  "total": 2,
+  "counts": {"queued": 2, "processing": 0, "completed": 0, "failed": 0},
+  "offer_id": "acp",
+  "offer_name": "ACP",
   "progress": 0,
-  "message": "Queued for processing",
-  "status_url": "/api/v1/jobs/ab12...",
-  "result_url": "/api/v1/jobs/ab12.../result"
+  "status_url": "/api/v1/jobs/batch_0123456789abcdef0123456789abcdef",
+  "assets": [
+    {
+      "asset_id": "asset_12345",
+      "review_id": "11111111111111111111111111111111",
+      "job_id": "batch_0123456789abcdef0123456789abcdef",
+      "creative_name": "Monday Video",
+      "status": "queued",
+      "color": null,
+      "clean": null,
+      "finding_count": null,
+      "report_ready": false,
+      "result_url": "/api/v1/assets/asset_12345/result?review_id=11111111111111111111111111111111"
+    }
+  ]
 }
 ```
 
-### 2. Poll status
+The example abbreviates `assets`; the real response includes every asset in submission order, plus offer metadata, progress, message, status URL, and timestamps on each card. Processing can start before the response is read, so some states may already be `processing`.
+
+Always supply `Idempotency-Key` (visible ASCII, at most 200 characters). Repeating the same batch payload and key returns the original batch with its current status without downloading again, charging quota again, or creating duplicates. Reusing the key with a changed payload returns `409`. Retrying failed creative analysis requires a new key. Keys are isolated per partner; batch keys and legacy single-review keys use separate namespaces.
+
+Media downloads happen **after** acceptance. URLs must stay publicly downloadable while queued and throughout automatic retries. Downloads verify public destinations, redirects, file signatures (MP4, JPG, PNG, WebP), and the account's file-size limit. An inaccessible or invalid file fails its asset, while other assets continue. A failed analysis is an execution failure, not a red compliance result.
+
+### 2. Fetch batch status
 
 ```http
 GET /api/v1/jobs/{job_id}
 Authorization: Bearer YOUR_API_KEY
 ```
 
-`status` is always one of `queued`, `processing`, `completed`, or `failed`. The response also echoes `asset_id`, allowing the caller to map the AdChecked job back to its own asset. The endpoint deliberately collapses the richer internal stages so a phase-one client needs only one polling state machine.
+Required scope: `reviews:read`. Pass the returned `batch_…` ID. The response has the same batch/card shape as submission:
 
-### 3. Retrieve the result
+| Status | Meaning |
+| --- | --- |
+| `queued` | Every asset is waiting to execute. |
+| `processing` | Some work has started and at least one asset remains unfinished. |
+| `completed` | Every asset finished successfully, regardless of its compliance color. |
+| `failed` | Every asset is terminal and at least one failed. Successful assets remain readable. |
 
-```http
-GET /api/v1/jobs/{job_id}/result
-Authorization: Bearer YOUR_API_KEY
+`counts` and individual asset states distinguish partial failures. Individual assets can be opened before the entire batch finishes. Poll every five seconds or slower. A partner cannot read another partner's batch, even if it has shared-offer history access.
+
+### 3. Refresh card colors
+
+```bash
+curl -X POST 'https://api.adchecked.com/api/v1/assets/status-colors' \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  --data '{"asset_ids":["asset_12345","asset_12346"],"offer_name":"acp"}'
 ```
 
-Before completion this returns HTTP `409` with `Retry-After: 5`. Once complete it returns:
+Required scope: `reviews:read`. Accepts exactly one of `{"asset_id":"…"}` or `{"asset_ids":["…"]}`; a raw JSON array `["asset_12345","asset_12346"]` is also supported. Maximum 100 IDs per request. Optional `offer_name` selects the latest submission for that offer. Without it, the latest submission for each asset wins, including a newer pending or failed submission. Responses always use `data`, in request order:
 
 ```json
 {
-  "asset_id": "asset_12345",
-  "job_id": "ab12...",
-  "creative_name": "Monday Creative",
-  "status": "completed",
-  "result": {
-    "overall_status": "green",
-    "findings": []
-  }
+  "data": [
+    {"asset_id":"asset_12345","status":"completed","color":"green","clean":true,"finding_count":0,"review_id":"11111111111111111111111111111111","job_id":"batch_0123456789abcdef0123456789abcdef","offer_id":"acp"},
+    {"asset_id":"asset_12346","status":"processing","color":null,"clean":null,"finding_count":null,"review_id":"22222222222222222222222222222222","job_id":"batch_0123456789abcdef0123456789abcdef","offer_id":"acp"}
+  ]
 }
 ```
 
-`asset_id` is required, may be up to 200 characters, and is stored as the caller's stable external identifier. It does not replace `job_id`: one asset can have multiple review jobs over time.
+Completed analysis returns `green` (clean), `yellow` (needs review), or `red` (critical issue). `clean` is true only for a green result with zero findings. Legacy amber/orange results normalize to yellow. Queued, processing, failed, unknown, or deleted assets return `color: null`; they never appear clean by default. Unknown/deleted/other-partner assets use `status: "not_found"` and null IDs. This endpoint reads indexed compact records without loading transcripts, evidence, or full reports.
 
-This URL-based contract is convenient when LemmonMaxx already has a durable media URL. Direct file upload remains the stronger production option when URLs are short-lived or access-controlled, or when the caller needs byte-for-byte control over what AdChecked receives. Both routes feed the same analysis pipeline and can be used side by side.
+### 4. Open asset details
+
+```http
+GET /api/v1/jobs/{asset_id}/result
+Authorization: Bearer YOUR_API_KEY
+```
+
+Required scopes: `reviews:read` and `evidence:read`. The equivalent, unambiguous path is `GET /api/v1/assets/{asset_id}/result`; the `result_url` returned for each card uses it and pins the exact `review_id`.
+
+One asset can have many submissions over time or for different offers. A plain asset lookup selects its **latest submission**, even if unfinished. Add `offer_name` to select its latest submission for one offer, or `review_id` to pin an exact submission. The review ID must belong to both this asset and this API partner. URL-encode asset IDs; use the `/assets/` path for IDs containing slashes or resembling AdChecked's 32-character hexadecimal review IDs. On the legacy `/jobs/{id}/result` route, a 32-character hexadecimal ID without selectors is interpreted as a review job ID.
+
+The response contains the asset card fields plus:
+
+- `result`: complete structured evaluation for the requested offer, including summary, source-specific evaluation, risk assessment, and exact `findings` with policy references and remediation. A clean result has `overall_status: "green"` and `findings: []`.
+- `transcript`: extracted timestamped audio transcript (also in `evidence.audio_transcript`); silent/image creatives may have no speech.
+- `evidence`: media metadata, OCR, visual observations, limitations, submitted context, and protected frame URLs.
+- `evidence_status`: `available`, `expired`, or `unavailable`; `evidence_expires_at` is a Unix timestamp in milliseconds or null.
+
+An unfinished result returns `409` with `Retry-After: 5`; a failed result returns `409` without suggesting that a result will become ready. Unknown or foreign assets return `404`. Transcripts/evidence follow the partner's retention window. After expiry, the durable compliance report remains available while `transcript` and `evidence` are null and `evidence_status` is `expired`.
+
+### Single-creative compatibility
+
+The existing JSON object with `asset_id`, `creative_name`, and `media_url` remains supported. It now accepts optional `offer_name` to evaluate one offer. Omitting it preserves the original multi-offer behavior. A single submission still returns its review job ID, and `GET /jobs/{job_id}` plus `GET /jobs/{job_id}/result` retain their original contract and scopes. Single submissions validate and download the media before returning `202`; use a one-item batch for durable acceptance before download.
+
+### Queue operation
+
+The existing Cloudflare containers process durable batch jobs in their normal bounded worker slots. A scheduled dispatcher wakes the configured backend shards for waiting work. Convex claims, heartbeats, and fencing tokens recover interrupted work and prevent expired attempts from overwriting current status, reports, or evidence. Transient failures retry up to three total attempts; invalid media fails without repeated analysis. This reuses the configured compute capacity rather than requiring a new service or an unbounded number of concurrent model calls.
 
 ## LemmonMaxx live-creative scans
 

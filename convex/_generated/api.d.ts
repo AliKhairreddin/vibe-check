@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as apiJobState from "../apiJobState.js";
+import type * as apiJobs from "../apiJobs.js";
 import type * as apiPartners from "../apiPartners.js";
 import type * as automations from "../automations.js";
 import type * as batches from "../batches.js";
@@ -29,6 +31,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  apiJobState: typeof apiJobState;
+  apiJobs: typeof apiJobs;
   apiPartners: typeof apiPartners;
   automations: typeof automations;
   batches: typeof batches;

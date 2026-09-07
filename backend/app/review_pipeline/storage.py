@@ -8,8 +8,13 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+
+# Propagates through asyncio tasks and anyio/asyncio thread workers. Durable API
+# attempts carry a fencing token so an expired worker cannot publish a result.
+api_job_lease: ContextVar[str | None] = ContextVar('api_job_lease', default=None)
 
 from .models import (
     BatchReviewContext,
@@ -151,6 +156,9 @@ def backfill_review_offer_stats(*, max_pages:int=10)->dict[str, Any]:
 def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
     if not convex_enabled():
         return None
+    lease_id = api_job_lease.get()
+    if lease_id and path in {'reviews:upsertStatus', 'reviews:setReport', 'apiPartners:saveEvidence', 'reviewEvidenceFrames:save', 'reportArtifacts:save'}:
+        args = {**args, 'apiLeaseId': lease_id}
     payload={
         'path': path,
         'args': {**args, 'secret': CONVEX_HTTP_SECRET},

@@ -187,6 +187,7 @@ export default defineSchema({
     .index("by_job_id", ["jobId"])
     .index("by_run_id", ["runId"]),
   reviews: defineTable({
+    apiBatchId: v.optional(v.string()),
     automationRunId: v.optional(v.string()),
     batchId: v.optional(v.string()),
     batchItemId: v.optional(v.string()),
@@ -225,6 +226,9 @@ export default defineSchema({
       "deletedAt",
       "automationRunId",
       "updatedAt",
+    ])
+    .index("by_status_deleted_automation_api_batch_updated", [
+      "status", "deletedAt", "automationRunId", "apiBatchId", "updatedAt",
     ])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewOfferStats: defineTable({
@@ -439,8 +443,40 @@ export default defineSchema({
     .index("by_key_id", ["keyId"])
     .index("by_partner_id", ["partnerId"])
     .index("by_token_hash", ["tokenHash"]),
+  apiJobBatches: defineTable({
+    batchId: v.string(),
+    partnerId: v.string(),
+    idempotencyKey: v.optional(v.string()),
+    requestHash: v.string(),
+    offerId: v.string(),
+    offerName: v.string(),
+    requestMeta: v.string(),
+    maxBytes: v.number(),
+    total: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_batch_id", ["batchId"])
+    .index("by_partner_id_and_idempotency_key", ["partnerId", "idempotencyKey"]),
   apiReviewLinks: defineTable({
     apiKeyId: v.string(),
+    batchId: v.optional(v.string()),
+    batchPosition: v.optional(v.number()),
+    requestedOfferId: v.optional(v.string()),
+    offerName: v.optional(v.string()),
+    executionStatus: v.optional(v.union(
+      v.literal("queued"), v.literal("processing"), v.literal("completed"), v.literal("failed")
+    )),
+    resultColor: v.optional(v.union(v.literal("green"), v.literal("yellow"), v.literal("red"))),
+    findingCount: v.optional(v.number()),
+    evidenceExpiresAt: v.optional(v.number()),
+    reportReady: v.optional(v.boolean()),
+    progress: v.optional(v.number()),
+    message: v.optional(v.string()),
+    queueManaged: v.optional(v.boolean()),
+    mediaUrl: v.optional(v.string()),
+    leaseId: v.optional(v.string()),
+    availableAt: v.optional(v.number()),
+    attempts: v.optional(v.number()),
     createdAt: v.number(),
     creativeName: v.optional(v.string()),
     externalId: v.optional(v.string()),
@@ -460,6 +496,10 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_job_id", ["jobId"])
+    .index("by_batch_id_and_batch_position", ["batchId", "batchPosition"])
+    .index("by_partner_id_and_external_id", ["partnerId", "externalId"])
+    .index("by_partner_id_and_external_id_and_requested_offer_id", ["partnerId", "externalId", "requestedOfferId"])
+    .index("by_queue_managed_and_status_and_available_at", ["queueManaged", "status", "availableAt"])
     .index("by_partner_id_and_created_at", ["partnerId", "createdAt"])
     .index("by_partner_id_and_idempotency_key", ["partnerId", "idempotencyKey"])
     .index("by_partner_id_and_status_and_created_at", ["partnerId", "status", "createdAt"])

@@ -325,6 +325,31 @@ async function hasDueAutomations(env: Env): Promise<boolean> {
   });
 }
 
+async function dispatchPartnerJobs(env: Env): Promise<void> {
+  const response = await fetch(`${env.CONVEX_URL.replace(/\/$/, "")}/api/query`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: "apiJobs:pending", args: { secret: env.CONVEX_HTTP_SECRET, now: Date.now() }, format: "json" }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Partner queue check failed: ${response.status}`);
+  const result = await response.json() as { status?: string; value?: boolean };
+  if (result.status !== "success") throw new Error("Partner queue check failed");
+  if (!result.value) return;
+  const count = backendShardCount(env);
+  const results = await Promise.allSettled(Array.from({ length: count }, async (_, index) => {
+    const name = count === 1 ? backendSlot(env) : `${backendSlot(env)}-${index}`;
+    const drained = await env.REVIEW_BACKEND.getByName(name).fetch(new Request(
+      new URL("/api/internal/partner-jobs", ADMIN_ORIGIN),
+      { method: "POST", headers: { "x-automation-secret": env.CONVEX_HTTP_SECRET } },
+    ));
+    if (!drained.ok) throw new Error(`Partner queue drain failed: ${drained.status}`);
+    await drained.body?.cancel();
+  }));
+  console.log(JSON.stringify({ event: "partner_queue_dispatch", shards: count,
+    failed: results.filter(result => result.status === "rejected").length }));
+}
+
 export class ReviewBackend extends Container<Env> {
   defaultPort = 8000;
   sleepAfter = "30m";
@@ -575,6 +600,7 @@ export default {
     return secureResponse(notFoundResponse(), surface);
   },
   scheduled(_controller, env, ctx): void {
+    ctx.waitUntil(dispatchPartnerJobs(env));
     const optionalSecrets = env as OptionalSecrets;
     const headers = new Headers({
       "content-type": "application/json",

@@ -171,9 +171,12 @@ The server-to-server Partner API is rooted at `https://api.adchecked.com/api/v1`
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/v1/jobs` | Submit an asset ID, creative name, and public HTTPS media URL; receive `job_id` |
-| `GET /api/v1/jobs/{job_id}` | Read normalized `queued/processing/completed/failed` status |
-| `GET /api/v1/jobs/{job_id}/result` | Read the complete JSON analysis with the asset ID and creative name |
+| `GET /api/v1/offers` | Discover entitled offer IDs and exact names |
+| `POST /api/v1/jobs` | Atomically queue 1–100 creatives with `offer_name`, or submit a legacy single creative |
+| `GET /api/v1/jobs/{job_id}` | Read `queued/processing/completed/failed` status, batch counts, and asset cards |
+| `POST /api/v1/assets/status-colors` | Refresh up to 100 asset colors without loading full reports |
+| `GET /api/v1/jobs/{asset_id}/result` | Read owned asset analysis, transcript, and issue breakdown; legacy review job IDs remain supported |
+| `GET /api/v1/assets/{asset_id}/result` | Unambiguous asset details; optional `review_id` pins an exact submission |
 | `POST /api/v1/reviews` | Authenticated partner creative or copy-only submission |
 | `GET /api/v1/reviews?offer_id=acp` | Browse authorized offer history with traffic-light results, summaries, preview findings, and artifact URLs |
 | `POST /api/v1/scans/creative` | Hash currently served ad media and review it only when media, copy, or policy changed |

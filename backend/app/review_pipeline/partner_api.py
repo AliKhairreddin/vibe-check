@@ -17,7 +17,7 @@ from typing import Any, Literal
 from urllib.parse import urljoin, urlsplit
 
 import httpx
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import storage
 
@@ -53,7 +53,8 @@ class PartnerMediaError(RuntimeError):
         self.detail = detail
 
 
-class ApiJobInput(BaseModel):
+class ApiCreativeInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     asset_id: str = Field(min_length=1, max_length=200)
     creative_name: str = Field(min_length=1, max_length=300)
     media_url: str = Field(min_length=1, max_length=4_000)
@@ -80,6 +81,115 @@ class ApiJobInput(BaseModel):
     @classmethod
     def normalize_media_url(cls, value: str) -> str:
         return validate_media_url(value)
+
+
+class ApiJobInput(ApiCreativeInput):
+    offer_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ApiBatchJobInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    offer_name: str = Field(min_length=1, max_length=200)
+    creatives: list[ApiCreativeInput] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode='after')
+    def unique_assets(self):
+        if len({creative.asset_id for creative in self.creatives}) != len(self.creatives):
+            raise ValueError('Each asset_id must be unique within a batch.')
+        if not self.offer_name.strip():
+            raise ValueError('offer_name must not be empty.')
+        return self
+
+
+class ApiStatusColorsInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    asset_id: str | None = Field(default=None, min_length=1, max_length=200)
+    asset_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    offer_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def validate_ids(self):
+        if (self.asset_id is None) == (self.asset_ids is None):
+            raise ValueError('Provide exactly one of asset_id or asset_ids.')
+        values = [self.asset_id] if self.asset_id is not None else self.asset_ids or []
+        normalized = [ApiCreativeInput.normalize_asset_id(value) for value in values]
+        if any(len(value) > 200 for value in normalized):
+            raise ValueError('Asset IDs must be 200 characters or fewer.')
+        if self.asset_id is not None:
+            self.asset_id = normalized[0]
+        else:
+            self.asset_ids = normalized
+        return self
+
+
+ApiExecutionStatus = Literal['queued', 'processing', 'completed', 'failed']
+ApiColor = Literal['green', 'yellow', 'red']
+
+
+class ApiSimpleJobResponse(BaseModel):
+    asset_id: str | None
+    job_id: str
+    creative_name: str | None
+    status: ApiExecutionStatus
+    progress: int
+    message: str
+    status_url: str
+    result_url: str
+
+
+class ApiAssetCard(ApiSimpleJobResponse):
+    review_id: str
+    offer_id: str | None
+    offer_name: str | None
+    color: ApiColor | None
+    clean: bool | None
+    finding_count: int | None
+    report_ready: bool
+    updated_at: int
+
+
+class ApiBatchJobResponse(BaseModel):
+    job_id: str
+    status: ApiExecutionStatus
+    total: int
+    counts: dict[ApiExecutionStatus, int]
+    assets: list[ApiAssetCard]
+    offer_id: str
+    offer_name: str
+    progress: int
+    status_url: str
+    created_at: int
+
+
+class ApiStatusColor(BaseModel):
+    asset_id: str
+    status: Literal['queued', 'processing', 'completed', 'failed', 'not_found']
+    color: ApiColor | None
+    review_id: str | None
+    job_id: str | None
+    offer_id: str | None = None
+    clean: bool | None = None
+    finding_count: int | None = None
+
+
+class ApiStatusColorsResponse(BaseModel):
+    data: list[ApiStatusColor]
+
+
+class ApiLegacyJobResult(BaseModel):
+    asset_id: str | None
+    job_id: str
+    creative_name: str | None
+    status: Literal['completed']
+    result: dict[str, Any]
+
+
+class ApiAssetResult(ApiAssetCard):
+    result: dict[str, Any]
+    transcript: Any
+    evidence: dict[str, Any] | None
+    evidence_status: Literal['available', 'expired', 'unavailable']
+    evidence_expires_at: int | None
 
 
 class ApiPartnerInput(BaseModel):
@@ -491,6 +601,8 @@ def claim_api_review(
     media_kind: str,
     file_name: str,
     file_size: int | None,
+    requested_offer_id: str | None = None,
+    offer_name: str | None = None,
 ) -> dict[str, Any]:
     args: dict[str, Any] = {
         'apiKeyId': principal.api_key_id,
@@ -507,6 +619,9 @@ def claim_api_review(
         args['fileSize'] = file_size
     if idempotency_key:
         args['idempotencyKey'] = idempotency_key
+    if requested_offer_id:
+        args['requestedOfferId'] = requested_offer_id
+        args['offerName'] = offer_name or requested_offer_id
     value = _convex_call('mutation', 'apiPartners:claimReview', args)
     if not isinstance(value, dict):
         raise RuntimeError('Partner API storage returned an invalid review claim.')
