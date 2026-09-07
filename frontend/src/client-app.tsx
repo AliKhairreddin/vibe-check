@@ -19,7 +19,7 @@ import {
   ClientDashboardPage,
   ClientVerticalPage,
 } from '@/components/client-insights';
-import { PublishersPage, ClientSharedLinksPage, ClientPlanPage } from '@/components/publisher-pages';
+import { PublishersPage, PublisherUploadsPage, ClientSharedLinksPage, ClientPlanPage } from '@/components/publisher-pages';
 import { ClientSettingsPage } from '@/components/client-settings';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -55,6 +55,11 @@ const clientReviewsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/client/reviews',
   component: ClientReviewsPage,
+});
+const publisherUploadsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/uploads',
+  component: PublisherUploadsPage,
 });
 const clientSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -107,6 +112,7 @@ const router = createRouter({
     loginRoute,
     clientRoute,
     clientReviewsRoute,
+    publisherUploadsRoute,
     clientSettingsRoute,
     clientVerticalRoute,
     clientBatchRoute,

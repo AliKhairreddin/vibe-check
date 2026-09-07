@@ -40,7 +40,7 @@ export function PublishersPage() {
   </div></ClientPortalFrame>;
 }
 
-export function PublisherHomePage() {
+export function PublisherUploadsPage() {
   const { session } = useClientAuth();
   const { clientId } = useWorkspace();
   const cache = useQueryClient();
@@ -49,7 +49,7 @@ export function PublisherHomePage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const query = useQuery({ queryKey: ['submissions', clientId], queryFn: () => listSubmissions(clientId), refetchInterval: 5000 });
+  const query = useQuery({ queryKey: ['submissions', clientId], queryFn: () => listSubmissions(clientId), enabled: session.role === 'publisher', refetchInterval: 5000 });
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -82,7 +82,7 @@ export function PublisherHomePage() {
   }
   const advertiser = session.portals.find(p => p.client_id === clientId)?.display_name;
   if (session.role !== 'publisher') return <ClientPortalFrame><p>Uploads are available inside publisher workspaces.</p></ClientPortalFrame>;
-  return <ClientPortalFrame><div className="mx-auto grid max-w-6xl gap-6"><div><p className="text-sm text-muted-foreground">{advertiser} / {session.publisher_name}</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">Your creative workspace</h1><p className="mt-2 text-sm text-muted-foreground">Upload creatives, track their checks, and see feedback from {advertiser}.</p></div>
+  return <ClientPortalFrame><div className="mx-auto grid max-w-6xl gap-6"><div><p className="text-sm text-muted-foreground">{advertiser} / {session.publisher_name}</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">Uploads &amp; progress</h1><p className="mt-2 text-sm text-muted-foreground">Upload creatives, track their checks, and see feedback from {advertiser}.</p></div>
     <Card><CardHeader><CardTitle>Upload for review</CardTitle><CardDescription>{advertiser}’s saved guidelines are applied automatically.</CardDescription></CardHeader><CardContent><form className="grid gap-5" onSubmit={event => void submit(event)}><fieldset disabled={busy} className="grid gap-5"><div className="rounded-xl border border-dashed bg-muted/20 p-6"><Label htmlFor="publisher-files" className="mb-3 flex items-center gap-2"><Upload className="size-4" />Creative files</Label><Input id="publisher-files" name="creative" type="file" multiple accept="video/*,image/jpeg,image/png,image/webp" onChange={event => setFiles(Array.from(event.target.files ?? []))} /><p className="mt-3 text-xs text-muted-foreground">Images and video · Up to 400 MB per file · Up to 100 files per submission</p>{files.length ? <p className="mt-3 break-words text-sm">{files.map(file => file.name).join(', ')}</p> : null}</div><div className="grid gap-2"><Label htmlFor="publisher-copy">Ad copy</Label><Textarea id="publisher-copy" name="ad_copy" maxLength={50000} rows={4} placeholder="Paste the copy accompanying these creatives, or submit copy on its own." /></div><div className="grid gap-2"><Label htmlFor="publisher-vertical">Insurance vertical</Label><Select
       id="publisher-vertical"
       name="vertical"

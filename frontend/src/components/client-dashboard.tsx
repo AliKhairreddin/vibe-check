@@ -192,6 +192,8 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       document.title = 'Batch performance · AdChecked';
     } else if (pathname === '/client/reviews') {
       document.title = 'Review queue · AdChecked';
+    } else if (pathname === '/client/uploads') {
+      document.title = 'Uploads & progress · AdChecked';
     } else if (pathname === '/client/settings') {
       document.title = 'Settings · AdChecked';
     } else if (pathname === '/client/publishers') {
@@ -790,7 +792,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
                   value={clientId}
                   onValueChange={(value) => {
                     setClientId(value);
-                    void navigate({ to: '/client' });
+                    void navigate({ to: pathname === '/client/uploads' ? '/client/uploads' : '/client' });
                   }}
                   options={session.portals.map((portal) => ({ value: portal.client_id, label: portal.display_name }))}
                   menuLabel="Switch advertiser"
@@ -832,14 +834,12 @@ export function ClientPortalFrame({ children, workspaceName }: {
               <SidebarGroupLabel className="uppercase tracking-[0.12em]">Performance</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {session.role !== 'publisher' ? (
-                    <SidebarMenuItem>
-                      <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
-                        <Gauge />
-                        <span>Overview</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ) : null}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
+                      <Gauge />
+                      <span>Overview</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton aria-current={pathname === '/client/verticals/auto-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
                       <CarFront />
@@ -861,7 +861,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
                 <SidebarMenu>
                   {session.role === 'publisher' ? (
                     <SidebarMenuItem>
-                      <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Uploads & progress" onClick={() => void navigate({ to: '/client' })}>
+                      <SidebarMenuButton aria-current={pathname === '/client/uploads' ? 'page' : undefined} isActive={pathname === '/client/uploads'} tooltip="Uploads & progress" onClick={() => void navigate({ to: '/client/uploads' })}>
                         <Upload />
                         <span>Uploads & progress</span>
                       </SidebarMenuButton>

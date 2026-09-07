@@ -78,23 +78,32 @@ test('uses neutral client workspace labels and exposes result filtering', () => 
 
 test('labels the client footer with the signed-in company', () => {
   assert.match(clientDashboardSource, /workspaceName=\{selectedPortal\?\.display_name\}/);
-  assert.match(clientDashboardSource, /<p className="font-medium">\{resolvedWorkspaceName\}<\/p>/);
+  assert.match(clientDashboardSource, /const signedInCompany = session\.role === 'publisher'\s*\? session\.publisher_name \?\? session\.username\s*: resolvedWorkspaceName/);
+  assert.match(clientDashboardSource, /aria-label="Signed-in company"[\s\S]*\{signedInCompany\}<\/p>/);
   assert.doesNotMatch(clientDashboardSource, />Client view<\/p>/);
   assert.doesNotMatch(clientDashboardSource, />Client workspace<\/p>/);
 });
 
-test('organizes client navigation by workflow, performance, and utilities', () => {
+test('groups metrics under performance, actions under workspace, and account controls above the company', () => {
   const workspace = clientDashboardSource.indexOf('>Workspace</SidebarGroupLabel>');
   const reviewQueue = clientDashboardSource.indexOf('<span>Review queue</span>');
   const performance = clientDashboardSource.indexOf('>Performance</SidebarGroupLabel>');
+  const overview = clientDashboardSource.indexOf('<span>Overview</span>');
+  const homeInsurance = clientDashboardSource.indexOf('<span>Home Insurance</span>');
   const sidebarFooter = clientDashboardSource.indexOf('<SidebarFooter');
+  const plan = clientDashboardSource.indexOf('<span>Plan & usage</span>');
   const settings = clientDashboardSource.lastIndexOf('<span>Settings</span>');
+  const company = clientDashboardSource.indexOf('aria-label="Signed-in company"');
 
-  assert.ok(workspace >= 0);
+  assert.ok(performance >= 0);
+  assert.ok(overview > performance);
+  assert.ok(homeInsurance > overview);
+  assert.ok(workspace > homeInsurance);
   assert.ok(reviewQueue > workspace);
-  assert.ok(performance > reviewQueue);
-  assert.ok(sidebarFooter > performance);
-  assert.ok(settings > sidebarFooter);
+  assert.ok(sidebarFooter > reviewQueue);
+  assert.ok(plan > sidebarFooter);
+  assert.ok(settings > plan);
+  assert.ok(company > settings);
   assert.match(clientDashboardSource, /<span>Auto Insurance<\/span>/);
   assert.match(clientDashboardSource, /<CarFront\s*\/>\s*<span>Auto Insurance<\/span>/);
   assert.match(clientDashboardSource, /<span>Home Insurance<\/span>/);
@@ -102,6 +111,7 @@ test('organizes client navigation by workflow, performance, and utilities', () =
 });
 
 test('provides dashboard, vertical, and batch insight routes', () => {
+  assert.match(clientAppSource, /path: '\/client\/uploads'/);
   assert.match(clientAppSource, /path: '\/client\/verticals\/\$verticalId'/);
   assert.match(clientAppSource, /path: '\/client\/\$clientId\/batches\/\$batchId'/);
   assert.match(clientInsightsSource, /Auto Insurance/);

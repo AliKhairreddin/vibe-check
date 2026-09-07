@@ -1,5 +1,4 @@
 import { useWorkspace } from './workspace-context';
-import { PublisherHomePage } from './publisher-pages';
 import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
@@ -14,6 +13,7 @@ import {
   Layers3,
   Sparkles,
   TriangleAlert,
+  Upload,
   XCircle,
 } from 'lucide-react';
 import {
@@ -90,8 +90,7 @@ type InsightBatch = {
 };
 
 export function ClientDashboardPage() {
-  const { session } = useClientAuth();
-  return session.role === 'publisher' ? <PublisherHomePage /> : <ClientInsights />;
+  return <ClientInsights />;
 }
 
 export function ClientVerticalPage() {
@@ -187,6 +186,7 @@ export function ClientBatchPage() {
 function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
   const { session } = useClientAuth();
   const { clientId, publisherId } = useWorkspace();
+  const isPublisher = session.role === 'publisher';
   const portals = session.portals.filter(portal => portal.client_id === clientId);
   const queries = useQueries({
     queries: portals.map((portal) => ({
@@ -220,13 +220,16 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
       <div className="grid gap-5">
         <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-1">
-            <p className="text-sm font-medium text-muted-foreground">{selectedVertical ? 'Performance by insurance line' : 'Workspace overview'}</p>
-            <h1 className="font-heading text-3xl font-semibold tracking-tight">{selectedVertical?.label ?? 'Creative performance'}</h1>
+            <p className="text-sm font-medium text-muted-foreground">{isPublisher ? `${session.publisher_name ?? session.username} / ${portals[0]?.display_name ?? 'Advertiser'}` : selectedVertical ? 'Performance by insurance line' : 'Workspace overview'}</p>
+            <h1 className="font-heading text-3xl font-semibold tracking-tight">{selectedVertical?.label ?? (isPublisher ? 'Overview' : 'Creative performance')}</h1>
             <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-              {selectedVertical?.description ?? 'See effective results, decision progress, and batch performance across every creative.'}
+              {selectedVertical?.description ?? (isPublisher ? 'Track your creative results, advertiser decisions, and batch performance for this advertiser.' : 'See effective results, decision progress, and batch performance across every creative.')}
             </p>
           </div>
-          <Link to="/client/reviews" className={buttonVariants({ size: 'sm' })}><Files />Open review queue</Link>
+          <div className="flex flex-wrap gap-2">
+            {isPublisher ? <Link to="/client/uploads" className={buttonVariants({ size: 'sm', variant: 'outline' })}><Upload />Upload creatives</Link> : null}
+            <Link to="/client/reviews" className={buttonVariants({ size: 'sm' })}><Files />Open review queue</Link>
+          </div>
         </section>
 
         {isLoading ? (
@@ -235,7 +238,7 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
           <div className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-4">
             <InsightMetric icon={Gauge} label="Creatives" value={reviews.length} detail={`${batches.length} batch${batches.length === 1 ? '' : 'es'}`} />
             <InsightMetric icon={CheckCircle2} label="Effective green" value={counts.green} detail={`${approvalRate}% ready rate`} tone="success" />
-            <InsightMetric icon={Clock3} label="Needs decision" value={pending} detail={pending ? 'Waiting for client review' : 'Everything reviewed'} />
+            <InsightMetric icon={Clock3} label={isPublisher ? 'Awaiting advertiser' : 'Needs decision'} value={pending} detail={pending ? 'Waiting for advertiser review' : 'Everything reviewed'} />
             <InsightMetric icon={Sparkles} label="Decision overrides" value={overrides} detail="Different from AdChecked recommendation" />
           </div>
         )}
