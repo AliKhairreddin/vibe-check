@@ -314,6 +314,7 @@ class ReviewRequestMeta(BaseModel):
     automation_run_id: str | None = None
     automation_file_id: str | None = None
     automation_file_modified_time: str = ''
+    publisher_id: str | None = None
     api_partner_id: str | None = None
     api_key_id: str | None = None
     api_external_id: str = ''

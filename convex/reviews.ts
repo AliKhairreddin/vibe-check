@@ -1,3 +1,4 @@
+import { attributeInternalReview } from './publisherOwnership.ts';
 import { paginationOptsValidator } from "convex/server";
 import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server.js";
 import { getConvexSize, v, type Value } from "convex/values";
@@ -28,6 +29,8 @@ type OfferResultEntry = {
 };
 
 type ReviewForStats = {
+  progress?: number;
+  message?: string;
   batchId?: string;
   createdAt: number;
   deletedAt?: number;
@@ -360,6 +363,7 @@ async function syncReviewOfferStats(
   const activeOfferIds = new Set(offerIdsForReview(projectedReview));
 
   for (const offerId of activeOfferIds) {
+    await attributeInternalReview(ctx, offerId, review.jobId, review.createdAt);
     const resultStatus = resultStatusForReview(projectedReview, offerId) ?? undefined;
     const internalDisposition = internalDispositionForReview(projectedReview, offerId) ?? undefined;
     const preview = previewForReport(reportForOffer(projectedReview, offerId), resultStatus ?? null);
@@ -378,6 +382,8 @@ async function syncReviewOfferStats(
       sourceStatus: review.sourceStatus,
       sourceUrl: review.sourceUrl,
       status: review.status,
+      progress: review.progress,
+      message: review.message,
       updatedAt,
       vertical: review.vertical ?? classifyReviewVertical(review.fileName ?? ""),
     };
@@ -956,6 +962,8 @@ export const softDelete = mutation({
       throw new Error("Only complete or failed review jobs can be deleted");
     }
 
+    const media = await ctx.db.query('reviewMedia').withIndex('by_job_id', q => q.eq('jobId', args.jobId)).unique();
+    if (media) { await ctx.storage.delete(media.storageId); await ctx.db.delete(media._id); }
     const deletedAt = Date.now();
     await ctx.db.patch(review._id, { deletedAt, updatedAt: deletedAt });
     await syncReviewOfferStats(

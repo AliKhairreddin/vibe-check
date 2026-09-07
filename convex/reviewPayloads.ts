@@ -94,7 +94,15 @@ export const remove = mutation({
       .unique();
     if (!payload) return { removed: false };
     await ctx.storage.delete(payload.manifestStorageId);
-    if (payload.mediaStorageId) await ctx.storage.delete(payload.mediaStorageId);
+    if (payload.mediaStorageId) {
+      const review = await ctx.db.query('reviews').withIndex('by_job_id', q => q.eq('jobId', args.jobId)).unique();
+      const media = await ctx.db.query('reviewMedia').withIndex('by_job_id', q => q.eq('jobId', args.jobId)).unique();
+      if (review && review.deletedAt === undefined && review.status === 'complete') {
+        if (media && media.storageId !== payload.mediaStorageId) await ctx.storage.delete(media.storageId);
+        if (media) await ctx.db.patch(media._id, { storageId: payload.mediaStorageId });
+        else await ctx.db.insert('reviewMedia', { jobId: args.jobId, storageId: payload.mediaStorageId });
+      } else await ctx.storage.delete(payload.mediaStorageId);
+    }
     await ctx.db.delete(payload._id);
     return { removed: true };
   },

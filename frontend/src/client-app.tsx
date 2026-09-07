@@ -19,6 +19,7 @@ import {
   ClientDashboardPage,
   ClientVerticalPage,
 } from '@/components/client-insights';
+import { PublishersPage, ClientSharedLinksPage, ClientPlanPage } from '@/components/publisher-pages';
 import { ClientSettingsPage } from '@/components/client-settings';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -93,8 +94,15 @@ const legacyKissterraReviewRoute = createRoute({
   },
 });
 
+const publishersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/client/publishers', component: PublishersPage });
+const sharesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/client/shares', component: ClientSharedLinksPage });
+const planRoute = createRoute({ getParentRoute: () => rootRoute, path: '/client/plan', component: ClientPlanPage });
+
 const router = createRouter({
   routeTree: rootRoute.addChildren([
+    publishersRoute,
+    sharesRoute,
+    planRoute,
     indexRoute,
     loginRoute,
     clientRoute,

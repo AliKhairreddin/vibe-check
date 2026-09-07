@@ -6,6 +6,8 @@ backend/.pytest_cache/
 node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+.playwright-cli/
+output/playwright/
 .env*
 !.env.example
 data/jobs/*

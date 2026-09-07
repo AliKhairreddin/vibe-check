@@ -972,9 +972,10 @@ def _client_review_preview(
     }
 
 
-def list_client_reviews(client_id:str, offer_id:str, limit:int=1000)->list[dict[str, Any]]:
+def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_id:str|None=None)->list[dict[str, Any]]:
     limit=max(1, min(limit, 1000))
     remote=_convex_call('query', 'clientReviews:list', {
+        **({'publisherId':publisher_id} if publisher_id else {}),
         'clientId':client_id,
         'offerId':offer_id,
         'limit':limit,

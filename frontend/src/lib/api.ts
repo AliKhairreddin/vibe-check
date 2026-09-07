@@ -240,6 +240,7 @@ export type ClientReviewDecision = {
 };
 
 export type ClientReviewItem = {
+  publisher_id?: string | null;
   ai_status: OverallStatus;
   effective_status: OverallStatus;
   batch_created_at: number;
@@ -275,7 +276,10 @@ export type ClientPortalSummary = {
 
 export type ClientSession = {
   portals: ClientPortalSummary[];
-  role: 'admin' | 'client';
+  role: 'admin' | 'client' | 'publisher';
+  publisher_id?: string;
+  publisher_name?: string;
+  publisher_ids?: Record<string, string>;
   username: string;
 };
 
@@ -616,7 +620,7 @@ function parseJson<T>(body: string): T {
   }
 }
 
-async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, { ...init, headers: requestHeaders(init?.headers) });
   const body = await response.text();
   if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
@@ -640,16 +644,17 @@ function shardHeaders(shardKey: string, headers?: HeadersInit): Headers {
 
 export async function createReview(
   form: FormData,
-  onUploadProgress?: (progress: number) => void
+  onUploadProgress?: (progress: number) => void,
+  apiBase = '/api'
 ): Promise<Status> {
   const creative = form.get('creative');
   const shardKey = reviewShardKey(form);
   if (onUploadProgress && creative instanceof File && creative.size > CHUNKED_UPLOAD_THRESHOLD) {
-    return createChunkedReview(form, creative, onUploadProgress, shardKey);
+    return createChunkedReview(form, creative, onUploadProgress, shardKey, apiBase);
   }
 
   if (!onUploadProgress) {
-    return requestJson<Status>('/api/reviews', {
+    return requestJson<Status>(`${apiBase}/reviews`, {
       method: 'POST',
       headers: shardHeaders(shardKey),
       body: form,
@@ -658,7 +663,7 @@ export async function createReview(
 
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open('POST', '/api/reviews');
+    request.open('POST', `${apiBase}/reviews`);
     request.setRequestHeader(BACKEND_SHARD_HEADER, shardKey);
 
     request.upload.onprogress = (event) => {
@@ -728,9 +733,10 @@ async function createChunkedReview(
   form: FormData,
   creative: File,
   onUploadProgress: (progress: number) => void,
-  shardKey: string
+  shardKey: string,
+  apiBase = '/api'
 ): Promise<Status> {
-  const upload = await requestJson<ChunkedUpload>('/api/uploads', {
+  const upload = await requestJson<ChunkedUpload>(`${apiBase}/uploads`, {
     method: 'POST',
     headers: shardHeaders(shardKey, { 'content-type': 'application/json' }),
     body: JSON.stringify({
@@ -748,7 +754,8 @@ async function createChunkedReview(
       upload.upload_id,
       index,
       creative.slice(start, end),
-      shardKey
+      shardKey,
+      apiBase
     );
     onUploadProgress(Math.round((end / creative.size) * 100));
   }
@@ -758,13 +765,14 @@ async function createChunkedReview(
     if (key !== 'creative' && typeof value === 'string') completionForm.append(key, value);
   }
   try {
-    return await requestJson<Status>(`/api/uploads/${upload.upload_id}/complete`, {
+    return await requestJson<Status>(`${apiBase}/uploads/${upload.upload_id}/complete`, {
       method: 'POST',
       headers: shardHeaders(shardKey),
       body: completionForm,
     });
   } catch (completionError) {
     try {
+      if (apiBase !== '/api') throw completionError;
       return await getStatus(upload.upload_id);
     } catch {
       throw completionError;
@@ -776,13 +784,14 @@ async function sendChunkWithRetry(
   uploadId: string,
   index: number,
   chunk: Blob,
-  shardKey: string
+  shardKey: string,
+  apiBase = '/api'
 ) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt += 1) {
     let response: Response | undefined;
     try {
-      response = await fetchWithAdminAccess(`/api/uploads/${uploadId}/chunks/${index}`, {
+      response = await fetchWithAdminAccess(`${apiBase}/uploads/${uploadId}/chunks/${index}`, {
         method: 'PUT',
         headers: shardHeaders(shardKey, { 'content-type': 'application/octet-stream' }),
         body: chunk,
@@ -1095,8 +1104,9 @@ export async function clearClientSession(): Promise<void> {
   });
 }
 
-export async function listClientReviews(clientId: string, limit = 1000): Promise<ClientReviewList> {
+export async function listClientReviews(clientId: string, limit = 1000, publisherId?: string): Promise<ClientReviewList> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (publisherId && publisherId !== 'all') params.set('publisher_id', publisherId);
   return requestJson<ClientReviewList>(
     `/api/client/${encodeURIComponent(clientId)}/reviews?${params}`,
     { headers: clientHeaders() }

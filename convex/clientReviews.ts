@@ -56,6 +56,7 @@ const previewValidator = v.object({
   summary: v.string(),
 });
 const reviewValidator = v.object({
+  publisherId: v.optional(v.string()),
   aiStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
   effectiveStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
   batchCreatedAt: v.number(),
@@ -197,12 +198,14 @@ export const list = query({
     clientId: v.string(),
     offerId: v.string(),
     limit: v.number(),
+    publisherId: v.optional(v.string()),
   },
   returns: v.array(reviewValidator),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const limit = Math.max(1, Math.min(args.limit, 1000));
-    const rawStats = await ctx.db
+    const publisherRows = args.publisherId ? await ctx.db.query("publisherSubmissions").withIndex("by_publisher_id", q => q.eq("publisherId", args.publisherId!)).order("desc").take(1000) : null;
+    const rawStats = publisherRows ? (await Promise.all(publisherRows.filter(row => row.clientId === args.clientId).map(row => ctx.db.query("reviewOfferStats").withIndex("by_job_id_and_offer_id", q => q.eq("jobId", row.jobId).eq("offerId", args.offerId)).unique()))).filter((row): row is Doc<"reviewOfferStats"> => Boolean(row && row.deletedAt === undefined && row.status === "complete")).slice(0, limit) : await ctx.db
       .query("reviewOfferStats")
       .withIndex("by_offer_id_and_deleted_at_and_status_and_created_at", (q) =>
         q
@@ -217,6 +220,7 @@ export const list = query({
       if (!statsByJobId.has(stat.jobId)) statsByJobId.set(stat.jobId, stat);
     }
     const stats = [...statsByJobId.values()];
+    const ownership = await Promise.all(stats.map(stat => ctx.db.query("publisherSubmissions").withIndex("by_client_id_and_job_id", q => q.eq("clientId", args.clientId).eq("jobId", stat.jobId)).unique()));
     const [legacyReviews, legacyReports, decisions, decisionHistory] = await Promise.all([
       Promise.all(stats.map((stat) => stat.previewReady && stat.fileName !== undefined
         ? null
@@ -290,6 +294,7 @@ export const list = query({
         sourceUrl: stat.sourceUrl ?? review?.sourceUrl,
       });
       return [{
+        ...(ownership[index] ? { publisherId: ownership[index]!.publisherId } : {}),
         aiStatus,
         effectiveStatus: effectiveStatus(aiStatus, decision),
         batchCreatedAt: batch?.createdAt ?? stat.createdAt,

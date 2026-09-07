@@ -8,6 +8,10 @@ import {
   type ReactNode,
 } from 'react';
 import { Menu } from '@base-ui/react/menu';
+import { Users, Link2, CreditCard } from 'lucide-react';
+import { WorkspaceProvider, useWorkspace } from './workspace-context';
+import { ShareButton } from './share-controls';
+import { listPublishers } from '@/lib/workspace-api';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import {
@@ -188,6 +192,12 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       document.title = 'Review queue · AdChecked';
     } else if (pathname === '/client/settings') {
       document.title = 'Settings · AdChecked';
+    } else if (pathname === '/client/publishers') {
+      document.title = 'Publishers · AdChecked';
+    } else if (pathname === '/client/shares') {
+      document.title = 'Shared links · AdChecked';
+    } else if (pathname === '/client/plan') {
+      document.title = 'Plan & usage · AdChecked';
     } else if (pathname.startsWith('/client/verticals/')) {
       document.title = 'Insurance performance · AdChecked';
     } else {
@@ -206,6 +216,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
     setError('');
     try {
       const nextSession = await verifyClientCredentials(normalizedUsername, password);
+      queryClient.clear();
       setPassword('');
       const firstPortal = nextSession.portals[0];
       if (firstPortal) {
@@ -240,7 +251,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
     setPassword('');
     setSession(null);
     setError('');
-    queryClient.removeQueries({ queryKey: ['client'] });
+    queryClient.clear();
     await navigate({ to: '/login', replace: true });
     setIsSigningOut(false);
   }
@@ -304,7 +315,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
 
   return (
     <ClientAuthContext.Provider value={{ error, isSigningOut, logout, session }}>
-      {children}
+      <WorkspaceProvider session={session}>{children}</WorkspaceProvider>
     </ClientAuthContext.Provider>
   );
 }
@@ -312,11 +323,9 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
 function ClientDashboard() {
   const { session } = useClientAuth();
   const queryClient = useQueryClient();
-  const storedClientId = window.sessionStorage.getItem(SELECTED_CLIENT_KEY);
-  const initialClientId = session.portals.some((portal) => portal.client_id === storedClientId)
-    ? storedClientId!
-    : session.portals[0]?.client_id ?? '';
-  const [selectedClientId, setSelectedClientId] = useState(initialClientId);
+  const { clientId: selectedClientId, setClientId: setSelectedClientId, publisherId } = useWorkspace();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  useEffect(() => setSelectedIds(new Set()), [selectedClientId, publisherId]);
   const [preferences, setPreferences] = useState<ClientPreferences>(() => readClientPreferences());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [expandedCreatives, setExpandedCreatives] = useState<Set<string>>(new Set());
@@ -329,8 +338,8 @@ function ClientDashboard() {
   const queries = useQueries({
     queries: session.portals.map((portal) => ({
       enabled: portal.client_id === selectedClientId || loadBackgroundPortals,
-      queryKey: ['client', portal.client_id, 'reviews'],
-      queryFn: () => listClientReviews(portal.client_id),
+      queryKey: ['client', portal.client_id, 'reviews', publisherId],
+      queryFn: () => listClientReviews(portal.client_id, 1000, publisherId),
       refetchInterval: portal.client_id === selectedClientId ? 30_000 : 120_000,
       refetchOnWindowFocus: false,
       staleTime: 30_000,
@@ -487,7 +496,7 @@ function ClientDashboard() {
             <div className="flex flex-wrap items-center gap-2">
               {session.portals.length > 1 ? (
                 <select
-                  aria-label="Client workspace"
+                  aria-label="Advertiser workspace"
                   className="h-8 rounded-md border bg-background px-2 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={selectedPortal.client_id}
                   onChange={(event) => selectClient(event.currentTarget.value)}
@@ -609,6 +618,12 @@ function ClientDashboard() {
             </Button>
           </section>
 
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card px-3 py-2">
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" aria-label="Select visible creatives" checked={visibleGroups.length > 0 && visibleGroups.every(group => group.reviews.every(review => selectedIds.has(review.job_id)))} onChange={event => setSelectedIds(event.target.checked ? new Set(visibleGroups.flatMap(group => group.reviews.map(review => review.job_id))) : new Set())} />Select visible</label>
+            <span className="text-xs text-muted-foreground">{selectedIds.size} selected</span>
+            <ShareButton key={`${selectedClientId}:${publisherId}:${[...selectedIds].join(',')}`} jobIds={[...selectedIds]} clientId={selectedClientId} />
+            {selectedIds.size ? <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button> : null}
+          </div>
           {selectedQuery?.error ? (
             <Alert variant="destructive">
               <AlertCircle />
@@ -651,7 +666,7 @@ function ClientDashboard() {
                         <span className="text-red-700 dark:text-red-300">{red} red</span>
                         <span className="text-yellow-700 dark:text-yellow-300">{yellow} yellow</span>
                         <span className="text-emerald-700 dark:text-emerald-300">{green} green</span>
-                        {isExpanded ? (
+                        {isExpanded && session.role !== 'publisher' ? (
                           <Button type="button" size="xs" variant="outline" className="ml-1" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
                             {bulkMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
                             Approve recommendations ({recommendedPending.length})
@@ -677,8 +692,9 @@ function ClientDashboard() {
                             : 'grid-cols-1'
                         )}>
                           {group.reviews.map((review) => (
+                            <div key={review.job_id} className="grid gap-1">
+                            <label className="flex items-center gap-2 px-1 text-xs text-muted-foreground"><input type="checkbox" aria-label={`Select ${review.file_name}`} checked={selectedIds.has(review.job_id)} onChange={event => setSelectedIds(current => { const next = new Set(current); if (event.target.checked) next.add(review.job_id); else next.delete(review.job_id); return next; })} />Select creative</label>
                             <CreativeReviewCard
-                              key={review.job_id}
                               clientId={selectedPortal.client_id}
                               density={preferences.density}
                               isExpanded={expandedCreatives.has(review.job_id)}
@@ -692,6 +708,7 @@ function ClientDashboard() {
                                 setExpandedCreatives((current) => toggleSetValue(current, review.job_id));
                               }}
                             />
+                            </div>
                           ))}
                         </div>
                       </CardContent>
@@ -722,6 +739,8 @@ export function ClientPortalFrame({ children, workspaceName }: {
 }) {
   const { error, isSigningOut, logout, session } = useClientAuth();
   const navigate = useNavigate();
+  const { clientId, publisherId, setClientId, setPublisherId } = useWorkspace();
+  const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) });
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
     return window.localStorage.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
@@ -733,7 +752,8 @@ export function ClientPortalFrame({ children, workspaceName }: {
   const routePortal = session.portals.find((portal) => portal.client_id === routeClientId);
   const resolvedWorkspaceName = workspaceName
     ?? routePortal?.display_name
-    ?? (session.portals.length === 1 ? session.portals[0]?.display_name : 'All companies');
+    ?? session.portals.find(portal => portal.client_id === clientId)?.display_name
+    ?? session.portals[0]?.display_name;
 
   useEffect(() => {
     window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
@@ -748,14 +768,18 @@ export function ClientPortalFrame({ children, workspaceName }: {
               <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><ScanSearch className="size-4" strokeWidth={2.2} /></span>
               <span className="grid min-w-0 leading-tight group-data-[collapsible=icon]:hidden">
                 <span className="truncate font-heading text-sm font-semibold">AdChecked</span>
-                <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Client portal</span>
+                <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{session.role === 'publisher' ? 'Publisher portal' : 'Advertiser portal'}</span>
               </span>
             </Link>
             <SidebarTrigger className="md:hidden" aria-label="Close navigation" title="Close navigation" />
           </div>
+          <div className="grid gap-3 border-t pt-3 group-data-[collapsible=icon]:hidden">
+            <div className="grid gap-1"><Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-advertiser">Advertiser</Label><select id="sidebar-advertiser" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm font-medium" value={clientId} onChange={event => { setClientId(event.target.value); void navigate({ to: '/client' }); }}>{session.portals.map(portal => <option key={portal.client_id} value={portal.client_id}>{portal.display_name}</option>)}</select></div>
+            {session.role === 'publisher' ? <div><p className="text-[11px] text-muted-foreground">Publisher</p><p className="mt-1 truncate text-sm font-medium">{session.publisher_name}</p></div> : <div className="grid gap-1"><Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-publisher">Publisher</Label><select id="sidebar-publisher" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm" value={publisherId} onChange={event => { setPublisherId(event.target.value); if (!['/client', '/client/reviews'].includes(pathname) && !pathname.startsWith('/client/verticals/')) void navigate({ to: '/client/reviews' }); }}><option value="all">All publishers</option>{publishers.data?.map(publisher => <option key={publisher.publisherId} value={publisher.publisherId}>{publisher.name}{publisher.status === 'suspended' ? ' (suspended)' : ''}</option>)}</select>{publishers.error ? <p className="text-xs text-destructive">Publisher list unavailable</p> : null}</div>}
+          </div>
         </SidebarHeader>
         <SidebarContent>
-          <nav aria-label="Client navigation">
+          <nav aria-label="Workspace navigation">
             <SidebarGroup>
               <SidebarGroupLabel className="uppercase tracking-[0.12em]">Workspace</SidebarGroupLabel>
               <SidebarGroupContent>
@@ -763,7 +787,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
                   <SidebarMenuItem>
                     <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
                       <Gauge />
-                      <span>Overview</span>
+                      <span>{session.role === 'publisher' ? 'Uploads & progress' : 'Overview'}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                   <SidebarMenuItem>
@@ -772,6 +796,9 @@ export function ClientPortalFrame({ children, workspaceName }: {
                       <span>Review queue</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
+                  {session.role !== 'publisher' ? <SidebarMenuItem><SidebarMenuButton isActive={pathname === '/client/publishers'} tooltip="Publishers" onClick={() => void navigate({ to: '/client/publishers' })}><Users /><span>Publishers</span></SidebarMenuButton></SidebarMenuItem> : null}
+                  <SidebarMenuItem><SidebarMenuButton isActive={pathname === '/client/shares'} tooltip="Shared links" onClick={() => void navigate({ to: '/client/shares' })}><Link2 /><span>Shared links</span></SidebarMenuButton></SidebarMenuItem>
+                  {session.role !== 'publisher' ? <SidebarMenuItem><SidebarMenuButton isActive={pathname === '/client/plan'} tooltip="Plan & usage" onClick={() => void navigate({ to: '/client/plan' })}><CreditCard /><span>Plan & usage</span></SidebarMenuButton></SidebarMenuItem> : null}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -866,6 +893,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
   review: ClientReviewItem;
   view: ClientReviewView;
 }) {
+  const { session } = useClientAuth();
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
   const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
   const [isNoteOpen, setIsNoteOpen] = useState(false);
@@ -923,7 +951,8 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
           >
             <FileText />
           </Link>
-          {review.decision ? (
+          <ShareButton jobIds={[review.job_id]} clientId={clientId} />
+          {session.role === 'publisher' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : review.decision ? (
             <>
               <ClientDecisionBadge decision={review.decision.decision} />
               <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
@@ -1074,7 +1103,7 @@ function ClientReviewDetail() {
       <div className="grid gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to reviews</Link>
-          <DecisionControl review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} />
+          <div className="flex flex-wrap gap-2"><ShareButton jobIds={[jobId]} clientId={clientId} />{session.role !== 'publisher' ? <DecisionControl review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} /> : <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge>}</div>
         </div>
 
         <Card>
@@ -1507,7 +1536,7 @@ function groupReviews(reviews: ClientReviewItem[]): ReviewGroup[] {
 }
 
 function updateReviewDecision(queryClient: ReturnType<typeof useQueryClient>, clientId: string, jobId: string, decision: ClientReviewItem['decision']) {
-  queryClient.setQueryData<ClientReviewList>(['client', clientId, 'reviews'], (current) => current ? { ...current, reviews: current.reviews.map((review) => review.job_id === jobId ? { ...review, decision } : review) } : current);
+  queryClient.setQueriesData<ClientReviewList>({ queryKey: ['client', clientId, 'reviews'] }, (current) => current ? { ...current, reviews: current.reviews.map((review) => review.job_id === jobId ? { ...review, decision } : review) } : current);
 }
 
 function nearestEvidenceFrame(frames: ReviewEvidenceFrame[], timestamp: string | null | undefined): ReviewEvidenceFrame | null {

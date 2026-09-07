@@ -545,7 +545,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     )
                 except Exception:
                     logger.exception('Batch completion notification failed for job %s', job_id)
-            elif not meta.api_partner_id:
+            elif not meta.api_partner_id and not meta.publisher_id:
                 await asyncio.to_thread(
                     send_review_message,
                     rec,
@@ -589,7 +589,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 )
             except Exception:
                 logger.exception('Batch failure notification failed for job %s', job_id)
-        elif not meta.api_partner_id:
+        elif not meta.api_partner_id and not meta.publisher_id:
             await asyncio.to_thread(send_job_event, failed_record, meta, 'failed', failure_message)
     finally:
         if transcript_task is not None:

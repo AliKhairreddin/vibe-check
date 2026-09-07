@@ -2,6 +2,38 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  publishers: defineTable({
+    organizationId: v.optional(v.string()), publisherId: v.string(), clientId: v.string(), name: v.string(), username: v.string(),
+    status: v.union(v.literal('invited'), v.literal('active'), v.literal('suspended')),
+    passwordHash: v.optional(v.string()), inviteHash: v.optional(v.string()),
+    inviteExpiresAt: v.optional(v.number()), authVersion: v.number(), createdAt: v.number(),
+  }).index('by_publisher_id', ['publisherId']).index('by_client_id', ['clientId'])
+    .index('by_username', ['username']).index('by_invite_hash', ['inviteHash']).index('by_organization_id', ['organizationId']),
+  publisherSubmissions: defineTable({
+    jobId: v.string(), clientId: v.string(), publisherId: v.string(), createdAt: v.number(), countsTowardUsage: v.optional(v.boolean()),
+  }).index('by_job_id', ['jobId']).index('by_client_id_and_job_id', ['clientId', 'jobId']).index('by_client_id', ['clientId'])
+    .index('by_client_id_and_created_at', ['clientId', 'createdAt'])
+    .index('by_client_id_and_counts_toward_usage_and_created_at', ['clientId', 'countsTowardUsage', 'createdAt'])
+    .index('by_publisher_id', ['publisherId']),
+  advertiserPlans: defineTable({
+    clientId: v.string(), plan: v.union(v.literal('pilot'), v.literal('starter'), v.literal('growth'), v.literal('enterprise')),
+    publisherLimit: v.number(), monthlyReviewLimit: v.number(), updatedAt: v.number(),
+  }).index('by_client_id', ['clientId']),
+  publicShares: defineTable({
+    shareId: v.string(), tokenHash: v.string(), ownerKey: v.string(), clientId: v.optional(v.string()),
+    publisherId: v.optional(v.string()), title: v.string(), createdAt: v.number(),
+    expiresAt: v.number(), revokedAt: v.optional(v.number()),
+    items: v.array(v.object({ jobId: v.string(), offerId: v.string() })),
+  }).index('by_share_id', ['shareId']).index('by_token_hash', ['tokenHash'])
+    .index('by_owner_key', ['ownerKey']).index('by_client_id', ['clientId']),
+  reviewMedia: defineTable({ jobId: v.string(), storageId: v.id('_storage') })
+    .index('by_job_id', ['jobId']),
+  platformInstances: defineTable({
+    instanceId: v.string(), updatedAt: v.number(), startedAt: v.number(), requests: v.number(), errors: v.number(),
+    active: v.number(), pending: v.number(), workers: v.number(), cpuPercent: v.optional(v.number()),
+    memoryBytes: v.optional(v.number()), memoryLimitBytes: v.optional(v.number()),
+  }).index('by_instance_id', ['instanceId']).index('by_updated_at', ['updatedAt']),
+  platformTrafficHours: defineTable({ hour: v.number(), requests: v.number(), errors: v.number() }).index('by_hour', ['hour']),
   telegramNotifications: defineTable({
     eventKey: v.string(),
     message: v.string(),
@@ -232,6 +264,8 @@ export default defineSchema({
     ])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewOfferStats: defineTable({
+    progress: v.optional(v.number()),
+    message: v.optional(v.string()),
     batchId: v.optional(v.string()),
     createdAt: v.number(),
     deletedAt: v.optional(v.number()),
@@ -273,6 +307,7 @@ export default defineSchema({
       "status",
       "createdAt",
     ])
+    .index("by_created_at", ["createdAt"])
     .index("by_job_id", ["jobId"])
     .index("by_job_id_and_offer_id", ["jobId", "offerId"]),
   reviewOfferReports: defineTable({

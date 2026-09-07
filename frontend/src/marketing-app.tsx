@@ -49,10 +49,11 @@ function MarketingApp() {
             <a className="transition hover:text-zinc-950" href="#product">Product</a>
             <a className="transition hover:text-zinc-950" href="#workflow">How it works</a>
             <a className="transition hover:text-zinc-950" href="#security">Security</a>
+            <a className="transition hover:text-zinc-950" href="/pricing">Pricing</a>
           </nav>
           <div className="hidden items-center gap-3 md:flex">
             <a className="rounded-full px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-950/5 hover:text-zinc-950" href={CLIENT_LOGIN_URL}>
-              Client sign in
+              Sign in
             </a>
             <a className="inline-flex items-center gap-2 rounded-full bg-zinc-950 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800" href={DEMO_EMAIL_URL}>
               Request a demo <ArrowRight className="size-4" />
@@ -73,7 +74,8 @@ function MarketingApp() {
             <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href="#product" onClick={() => setMenuOpen(false)}>Product</a>
             <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href="#workflow" onClick={() => setMenuOpen(false)}>How it works</a>
             <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href="#security" onClick={() => setMenuOpen(false)}>Security</a>
-            <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href={CLIENT_LOGIN_URL}>Client sign in</a>
+            <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href="/pricing">Pricing</a>
+            <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href={CLIENT_LOGIN_URL}>Sign in</a>
             <a className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-4 py-3 text-white" href={DEMO_EMAIL_URL}>
               Request a demo <ArrowRight className="size-4" />
             </a>
@@ -97,7 +99,7 @@ function MarketingApp() {
                   Request a demo <ArrowRight className="size-4" />
                 </a>
                 <a className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-zinc-950/12 bg-white px-6 text-sm font-semibold text-zinc-800 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-950/25" href={CLIENT_LOGIN_URL}>
-                  Open client portal
+                  Open workspace
                 </a>
               </div>
               <div className="mt-8 flex flex-wrap gap-x-6 gap-y-3 text-sm text-zinc-500">
@@ -195,7 +197,7 @@ function MarketingApp() {
         <div className="mx-auto flex max-w-7xl flex-col gap-6 text-sm text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
           <Brand />
           <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <a className="hover:text-zinc-950" href={CLIENT_LOGIN_URL}>Client sign in</a>
+            <a className="hover:text-zinc-950" href={CLIENT_LOGIN_URL}>Sign in</a>
             <a className="hover:text-zinc-950" href={ADMIN_LOGIN_URL}>Admin</a>
             <a className="hover:text-zinc-950" href={DEMO_EMAIL_URL}>Contact</a>
           </div>

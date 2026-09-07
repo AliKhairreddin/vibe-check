@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
+from . import workspaces, platform_monitoring
 from .review_pipeline.models import (
     BatchReviewContext,
     BatchFailure,
@@ -431,7 +432,10 @@ async def lifespan(app: FastAPI):
     await start_job_workers()
     start_background_task(deliver_batch_notifications_in_background())
     start_background_task(maintain_partner_api_in_background())
+    monitor=asyncio.create_task(platform_monitoring.monitor_loop())
     yield
+    monitor.cancel()
+    await asyncio.gather(monitor, return_exceptions=True)
     await stop_job_workers()
 
 app=FastAPI(
@@ -488,6 +492,7 @@ async def optional_password_gate(request: Request, call_next):
     }
     password = os.getenv('APP_PASSWORD')
     is_client_portal = path == '/api/client/check' or path.startswith('/api/client/')
+    is_public_share = path.startswith('/api/public/shares/')
     is_partner_api = path == '/api/v1' or path.startswith('/api/v1/')
     is_internal_api = path.startswith('/api/internal/') or path.startswith('/api/automations/internal/')
     is_admin_session = path == '/api/admin/session'
@@ -514,6 +519,7 @@ async def optional_password_gate(request: Request, call_next):
     is_operator_api = (
         path.startswith('/api/')
         and not is_client_portal
+        and not is_public_share
         and not is_partner_api
         and not is_internal_api
         and not is_admin_session
@@ -564,6 +570,7 @@ async def optional_password_gate(request: Request, call_next):
         and hostname not in admin_hosts
         and path.startswith('/api')
         and not is_client_portal
+        and not is_public_share
         and not is_partner_api
         and not is_internal_api
         and not is_scanner_api
@@ -571,6 +578,12 @@ async def optional_password_gate(request: Request, call_next):
     ):
         return JSONResponse({'detail':'Invalid or missing x-app-password'}, status_code=401)
     response=await call_next(request)
+    if not is_internal_api:
+        platform_monitoring.record_request(response.status_code)
+    if is_client_portal or is_public_share:
+        response.headers['cache-control']='no-store'
+        response.headers['referrer-policy']='no-referrer'
+        response.headers['x-robots-tag']='noindex, nofollow'
     if is_partner_api:
         response.headers['x-request-id']=request.headers.get('x-request-id') or uuid.uuid4().hex
         response.headers['cache-control']='no-store'
@@ -873,6 +886,8 @@ def credential_fingerprint(username:str, password:str)->str:
 
 def current_client_credential_fingerprint(session:dict)->str:
     username=str(session.get('username') or '')
+    if session.get('role') == 'publisher':
+        return workspaces.publisher_fingerprint(session)
     if session.get('role') == 'admin':
         return credential_fingerprint(username,os.getenv('CLIENT_ADMIN_PASSWORD',''))
     portal_ids=session.get('portal_ids')
@@ -979,10 +994,16 @@ def authenticate_client_credentials(username:str,password:str)->dict:
                 'username':expected_username,
                 'portal_ids':[client_id],
             }
+    publisher=workspaces.authenticate_publisher(username, password)
+    if publisher:
+        return publisher
     raise HTTPException(401, 'The username or password is incorrect.')
 
 
 def client_cookie_session(request:Request)->dict|None:
+    cached=getattr(request.state, 'client_session', None)
+    if cached is not None:
+        return cached
     session=read_session_cookie(request,CLIENT_SESSION_COOKIE,'client')
     if session is None:
         return None
@@ -994,10 +1015,12 @@ def client_cookie_session(request:Request)->dict|None:
         or not portal_ids
         or any(not isinstance(client_id,str) or client_id not in CLIENT_PORTALS for client_id in portal_ids)
         or not isinstance(username,str)
-        or role not in {'admin','client'}
+        or role not in {'admin','client','publisher'}
     ):
         return None
-    return {'portal_ids':portal_ids,'role':role,'username':username}
+    result={'portal_ids':portal_ids,'role':role,'username':username, **({k: session[k] for k in ('publisher_id','publisher_name','publisher_ids') if k in session} if role == 'publisher' else {})}
+    request.state.client_session=result
+    return result
 
 
 def authenticate_client(request:Request)->dict:
@@ -1022,6 +1045,7 @@ def public_client_session(session:dict)->dict:
         ],
         'role':session['role'],
         'username':session['username'],
+        **({k: session[k] for k in ('publisher_id','publisher_name','publisher_ids') if k in session} if session['role'] == 'publisher' else {}),
     }
 
 
@@ -1232,6 +1256,7 @@ def public_client_review(value:dict)->dict:
         'file_name':value.get('fileName'),
         'issue_summary':value.get('issueSummary'),
         'job_id':value.get('jobId'),
+        'publisher_id':value.get('publisherId'),
         'media_kind':value.get('mediaKind'),
         'vertical':value.get('vertical') or 'auto-insurance',
         'preview':{
@@ -1281,6 +1306,30 @@ def review_media_response(job_id:str, request:Request)->Response:
         record=get_status(job_id)
     except FileNotFoundError:
         raise HTTPException(404, 'Creative media not found.') from None
+    if record.has_creative and record.source_kind != 'google_drive_file':
+        import mimetypes
+        url=workspaces.call('mediaUrl', {'jobId':job_id}) if workspaces.storage.convex_enabled() else None
+        media_type=mimetypes.guess_type(record.file_name)[0] or 'application/octet-stream'
+        if url:
+            range_header=request.headers.get('range')
+            if range_header and not MEDIA_RANGE_PATTERN.fullmatch(range_header.strip()):
+                raise HTTPException(416, 'The requested media range is invalid.')
+            client=httpx.Client(timeout=60, follow_redirects=True)
+            try:
+                upstream=client.send(client.build_request(request.method, url, headers={'range':range_header} if range_header else {}), stream=True)
+            except httpx.HTTPError:
+                client.close()
+                raise HTTPException(502, 'Creative media is temporarily unavailable.') from None
+            headers={key:upstream.headers[key] for key in ('content-length','content-range','accept-ranges') if key in upstream.headers}
+            headers['cache-control']='no-store'
+            def close_stream():
+                upstream.close()
+                client.close()
+            return StreamingResponse(upstream.iter_bytes(), status_code=upstream.status_code, media_type=media_type, headers=headers, background=BackgroundTask(close_stream))
+        local=job_dir(job_id)/Path(record.file_name).name
+        if local.is_file():
+            return FileResponse(local, media_type=media_type, headers={'cache-control':'no-store'})
+        raise HTTPException(404, 'The original upload is no longer available. Evidence frames are still available.')
     if (
         not record.has_creative
         or record.source_kind != 'google_drive_file'
@@ -1391,9 +1440,12 @@ def client_check(client_id:str, request:Request):
 
 
 @app.get('/api/client/{client_id}/reviews')
-def client_reviews(client_id:str, request:Request, limit:int=1000):
+def client_reviews(client_id:str, request:Request, limit:int=1000, publisher_id:str|None=None):
     config=require_client(request, client_id)
-    reviews=list_client_reviews(client_id, config['offer_id'], limit)
+    session=authenticate_client(request)
+    if session['role'] == 'publisher':
+        publisher_id=session.get('publisher_ids', {}).get(client_id, session['publisher_id'])
+    reviews=list_client_reviews(client_id, config['offer_id'], limit, **({'publisher_id':publisher_id} if publisher_id else {}))
     return {
         'client_id':client_id,
         'display_name':config['display_name'],
@@ -1404,6 +1456,7 @@ def client_reviews(client_id:str, request:Request, limit:int=1000):
 @app.get('/api/client/{client_id}/reviews/{job_id}')
 def client_review_detail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
+    workspaces.require_submission(request, client_id, job_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review not found.')
     fast_detail=get_client_review_detail(client_id, config['offer_id'], job_id)
@@ -1468,6 +1521,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
 @app.get('/api/client/{client_id}/reviews/{job_id}/report.pdf')
 def client_review_pdf(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
+    workspaces.require_submission(request, client_id, job_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review not found.')
     if get_client_review_report(client_id, config['offer_id'], job_id) is None:
@@ -1488,8 +1542,11 @@ def decide_client_review(
     request:Request,
 ):
     config=require_client(request, client_id)
+    workspaces.require_submission(request, client_id, job_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review not found.')
+    if authenticate_client(request)['role'] == 'publisher':
+        raise HTTPException(403, 'Only the advertiser can make approval decisions.')
     if payload.decision == 'pending':
         try:
             clear_client_review_decision(client_id, config['offer_id'], job_id)
@@ -1520,6 +1577,7 @@ def decide_client_review(
 @app.get('/api/client/{client_id}/reviews/{job_id}/thumbnail')
 def client_review_thumbnail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
+    workspaces.require_submission(request, client_id, job_id)
     if not client_review_exists(config['offer_id'], job_id):
         raise HTTPException(404, 'Review not found.')
     frames=list_review_evidence_frames(job_id)
@@ -1531,6 +1589,7 @@ def client_review_thumbnail(client_id:str, job_id:str, request:Request):
 @app.get('/api/client/{client_id}/reviews/{job_id}/frames/{filename}')
 def client_review_frame(client_id:str, job_id:str, filename:str, request:Request):
     config=require_client(request, client_id)
+    workspaces.require_submission(request, client_id, job_id)
     if not client_review_exists(config['offer_id'], job_id):
         raise HTTPException(404, 'Review not found.')
     return evidence_frame_response(job_id, filename)
@@ -1539,6 +1598,7 @@ def client_review_frame(client_id:str, job_id:str, filename:str, request:Request
 @app.api_route('/api/client/{client_id}/reviews/{job_id}/media', methods=['GET','HEAD'])
 def client_review_media(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
+    workspaces.require_submission(request, client_id, job_id)
     if not client_review_exists(config['offer_id'], job_id):
         raise HTTPException(404, 'Review not found.')
     return review_media_response(job_id, request)
@@ -2829,17 +2889,26 @@ async def run_saved_review_automation(automation_id:str, request:Request):
         raise HTTPException(404, 'Review automation not found') from None
     return await run_review_automation(automation, manual=True)
 
+@app.post('/api/client/{client_id}/reviews', response_model=JobRecord)
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form(''), vertical:str=Form('auto-insurance')):
+async def create_review(request:Request, creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form(''), vertical:str=Form('auto-insurance')):
+    context=workspaces.upload_context(request)
+    if context:
+        policy_text,model,batch_id,batch_item_id,offer_ids='', '', '', '', context['offerId']
     upload=creative or video
     meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
-    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical)})
+    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical), **({'publisher_id':context['publisherId']} if context else {})})
     if upload is None:
         if not meta.has_ad_copy:
             raise HTTPException(400, 'Choose a creative file or enter ad copy to review.')
         job_id=uuid.uuid4().hex; jd=job_dir(job_id)
         (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
-        rec=await enqueue_job(job_id, None, 'copy_only', meta, copy_review_file_name(meta.ad_copy))
+        workspaces.claim_submission(context, job_id)
+        try:
+            rec=await enqueue_job(job_id, None, 'copy_only', meta, copy_review_file_name(meta.ad_copy))
+        except Exception:
+            workspaces.release_unstarted_submission(context, job_id)
+            raise
         return rec
     file_name=Path(upload.filename or 'upload').name or 'upload'
     try:
@@ -2863,7 +2932,12 @@ async def create_review(creative:UploadFile|None=File(None), video:UploadFile|No
         shutil.rmtree(jd,ignore_errors=True)
         raise
     (jd/'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
-    rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name, file_size=size)
+    workspaces.claim_submission(context, job_id)
+    try:
+        rec=await enqueue_job(job_id, media_path, media_kind, meta, file_name, file_size=size)
+    except Exception:
+        workspaces.release_unstarted_submission(context, job_id)
+        raise
     return rec
 
 
@@ -3302,8 +3376,10 @@ async def create_drive_review(payload: CreateDriveReview):
     return get_status(record.job_id)
 
 
+@app.post('/api/client/{client_id}/uploads')
 @app.post('/api/uploads')
 async def start_chunked_upload(request: Request):
+    context=workspaces.upload_context(request)
     try:
         payload = await request.json()
     except (ValueError, UnicodeDecodeError):
@@ -3334,6 +3410,7 @@ async def start_chunked_upload(request: Request):
     (upload_dir / UPLOAD_CHUNKS_DIR).mkdir(parents=True, exist_ok=True)
     chunk_count = (size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
     metadata = {
+        **(context or {}),
         'file_name': file_name,
         'media_kind': media_kind,
         'size': size,
@@ -3344,9 +3421,12 @@ async def start_chunked_upload(request: Request):
     return {'upload_id': upload_id, **metadata}
 
 
+@app.put('/api/client/{client_id}/uploads/{upload_id}/chunks/{chunk_index}')
 @app.put('/api/uploads/{upload_id}/chunks/{chunk_index}')
 async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
+    context=workspaces.upload_context(request)
     upload_dir, metadata = read_upload_metadata(upload_id)
+    workspaces.check_upload_owner(context, metadata)
     chunk_count = int(metadata['chunk_count'])
     if chunk_index < 0 or chunk_index >= chunk_count:
         raise HTTPException(400, 'Invalid upload chunk')
@@ -3378,9 +3458,11 @@ async def upload_chunk(upload_id: str, chunk_index: int, request: Request):
     return {'received': received}
 
 
+@app.post('/api/client/{client_id}/uploads/{upload_id}/complete', response_model=JobRecord)
 @app.post('/api/uploads/{upload_id}/complete', response_model=JobRecord)
 async def complete_chunked_upload(
     upload_id: str,
+    request: Request,
     ad_copy: str = Form(''),
     policy_text: str = Form(''),
     notes: str = Form(''),
@@ -3393,7 +3475,11 @@ async def complete_chunked_upload(
     offer_ids: str = Form(''),
     vertical: str = Form('auto-insurance'),
 ):
+    context=workspaces.upload_context(request)
     upload_dir, metadata = read_upload_metadata(upload_id)
+    workspaces.check_upload_owner(context, metadata)
+    if context:
+        policy_text,model,batch_id,batch_item_id,offer_ids='', '', '', '', context['offerId']
     if metadata.get('completed') or (upload_dir / 'status.json').exists():
         return get_status(upload_id)
 
@@ -3405,7 +3491,7 @@ async def complete_chunked_upload(
         raise HTTPException(409, 'Upload size does not match; restart this upload.')
 
     meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
-    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical)})
+    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical), **({'publisher_id':context['publisherId']} if context else {})})
     media_path = upload_dir / str(metadata['file_name'])
     enqueued = False
     try:
@@ -3414,6 +3500,7 @@ async def complete_chunked_upload(
                 with chunk_path.open('rb') as chunk:
                     shutil.copyfileobj(chunk, output)
         (upload_dir / 'request.json').write_text(meta.model_dump_json(indent=2), encoding='utf-8')
+        workspaces.claim_submission(context, upload_id)
         record = await enqueue_job(
             upload_id,
             media_path,
@@ -3429,6 +3516,7 @@ async def complete_chunked_upload(
         return record
     except Exception:
         if not enqueued:
+            workspaces.release_unstarted_submission(context, upload_id)
             media_path.unlink(missing_ok=True)
         raise
 
@@ -3843,6 +3931,9 @@ def frame(job_id:str, filename:str):
 @app.api_route('/api/reviews/{job_id}/media', methods=['GET','HEAD'])
 def review_media(job_id:str, request:Request):
     return review_media_response(job_id, request)
+
+workspaces.register(app)
+platform_monitoring.register(app)
 
 static=Path('frontend/dist')
 if static.exists():

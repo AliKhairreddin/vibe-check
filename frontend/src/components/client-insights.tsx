@@ -1,3 +1,5 @@
+import { useWorkspace } from './workspace-context';
+import { PublisherHomePage } from './publisher-pages';
 import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
@@ -88,7 +90,8 @@ type InsightBatch = {
 };
 
 export function ClientDashboardPage() {
-  return <ClientInsights />;
+  const { session } = useClientAuth();
+  return session.role === 'publisher' ? <PublisherHomePage /> : <ClientInsights />;
 }
 
 export function ClientVerticalPage() {
@@ -99,12 +102,13 @@ export function ClientVerticalPage() {
 
 export function ClientBatchPage() {
   const { batchId, clientId } = useParams({ from: '/client/$clientId/batches/$batchId' });
+  const { publisherId } = useWorkspace();
   const { session } = useClientAuth();
   const portal = session.portals.find((item) => item.client_id === clientId);
   const query = useQuery({
     enabled: Boolean(portal),
-    queryKey: ['client', clientId, 'reviews'],
-    queryFn: () => listClientReviews(clientId),
+    queryKey: ['client', clientId, 'reviews', publisherId],
+    queryFn: () => listClientReviews(clientId, 1000, publisherId),
     staleTime: 30_000,
   });
   const reviews = (query.data?.reviews ?? []).filter((review) => review.batch_id === batchId);
@@ -182,21 +186,23 @@ export function ClientBatchPage() {
 
 function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
   const { session } = useClientAuth();
+  const { clientId, publisherId } = useWorkspace();
+  const portals = session.portals.filter(portal => portal.client_id === clientId);
   const queries = useQueries({
-    queries: session.portals.map((portal) => ({
-      queryKey: ['client', portal.client_id, 'reviews'],
-      queryFn: () => listClientReviews(portal.client_id),
+    queries: portals.map((portal) => ({
+      queryKey: ['client', portal.client_id, 'reviews', publisherId],
+      queryFn: () => listClientReviews(portal.client_id, 1000, publisherId),
       refetchInterval: 60_000,
       refetchOnWindowFocus: false,
       staleTime: 30_000,
     })),
   });
-  const allEntries = useMemo(() => session.portals.flatMap((portal, index) =>
+  const allEntries = useMemo(() => portals.flatMap((portal, index) =>
     (queries[index]?.data?.reviews ?? []).map((review) => ({
       clientId: portal.client_id,
       portal,
       review,
-    }))), [queries, session.portals]);
+    }))), [queries, portals]);
   const entries = vertical
     ? allEntries.filter((entry) => entry.review.vertical === vertical)
     : allEntries;

@@ -67,6 +67,9 @@ jobs:
       - name: Deploy Convex
         run: pnpm exec convex deploy
 
+      - name: Initialize publisher workspaces
+        run: python scripts/setup-publisher-workspaces.py
+
       - name: Check Docker
         run: docker version
 

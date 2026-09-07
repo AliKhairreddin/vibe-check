@@ -451,7 +451,7 @@ def _pdf_unavailable(event_key: str, url: str) -> None:
 @_best_effort_notification
 def send_job_event(record: JobRecord | str, meta: ReviewRequestMeta, event: str, message: str, *, attempt: int = 0) -> bool:
     # Partner API tenants receive their isolated signed webhooks.
-    if meta.api_partner_id:
+    if meta.api_partner_id or meta.publisher_id:
         return False
     if isinstance(record, str):
         from .storage import get_status
@@ -482,7 +482,7 @@ def send_job_event(record: JobRecord | str, meta: ReviewRequestMeta, event: str,
 
 @_best_effort_notification
 def send_review_started(record: JobRecord, meta: ReviewRequestMeta) -> bool:
-    if meta.api_partner_id:
+    if meta.api_partner_id or meta.publisher_id:
         return False
     if not meta.has_batch:
         return send_job_event(record, meta, 'queued', 'Review queued. Results will follow when processing finishes.')

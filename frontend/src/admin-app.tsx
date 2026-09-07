@@ -58,6 +58,10 @@ import {
   Plus,
   Radio,
 } from 'lucide-react';
+import { ShareButton, SharedLinksPanel } from '@/components/share-controls';
+import { PlatformDashboard } from '@/components/platform-dashboard';
+import { AdminPlansPanel } from '@/components/admin-plans';
+import { Link2, Users } from 'lucide-react';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -396,9 +400,11 @@ function AppSidebar({
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu aria-label="Primary navigation">
-              <ShellLink to="/" label="Dashboard" icon={<LayoutDashboard />} />
+              {canManageSettings ? <ShellLink to="/" label="Platform overview" icon={<LayoutDashboard />} /> : null}
+              <ShellLink to="/publisher" label="Digital Nudge" icon={<Users />} />
               <ShellLink to="/reviews/new" label="New review" icon={<Plus />} />
               <ShellLink to="/history" label="History" icon={<History />} />
+              <ShellLink to="/shares" label="Shared links" icon={<Link2 />} />
               <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
               {canManageSettings ? (
                 <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} />
@@ -472,7 +478,7 @@ function ShellLink({
 }: {
   icon: React.ReactNode;
   label: string;
-  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/developers/api' | '/settings';
+  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/developers/api' | '/settings' | '/shares' | '/publisher';
 }) {
   const { setOpenMobile } = useSidebar();
 
@@ -1617,6 +1623,7 @@ function HistoryCard({
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{selectedCount} selected</Badge>
+                    <ShareButton key={`${[...selectedReviewIds].join(',')}:${offerFilter}`} jobIds={[...selectedReviewIds]} offerId={offerFilter === 'all' ? undefined : offerFilter} />
                     {allVisibleSelected ? (
                       <span className="text-xs text-muted-foreground">
                         All visible reviews selected
@@ -2642,6 +2649,7 @@ function ReportPage() {
 
   return (
     <div className="grid gap-4">
+      <div className="flex justify-end"><ShareButton key={`${jobId}:${activeOffer.offer_id}`} jobIds={[jobId]} offerId={activeOffer.offer_id} /></div>
       <Card size="sm">
         <CardHeader>
           <CardTitle as="h1" className="text-xl">Offer availability</CardTitle>
@@ -3201,7 +3209,7 @@ function BatchItemDecisionDetails({ item, offers }: { item: ReviewBatchItem; off
   );
 }
 
-type SettingsView = 'api' | 'policies' | 'runtime';
+type SettingsView = 'api' | 'policies' | 'runtime' | 'plans';
 
 const settingsViews: Array<{
   description: string;
@@ -3209,6 +3217,7 @@ const settingsViews: Array<{
   label: string;
   value: SettingsView;
 }> = [
+  { value: 'plans', label: 'Advertiser plans', description: 'Workspace allocations and publisher capacity', icon: Users },
   {
     value: 'api',
     label: 'API access',
@@ -3230,7 +3239,7 @@ const settingsViews: Array<{
 ];
 
 function isSettingsView(value: unknown): value is SettingsView {
-  return value === 'api' || value === 'policies' || value === 'runtime';
+  return value === 'api' || value === 'policies' || value === 'runtime' || value === 'plans';
 }
 
 function SettingsViewMenu({
@@ -3386,7 +3395,7 @@ function SettingsPage() {
           </p>
         </CardContent>
       </Card>
-      {view === 'runtime' ? (
+      {view === 'plans' ? <AdminPlansPanel /> : view === 'runtime' ? (
         <RuntimeSettingsPanel />
       ) : (
         <AdminAccessGate>
@@ -3946,10 +3955,16 @@ function batchTypeLabel(mediaKind: 'video' | 'image' | 'copy_only') {
   return 'Ad copy';
 }
 
+function PlatformLanding() {
+  const { canManageSettings } = useAdminAccess();
+  return canManageSettings ? <PlatformDashboard /> : <DashboardPage />;
+}
+const publisherOperationsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/publisher', component: DashboardPage });
+
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: DashboardPage,
+  component: PlatformLanding,
 });
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -4030,6 +4045,8 @@ const developerApiReferenceRoute = createRoute({
     throw redirect({ to: '/developers/api', search: { view: 'reference' } });
   },
 });
+const sharesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/shares', component: SharedLinksPanel });
+
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -4046,6 +4063,8 @@ const router = createRouter({
     progressRoute,
     reportRoute,
     settingsRoute,
+    publisherOperationsRoute,
+    sharesRoute,
   ]),
 });
 

@@ -16,6 +16,8 @@ import type * as batches from "../batches.js";
 import type * as clientReviews from "../clientReviews.js";
 import type * as liveScans from "../liveScans.js";
 import type * as offers from "../offers.js";
+import type * as platform from "../platform.js";
+import type * as publisherOwnership from "../publisherOwnership.js";
 import type * as reportArtifacts from "../reportArtifacts.js";
 import type * as reviewEvidenceFrames from "../reviewEvidenceFrames.js";
 import type * as reviewPayloads from "../reviewPayloads.js";
@@ -23,6 +25,7 @@ import type * as reviewProcessingMetrics from "../reviewProcessingMetrics.js";
 import type * as reviewVerticals from "../reviewVerticals.js";
 import type * as reviews from "../reviews.js";
 import type * as telegramNotifications from "../telegramNotifications.js";
+import type * as workspaces from "../workspaces.js";
 
 import type {
   ApiFromModules,
@@ -39,6 +42,8 @@ declare const fullApi: ApiFromModules<{
   clientReviews: typeof clientReviews;
   liveScans: typeof liveScans;
   offers: typeof offers;
+  platform: typeof platform;
+  publisherOwnership: typeof publisherOwnership;
   reportArtifacts: typeof reportArtifacts;
   reviewEvidenceFrames: typeof reviewEvidenceFrames;
   reviewPayloads: typeof reviewPayloads;
@@ -46,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   reviewVerticals: typeof reviewVerticals;
   reviews: typeof reviews;
   telegramNotifications: typeof telegramNotifications;
+  workspaces: typeof workspaces;
 }>;
 
 /**
