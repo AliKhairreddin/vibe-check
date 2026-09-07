@@ -45,6 +45,7 @@ import {
   Layers3,
   SlidersHorizontal,
   Settings2,
+  Upload,
   X,
   XCircle,
 } from 'lucide-react';
@@ -757,6 +758,9 @@ export function ClientPortalFrame({ children, workspaceName }: {
     ?? routePortal?.display_name
     ?? session.portals.find(portal => portal.client_id === clientId)?.display_name
     ?? session.portals[0]?.display_name;
+  const signedInCompany = session.role === 'publisher'
+    ? session.publisher_name ?? session.username
+    : resolvedWorkspaceName;
 
   useEffect(() => {
     window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
@@ -792,9 +796,6 @@ export function ClientPortalFrame({ children, workspaceName }: {
                   menuLabel="Switch advertiser"
                 />
               </div>
-            ) : null}
-            {session.role === 'publisher' ? (
-              <div><p className="text-[11px] text-muted-foreground">Publisher</p><p className="mt-1 truncate text-sm font-medium">{session.publisher_name}</p></div>
             ) : (
               <div className="grid gap-1">
                 <Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-publisher">Publisher</Label>
@@ -828,31 +829,17 @@ export function ClientPortalFrame({ children, workspaceName }: {
         <SidebarContent>
           <nav aria-label="Workspace navigation">
             <SidebarGroup>
-              <SidebarGroupLabel className="uppercase tracking-[0.12em]">Workspace</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
-                      <Gauge />
-                      <span>{session.role === 'publisher' ? 'Uploads & progress' : 'Overview'}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton aria-current={reviewQueueActive ? 'page' : undefined} isActive={reviewQueueActive} tooltip="Review queue" onClick={() => void navigate({ to: '/client/reviews' })}>
-                      <Files />
-                      <span>Review queue</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  {session.role !== 'publisher' ? <SidebarMenuItem><SidebarMenuButton isActive={pathname === '/client/publishers'} tooltip="Publishers" onClick={() => void navigate({ to: '/client/publishers' })}><Users /><span>Publishers</span></SidebarMenuButton></SidebarMenuItem> : null}
-                  <SidebarMenuItem><SidebarMenuButton isActive={pathname === '/client/shares'} tooltip="Shared links" onClick={() => void navigate({ to: '/client/shares' })}><Link2 /><span>Shared links</span></SidebarMenuButton></SidebarMenuItem>
-                  {session.role !== 'publisher' ? <SidebarMenuItem><SidebarMenuButton isActive={pathname === '/client/plan'} tooltip="Plan & usage" onClick={() => void navigate({ to: '/client/plan' })}><CreditCard /><span>Plan & usage</span></SidebarMenuButton></SidebarMenuItem> : null}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-            <SidebarGroup>
               <SidebarGroupLabel className="uppercase tracking-[0.12em]">Performance</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
+                  {session.role !== 'publisher' ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Overview" onClick={() => void navigate({ to: '/client' })}>
+                        <Gauge />
+                        <span>Overview</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
                   <SidebarMenuItem>
                     <SidebarMenuButton aria-current={pathname === '/client/verticals/auto-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
                       <CarFront />
@@ -868,27 +855,72 @@ export function ClientPortalFrame({ children, workspaceName }: {
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
+            <SidebarGroup>
+              <SidebarGroupLabel className="uppercase tracking-[0.12em]">Workspace</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {session.role === 'publisher' ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton aria-current={pathname === '/client' ? 'page' : undefined} isActive={pathname === '/client'} tooltip="Uploads & progress" onClick={() => void navigate({ to: '/client' })}>
+                        <Upload />
+                        <span>Uploads & progress</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton aria-current={reviewQueueActive ? 'page' : undefined} isActive={reviewQueueActive} tooltip="Review queue" onClick={() => void navigate({ to: '/client/reviews' })}>
+                      <Files />
+                      <span>Review queue</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  {session.role !== 'publisher' ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton aria-current={pathname === '/client/publishers' ? 'page' : undefined} isActive={pathname === '/client/publishers'} tooltip="Publishers" onClick={() => void navigate({ to: '/client/publishers' })}>
+                        <Users />
+                        <span>Publishers</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                  <SidebarMenuItem>
+                    <SidebarMenuButton aria-current={pathname === '/client/shares' ? 'page' : undefined} isActive={pathname === '/client/shares'} tooltip="Shared links" onClick={() => void navigate({ to: '/client/shares' })}>
+                      <Link2 />
+                      <span>Shared links</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
           </nav>
         </SidebarContent>
-        <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
-          <div className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
-            <p className="font-medium">{resolvedWorkspaceName}</p>
-          </div>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton aria-current={pathname === '/client/settings' ? 'page' : undefined} isActive={pathname === '/client/settings'} tooltip="Settings" onClick={() => void navigate({ to: '/client/settings' })}>
-                <Settings2 />
-                <span>Settings</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip="Sign out" disabled={isSigningOut} onClick={() => void logout()}>
-              {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
-                <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+        <SidebarFooter className="gap-3 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+          <nav aria-label="Account navigation">
+            <SidebarMenu>
+              {session.role !== 'publisher' ? (
+                <SidebarMenuItem>
+                  <SidebarMenuButton aria-current={pathname === '/client/plan' ? 'page' : undefined} isActive={pathname === '/client/plan'} tooltip="Plan & usage" onClick={() => void navigate({ to: '/client/plan' })}>
+                    <CreditCard />
+                    <span>Plan & usage</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ) : null}
+              <SidebarMenuItem>
+                <SidebarMenuButton aria-current={pathname === '/client/settings' ? 'page' : undefined} isActive={pathname === '/client/settings'} tooltip="Settings" onClick={() => void navigate({ to: '/client/settings' })}>
+                  <Settings2 />
+                  <span>Settings</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="Sign out" disabled={isSigningOut} onClick={() => void logout()}>
+                  {isSigningOut ? <LoaderCircle className="animate-spin" /> : <LogOut />}
+                  <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </nav>
           {error ? <p role="alert" className="max-w-60 text-xs text-destructive group-data-[collapsible=icon]:hidden">{error}</p> : null}
+          <div role="group" aria-label="Signed-in company" className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
+            <p className="truncate font-medium" title={signedInCompany}>{signedInCompany}</p>
+          </div>
         </SidebarFooter>
         <ClientSidebarBorderTrigger />
         <SidebarRail />
