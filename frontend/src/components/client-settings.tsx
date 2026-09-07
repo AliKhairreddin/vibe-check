@@ -1,3 +1,4 @@
+import { Select } from '@/components/ui/select';
 import { useState, type ReactNode } from 'react';
 import { CheckCircle2, LayoutGrid, List, RotateCcw, Save, Settings2 } from 'lucide-react';
 
@@ -84,30 +85,34 @@ export function ClientSettingsPage() {
           <CardContent className="grid gap-5 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="client-density">Display density</Label>
-              <select
+              <Select
                 id="client-density"
-                className="h-10 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="h-10"
                 value={preferences.density}
-                onChange={(event) => update('density', event.currentTarget.value as ClientPreferences['density'])}
-              >
-                <option value="comfortable">Comfortable</option>
-                <option value="compact">Compact</option>
-              </select>
+                onValueChange={(value) => update('density', value as ClientPreferences['density'])}
+                options={[
+                  { value: 'comfortable', label: 'Comfortable' },
+                  { value: 'compact', label: 'Compact' },
+                ]}
+              />
               <p className="text-xs leading-5 text-muted-foreground">Compact fits more creatives on screen.</p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="client-result-filter">Default result filter</Label>
-              <select
+              <Select
                 id="client-result-filter"
-                className="h-10 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="h-10"
                 value={preferences.defaultResultFilter}
-                onChange={(event) => update('defaultResultFilter', event.currentTarget.value as ClientPreferences['defaultResultFilter'])}
-              >
-                <option value="all">All colors</option>
-                <option value="green">Green only</option>
-                <option value="yellow">Yellow only</option>
-                <option value="red">Red only</option>
-              </select>
+                onValueChange={(value) =>
+                  update('defaultResultFilter', value as ClientPreferences['defaultResultFilter'])
+                }
+                options={[
+                  { value: 'all', label: 'All colors' },
+                  { value: 'green', label: 'Green only' },
+                  { value: 'yellow', label: 'Yellow only' },
+                  { value: 'red', label: 'Red only' },
+                ]}
+              />
               <p className="text-xs leading-5 text-muted-foreground">You can still change this from the queue at any time.</p>
             </div>
             <div className="flex items-center justify-between gap-4 rounded-lg border p-3 sm:col-span-2">

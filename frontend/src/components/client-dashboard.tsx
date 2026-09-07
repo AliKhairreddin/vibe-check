@@ -1,3 +1,4 @@
+import { Select } from '@/components/ui/select';
 import {
   createContext,
   useContext,
@@ -363,6 +364,8 @@ function ClientDashboard() {
     });
     return visibleReviews.length ? [{ ...group, reviews: visibleReviews }] : [];
   }), [allGroups, batchFilter, normalizedSearch, resultFilter, statusFilter]);
+  const visibleIds = visibleGroups.flatMap(group => group.reviews.map(review => review.job_id));
+  const selectedVisibleCount = visibleIds.filter(id => selectedIds.has(id)).length;
 
   useEffect(() => {
     if (!selectedPortal) return;
@@ -518,7 +521,35 @@ function ClientDashboard() {
           </section>
 
           <section aria-label="Review filters" className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 shadow-xs">
-            <div className="relative min-w-56 flex-[1_1_24rem]">
+            <label className="flex h-9 shrink-0 cursor-pointer items-center gap-2 px-2 text-xs font-medium" title="Select creatives matching your filters across all batches">
+              <input
+                type="checkbox"
+                className="size-3.5 accent-foreground"
+                aria-label="Select visible creatives"
+                disabled={!visibleIds.length}
+                checked={visibleIds.length > 0 && selectedVisibleCount === visibleIds.length}
+                ref={input => { if (input) input.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length; }}
+                onChange={event => {
+                  const checked = event.target.checked;
+                  setSelectedIds(current => {
+                    const next = new Set(current);
+                    for (const id of visibleIds) {
+                      if (checked) next.add(id);
+                      else next.delete(id);
+                    }
+                    return next;
+                  });
+                }}
+              />
+              Select visible
+            </label>
+            {selectedIds.size ? (
+              <div className="flex items-center gap-1 border-l pl-2" aria-label="Selected creative actions">
+                <ShareButton key={`${selectedClientId}:${publisherId}:${[...selectedIds].join(',')}`} jobIds={[...selectedIds]} clientId={selectedClientId} />
+                <Button size="icon-sm" variant="ghost" aria-label="Clear selection" title="Clear selection" onClick={() => setSelectedIds(new Set())}><X /></Button>
+              </div>
+            ) : null}
+            <div className="relative min-w-40 flex-[1_1_12rem]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input className="h-9 border-0 bg-muted/45 pl-9 shadow-none focus-visible:bg-background" value={search} placeholder="Search creatives by filename or review summary…" onChange={(event) => setSearch(event.currentTarget.value)} />
             </div>
@@ -596,12 +627,6 @@ function ClientDashboard() {
             </Button>
           </section>
 
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card px-3 py-2">
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" aria-label="Select visible creatives" checked={visibleGroups.length > 0 && visibleGroups.every(group => group.reviews.every(review => selectedIds.has(review.job_id)))} onChange={event => setSelectedIds(event.target.checked ? new Set(visibleGroups.flatMap(group => group.reviews.map(review => review.job_id))) : new Set())} />Select visible</label>
-            <span className="text-xs text-muted-foreground">{selectedIds.size} selected</span>
-            <ShareButton key={`${selectedClientId}:${publisherId}:${[...selectedIds].join(',')}`} jobIds={[...selectedIds]} clientId={selectedClientId} />
-            {selectedIds.size ? <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button> : null}
-          </div>
           {selectedQuery?.error ? (
             <Alert variant="destructive">
               <AlertCircle />
@@ -755,12 +780,49 @@ export function ClientPortalFrame({ children, workspaceName }: {
             {session.role === 'publisher' ? (
               <div className="grid gap-1">
                 <Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-advertiser">Advertiser</Label>
-                <select id="sidebar-advertiser" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm font-medium" value={clientId} onChange={event => { setClientId(event.target.value); void navigate({ to: '/client' }); }}>
-                  {session.portals.map(portal => <option key={portal.client_id} value={portal.client_id}>{portal.display_name}</option>)}
-                </select>
+                <Select
+                  id="sidebar-advertiser"
+                  className="w-full font-medium"
+                  value={clientId}
+                  onValueChange={(value) => {
+                    setClientId(value);
+                    void navigate({ to: '/client' });
+                  }}
+                  options={session.portals.map((portal) => ({ value: portal.client_id, label: portal.display_name }))}
+                  menuLabel="Switch advertiser"
+                />
               </div>
             ) : null}
-            {session.role === 'publisher' ? <div><p className="text-[11px] text-muted-foreground">Publisher</p><p className="mt-1 truncate text-sm font-medium">{session.publisher_name}</p></div> : <div className="grid gap-1"><Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-publisher">Publisher</Label><select id="sidebar-publisher" className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-sm" value={publisherId} onChange={event => { setPublisherId(event.target.value); if (!['/client', '/client/reviews'].includes(pathname) && !pathname.startsWith('/client/verticals/')) void navigate({ to: '/client/reviews' }); }}><option value="all">All publishers</option>{publishers.data?.map(publisher => <option key={publisher.publisherId} value={publisher.publisherId}>{publisher.name}{publisher.status === 'suspended' ? ' (suspended)' : ''}</option>)}</select>{publishers.error ? <p className="text-xs text-destructive">Publisher list unavailable</p> : null}</div>}
+            {session.role === 'publisher' ? (
+              <div><p className="text-[11px] text-muted-foreground">Publisher</p><p className="mt-1 truncate text-sm font-medium">{session.publisher_name}</p></div>
+            ) : (
+              <div className="grid gap-1">
+                <Label className="text-[11px] text-muted-foreground" htmlFor="sidebar-publisher">Publisher</Label>
+                <Select
+                  id="sidebar-publisher"
+                  className="w-full"
+                  icon={<Users />}
+                  menuLabel="Switch publisher"
+                  value={publisherId}
+                  onValueChange={(value) => {
+                    setPublisherId(value);
+                    if (
+                      !['/client', '/client/reviews'].includes(pathname) &&
+                      !pathname.startsWith('/client/verticals/')
+                    )
+                      void navigate({ to: '/client/reviews' });
+                  }}
+                  options={[
+                    { value: 'all', label: 'All publishers' },
+                    ...(publishers.data?.map((publisher) => ({
+                      value: publisher.publisherId,
+                      label: `${publisher.name}${publisher.status === 'suspended' ? ' (suspended)' : ''}`,
+                    })) ?? []),
+                  ]}
+                />
+                {publishers.error ? <p className="text-xs text-destructive">Publisher list unavailable</p> : null}
+              </div>
+            )}
           </div>
         </SidebarHeader>
         <SidebarContent>
@@ -917,7 +979,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
         density === 'compact' ? 'p-2' : 'p-3',
         view === 'list'
           ? 'grid md:grid-cols-[minmax(0,1fr)_7rem_7rem_8rem] md:items-center md:gap-3'
-          : 'flex items-center'
+          : 'grid'
       )}>
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={isExpanded} onClick={onToggle}>
           {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
@@ -1185,15 +1247,16 @@ function FeedbackForm({ decision, initialNote = '', isSaving, onCancel, onSubmit
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor={`feedback-reason-${review.job_id}`}>Reason</Label>
-        <select
+        <Select
           id={`feedback-reason-${review.job_id}`}
-          className="h-9 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="w-full"
           value={reason}
-          onChange={(event) => setReason(event.currentTarget.value as ClientFeedbackReason | '')}
-        >
-          <option value="">Choose a reason</option>
-          {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
+          onValueChange={(value) => setReason(value as ClientFeedbackReason | '')}
+          options={[
+            { value: '', label: 'Choose a reason' },
+            ...options.map((option) => ({ value: option.value, label: option.label })),
+          ]}
+        />
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'Additional details' : 'Additional details (optional)'}</Label>

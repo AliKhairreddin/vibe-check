@@ -1,3 +1,4 @@
+import { Select } from '@/components/ui/select';
 import { ArrowRight, ChartNoAxesColumnIncreasing, ShieldCheck, UserRoundCheck } from 'lucide-react';
 
 import { batchOutcomeForOffer, type OfferColumn } from '@/components/offer-outcomes';
@@ -82,14 +83,15 @@ export function BatchStatusDistribution({
         </div>
         <label className="grid gap-1 sm:min-w-44">
           <span className="text-xs font-medium text-muted-foreground">Filter by offer</span>
-          <select
+          <Select
             value={selectedOfferId}
-            onChange={(event) => onOfferChange(event.currentTarget.value)}
-            className="h-8 rounded-lg border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-          >
-            <option value="all">All offers</option>
-            {offers.map((offer) => <option key={offer.offer_id} value={offer.offer_id}>{offer.offer_name}</option>)}
-          </select>
+            onValueChange={(value) => onOfferChange(value)}
+            className="h-8 text-xs"
+            options={[
+              { value: 'all', label: 'All offers' },
+              ...offers.map((offer) => ({ value: offer.offer_id, label: offer.offer_name })),
+            ]}
+          />
         </label>
       </div>
 

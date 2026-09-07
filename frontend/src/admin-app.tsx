@@ -1,3 +1,4 @@
+import { Select } from '@/components/ui/select';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { matchesReviewFilter, REVIEW_RESULT_FILTERS, validateReviewSearch, type ReviewResultFilter } from '@/lib/review-filters';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
@@ -1567,51 +1568,51 @@ function HistoryCard({
                 </div>
                 <div className="flex flex-wrap items-center gap-2" aria-label="History filters">
                   <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden="true" />
-                  <select
+                  <Select
                     value={verticalFilter}
-                    onChange={(event) => setVerticalFilter(event.target.value as HistoryVerticalFilter)}
+                    onValueChange={(value) => setVerticalFilter(value as HistoryVerticalFilter)}
                     aria-label="Filter by vertical"
                     className={historyFilterClassName}
-                  >
-                    <option value="all">All verticals</option>
-                    <option value="auto-insurance">Auto Insurance</option>
-                    <option value="home-insurance">Home Insurance</option>
-                  </select>
-                  <select
+                    options={[
+                      { value: 'all', label: 'All verticals' },
+                      { value: 'auto-insurance', label: 'Auto Insurance' },
+                      { value: 'home-insurance', label: 'Home Insurance' },
+                    ]}
+                  />
+                  <Select
                     value={offerFilter}
-                    onChange={(event) => setOfferFilter(event.target.value)}
+                    onValueChange={(value) => setOfferFilter(value)}
                     aria-label="Filter by offer"
                     className={historyFilterClassName}
-                  >
-                    <option value="all">All offers</option>
-                    {offerColumns.map((offer) => (
-                      <option key={offer.offer_id} value={offer.offer_id}>
-                        {offer.offer_name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
+                    options={[
+                      { value: 'all', label: 'All offers' },
+                      ...offerColumns.map((offer) => ({ value: offer.offer_id, label: offer.offer_name })),
+                    ]}
+                  />
+                  <Select
                     value={resultFilter}
-                    onChange={(event) => setResultFilter(event.target.value as HistoryResultFilter)}
+                    onValueChange={(value) => setResultFilter(value as HistoryResultFilter)}
                     aria-label="Filter by result"
                     className={historyFilterClassName}
-                  >
-                    <option value="all">All results</option>
-                    <option value="red">Red</option>
-                    <option value="yellow">Yellow</option>
-                    <option value="green">Green</option>
-                    <option value="na">N/A</option>
-                  </select>
-                  <select
+                    options={[
+                      { value: 'all', label: 'All results' },
+                      { value: 'red', label: 'Red' },
+                      { value: 'yellow', label: 'Yellow' },
+                      { value: 'green', label: 'Green' },
+                      { value: 'na', label: 'N/A' },
+                    ]}
+                  />
+                  <Select
                     value={typeFilter}
-                    onChange={(event) => setTypeFilter(event.target.value as HistoryTypeFilter)}
+                    onValueChange={(value) => setTypeFilter(value as HistoryTypeFilter)}
                     aria-label="Filter by review type"
                     className={historyFilterClassName}
-                  >
-                    <option value="all">All types</option>
-                    <option value="creative">Creative</option>
-                    <option value="copy_only">Copy only</option>
-                  </select>
+                    options={[
+                      { value: 'all', label: 'All types' },
+                      { value: 'creative', label: 'Creative' },
+                      { value: 'copy_only', label: 'Copy only' },
+                    ]}
+                  />
                   {filtersActive ? (
                     <Button type="button" variant="ghost" size="xs" onClick={resetFilters}>
                       Reset
@@ -1962,7 +1963,7 @@ function HistoryCard({
 }
 
 const historyFilterClassName =
-  'h-8 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30';
+  'h-8 text-xs';
 
 function HistoryCheckbox({
   ariaLabel,
@@ -3014,15 +3015,25 @@ function BatchPage() {
           </p>
           <label className="mt-2 grid max-w-64 gap-1 text-xs font-medium">
             Filter by AdChecked result
-            <select
-              className="h-8 rounded-lg border border-input bg-background px-2 text-foreground"
+            <Select
+              className="h-8"
               value={selectedResult}
-              onChange={event => void navigate({ search: { ...search, result: event.target.value as ReviewResultFilter } })}
-            >
-              {REVIEW_RESULT_FILTERS.map(result => (
-                <option key={result} value={result}>{({ all: 'All results', red: 'Red', yellow: 'Yellow', green: 'Green', failed: 'Review failed', upload_failed: 'Upload / import failed', unavailable: 'Not reviewed / unavailable' })[result]}</option>
-              ))}
-            </select>
+              onValueChange={(value) => void navigate({ search: { ...search, result: value as ReviewResultFilter } })}
+              options={[
+                ...(REVIEW_RESULT_FILTERS.map((result) => ({
+                  value: result,
+                  label: {
+                    all: 'All results',
+                    red: 'Red',
+                    yellow: 'Yellow',
+                    green: 'Green',
+                    failed: 'Review failed',
+                    upload_failed: 'Upload / import failed',
+                    unavailable: 'Not reviewed / unavailable',
+                  }[result],
+                })) ?? []),
+              ]}
+            />
           </label>
           {selectedResult !== 'all' ? <Button className="mt-2 w-fit" variant="ghost" size="sm" onClick={() => void navigate({ search: { ...search, result: 'all' } })}>Clear result filter</Button> : null}
         </div>

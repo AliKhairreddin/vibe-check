@@ -1,3 +1,4 @@
+import { Select } from '@/components/ui/select';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
@@ -151,15 +152,16 @@ export function DashboardPage() {
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-end">
           <label className="grid gap-1 text-xs font-medium text-muted-foreground">
             Vertical
-            <select
+            <Select
               value={selectedVertical}
-              onChange={(event) => setSelectedVertical(event.currentTarget.value as ReviewVertical | 'all')}
-              className="h-10 min-w-40 rounded-md border bg-background px-3 text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="all">All verticals</option>
-              <option value="auto-insurance">Auto Insurance</option>
-              <option value="home-insurance">Home Insurance</option>
-            </select>
+              onValueChange={(value) => setSelectedVertical(value as ReviewVertical | 'all')}
+              className="h-10 min-w-40 font-medium"
+              options={[
+                { value: 'all', label: 'All verticals' },
+                { value: 'auto-insurance', label: 'Auto Insurance' },
+                { value: 'home-insurance', label: 'Home Insurance' },
+              ]}
+            />
           </label>
           <OfferFilter
             offers={offerCatalog}
