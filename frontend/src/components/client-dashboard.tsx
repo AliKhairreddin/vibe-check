@@ -930,6 +930,9 @@ export function ClientPortalFrame({ children, workspaceName }: {
           {error ? <p role="alert" className="max-w-60 text-xs text-destructive group-data-[collapsible=icon]:hidden">{error}</p> : null}
           <div role="group" aria-label="Signed-in company" className="rounded-lg border border-sidebar-border bg-card/60 p-3 text-xs leading-5 group-data-[collapsible=icon]:hidden">
             <p className="truncate font-medium" title={signedInCompany}>{signedInCompany}</p>
+            {session.role !== 'publisher' && (routePortal?.client_id ?? clientId) === 'smart-financial' ? (
+              <p className="truncate text-muted-foreground" title="Brittany Belezos">Brittany Belezos</p>
+            ) : null}
           </div>
         </SidebarFooter>
         <ClientSidebarBorderTrigger />
