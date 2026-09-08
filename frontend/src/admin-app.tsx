@@ -60,6 +60,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { ShareButton, SharedLinksPanel } from '@/components/share-controls';
+import { shareableReviewIds } from '@/lib/review-sharing';
 import { PlatformDashboard } from '@/components/platform-dashboard';
 import { AdminPlansPanel } from '@/components/admin-plans';
 import { Link2, Users } from 'lucide-react';
@@ -1097,6 +1098,7 @@ function ReviewWorkspace() {
             </CardDescription>
             <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
               <div className="flex items-center gap-2">
+                {completeCount > 0 ? <ShareButton jobIds={rows.flatMap(({ status }) => status?.status === 'complete' ? [status.job_id] : [])} label="Share batch" /> : null}
                 {activeBatchId ? (
                   <Link
                     to="/batches/$batchId"
@@ -1277,6 +1279,8 @@ function BatchRow({
             Retry
           </Button>
         ) : status?.report_ready ? (
+          <div className="flex flex-wrap justify-end gap-1">
+          <ShareButton jobIds={[status.job_id]} label="Share" size="xs" />
           <Link
             to="/reviews/$jobId/report"
             params={{ jobId: status.job_id }}
@@ -1285,6 +1289,7 @@ function BatchRow({
             <FileJson data-icon="inline-start" />
             Report
           </Link>
+          </div>
         ) : item.jobId ? (
           <Link
             to="/reviews/$jobId"
@@ -1442,6 +1447,9 @@ function HistoryCard({
   const someVisibleSelected = !allVisibleSelected &&
     selectableVisibleIds.some((jobId) => selectedReviewIds.has(jobId));
   const selectedCount = selectedReviewIds.size;
+  const selectedShareIds = [...new Set(historyEntries.flatMap(entry =>
+    shareableReviewIds(entry.kind === 'batch' ? historyEntryBatchItems(entry) : [entry.review], offerFilter)
+  ))].filter(jobId => selectedReviewIds.has(jobId));
 
   useEffect(() => {
     setSelectedReviewIds(new Set());
@@ -1619,7 +1627,8 @@ function HistoryCard({
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{selectedCount} selected</Badge>
-                    <ShareButton key={`${[...selectedReviewIds].join(',')}:${offerFilter}`} jobIds={[...selectedReviewIds]} offerId={offerFilter === 'all' ? undefined : offerFilter} />
+                    {selectedShareIds.length ? <ShareButton jobIds={selectedShareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} /> : null}
+                    {selectedShareIds.length < selectedCount ? <span className="text-xs text-muted-foreground">Only completed results can be shared</span> : null}
                     {allVisibleSelected ? (
                       <span className="text-xs text-muted-foreground">
                         All visible reviews selected
@@ -1682,7 +1691,7 @@ function HistoryCard({
                   <col className="w-28" />
                   <col className="w-44" />
                   <col className="w-[clamp(20rem,24vw,28rem)]" />
-                  <col className="w-28" />
+                  <col className="w-52" />
                 </colgroup>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
@@ -1716,6 +1725,7 @@ function HistoryCard({
                     const label = historyEntryLabel(entry);
                     const subtitle = historyEntrySubtitle(entry);
                     const verticals = historyEntryVerticals(entry);
+                    const shareIds = shareableReviewIds(entry.kind === 'batch' ? historyEntryBatchItems(entry) : [entry.review], offerFilter);
                     return (
                       <TableRow
                         key={entry.entryKey}
@@ -1803,6 +1813,7 @@ function HistoryCard({
                         </TableCell>
                         <TableCell className="px-2 py-1.5 text-right">
                           <div className="flex min-w-max justify-end gap-1">
+                            {shareIds.length && (entry.kind !== 'batch' || entry.batch) ? <ShareButton jobIds={shareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} label={entry.kind === 'batch' ? 'Share batch' : 'Share'} size="xs" /> : null}
                             {entry.kind === 'batch' ? (
                               <Link
                                 to="/batches/$batchId"
@@ -2337,6 +2348,7 @@ function ProgressPage() {
           <ProgressValue />
         </Progress>
         {status?.report_ready ? (
+          <div className="flex flex-wrap gap-2">
           <Link
             className={cn(buttonVariants({ variant: 'default' }), 'justify-self-start')}
             to="/reviews/$jobId/report"
@@ -2345,6 +2357,8 @@ function ProgressPage() {
             <FileJson data-icon="inline-start" />
             Open report
           </Link>
+          <ShareButton jobIds={[jobId]} />
+          </div>
         ) : null}
         {query.error ? (
           <Alert variant="destructive">
@@ -2919,6 +2933,8 @@ function BatchPage() {
   const selectedResult = search.result ?? 'all';
   const setSelectedOfferId = (offer: string) => void navigate({ search: { ...search, offer } });
   const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(new Set());
+  const [selectedShareIds, setSelectedShareIds] = useState<Set<string>>(new Set());
+  useEffect(() => setSelectedShareIds(new Set()), [batchId, selectedOfferId, selectedResult]);
   const query = useQuery({
     queryKey: ['batch', batchId],
     queryFn: () => getBatch(batchId),
@@ -2963,6 +2979,10 @@ function BatchPage() {
     findOfferOutcome(item.offer_outcomes, offer.offer_id)?.evaluation_state === 'evaluated'
   ));
   const visibleItems = query.data.items.filter(item => matchesReviewFilter(item, selectedOfferId, selectedResult));
+  const batchShareIds = shareableReviewIds(query.data.items, selectedOfferId);
+  const visibleShareIds = shareableReviewIds(visibleItems, selectedOfferId);
+  const selectedIds = visibleShareIds.filter(id => selectedShareIds.has(id));
+  const allSelected = visibleShareIds.length > 0 && selectedIds.length === visibleShareIds.length;
 
   return (
     <Card className="min-w-0">
@@ -2975,6 +2995,7 @@ function BatchPage() {
         </CardDescription>
         <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
           <div className="flex flex-wrap justify-end gap-2">
+            <ShareButton jobIds={batchShareIds} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} label="Share batch" />
             {batchComplete ? (
               <PdfDownloadMenu
                 baseHref={`/api/batches/${query.data.batch_id}/report.pdf`}
@@ -3008,6 +3029,8 @@ function BatchPage() {
           <p className="text-xs text-muted-foreground">
             Showing {visibleItems.length} of {query.data.items.length} items. Color filters use the original AdChecked assessment.
           </p>
+          <p className="text-xs text-muted-foreground">Share batch includes all completed creatives for the selected offer. Select individual creatives below to share a smaller set.</p>
+          {selectedIds.length ? <div className="my-2 flex flex-wrap items-center gap-2"><Badge variant="secondary">{selectedIds.length} selected</Badge><ShareButton jobIds={selectedIds} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} /><Button size="sm" variant="ghost" onClick={() => setSelectedShareIds(new Set())}>Clear selection</Button></div> : null}
           <label className="mt-2 grid max-w-64 gap-1 text-xs font-medium">
             Filter by AdChecked result
             <Select
@@ -3032,17 +3055,19 @@ function BatchPage() {
           </label>
           {selectedResult !== 'all' ? <Button className="mt-2 w-fit" variant="ghost" size="sm" onClick={() => void navigate({ search: { ...search, result: 'all' } })}>Clear result filter</Button> : null}
         </div>
-        <Table className="table-fixed max-md:min-w-[58rem]">
+        <Table className="min-w-[64rem] table-fixed">
           <colgroup>
+            <col className="w-10" />
             <col className="w-20" />
             <col className="w-28" />
             <col />
             <col className="w-36" />
             <col className={selectedOffer ? 'w-48' : 'w-80'} />
-            <col className="w-32" />
+            <col className="w-44" />
           </colgroup>
           <TableHeader>
             <TableRow>
+              <TableHead><HistoryCheckbox ariaLabel="Select all completed creatives in this batch" checked={allSelected} indeterminate={selectedIds.length > 0 && !allSelected} disabled={!visibleShareIds.length} onChange={() => setSelectedShareIds(allSelected ? new Set() : new Set(visibleShareIds))} /></TableHead>
               <TableHead>Creative</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Name</TableHead>
@@ -3054,7 +3079,7 @@ function BatchPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {!visibleItems.length ? <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No items match this client and result.</TableCell></TableRow> : null}
+            {!visibleItems.length ? <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No items match this client and result.</TableCell></TableRow> : null}
             {visibleItems.map((item) => {
               const isExpanded = expandedItemIds.has(item.item_id);
               const hasDecisionContext = visibleOfferColumns.some((offer) => {
@@ -3064,6 +3089,7 @@ function BatchPage() {
               return (
               <React.Fragment key={item.item_id}>
                 <TableRow>
+                  <TableCell className="align-top"><HistoryCheckbox ariaLabel={`Select ${item.file_name}`} checked={Boolean(item.job_id && selectedShareIds.has(item.job_id))} disabled={!item.job_id || !visibleShareIds.includes(item.job_id)} onChange={() => setSelectedShareIds(current => { const next = new Set(current); if (item.job_id) { if (next.has(item.job_id)) next.delete(item.job_id); else next.add(item.job_id); } return next; })} /></TableCell>
                   <TableCell className="align-top">
                     <CreativeThumbnail
                       alt={`Preview of ${item.file_name}`}
@@ -3091,6 +3117,7 @@ function BatchPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex flex-wrap justify-end gap-1">
+                    {item.job_id && visibleShareIds.includes(item.job_id) ? <ShareButton jobIds={[item.job_id]} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} label="Share" /> : null}
                     {item.status === 'upload_failed' && !item.job_id ? (
                       <Button
                         type="button"
@@ -3150,7 +3177,7 @@ function BatchPage() {
                 </TableRow>
                 {isExpanded ? (
                   <TableRow className="bg-muted/15 hover:bg-muted/15">
-                    <TableCell colSpan={6} className="p-3">
+                    <TableCell colSpan={7} className="p-3">
                       <BatchItemDecisionDetails item={item} offers={visibleOfferColumns} />
                     </TableCell>
                   </TableRow>

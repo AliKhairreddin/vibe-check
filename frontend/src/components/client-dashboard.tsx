@@ -670,6 +670,12 @@ function ClientDashboard() {
                           View insights
                         </Link>
                       ) : null}
+                      <ShareButton
+                        jobIds={(allGroups.find(batch => batch.id === group.id)?.reviews ?? group.reviews).map(review => review.job_id)}
+                        clientId={selectedPortal.client_id}
+                        label={group.kind === 'batch' ? 'Share batch' : 'Share group'}
+                        size="xs"
+                      />
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-xs tabular-nums text-muted-foreground sm:pl-0">
                         <span>{group.reviews.length} total</span>
                         <span className="text-red-700 dark:text-red-300">{red} red</span>

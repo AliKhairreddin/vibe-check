@@ -1,11 +1,18 @@
 import { useState } from 'react';
+import { Dialog } from '@base-ui/react/dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Link2, LoaderCircle, ShieldOff } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { createShare, listShares, revokeShare } from '@/lib/workspace-api';
 
-export function ShareButton({ jobIds, clientId, offerId }: { jobIds: string[]; clientId?: string; offerId?: string }) {
+type ShareButtonProps = { jobIds: string[]; clientId?: string; offerId?: string; label?: string; size?: 'sm' | 'xs' };
+
+export function ShareButton(props: ShareButtonProps) {
+  return <ShareLinkControl key={JSON.stringify([props.clientId, props.offerId, [...props.jobIds].sort()])} {...props} />;
+}
+
+function ShareLinkControl({ jobIds, clientId, offerId, label, size = 'sm' }: ShareButtonProps) {
   const [url, setUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const cache = useQueryClient();
@@ -17,17 +24,33 @@ export function ShareButton({ jobIds, clientId, offerId }: { jobIds: string[]; c
       try { await navigator.clipboard.writeText(result.url); setCopied(true); } catch { setCopied(false); }
     },
   });
-  return <div className="grid gap-2">
-    <Button size="sm" variant="outline" disabled={!jobIds.length || mutation.isPending} onClick={() => { setUrl(''); setCopied(false); mutation.mutate(); }} title="Create a public link, valid for 30 days">
-      {mutation.isPending ? <LoaderCircle className="animate-spin" /> : <Link2 />} {jobIds.length > 1 ? `Share ${jobIds.length} creatives` : 'Copy public link'}
-    </Button>
-    {url ? <div className="grid max-w-sm gap-1 rounded-lg border bg-background p-2 text-xs" role="status">
-      <span className="flex items-center gap-1 font-medium">{copied ? <Check className="size-3" /> : <Copy className="size-3" />}{copied ? 'Link copied' : 'Copy this link'}</span>
-      <Input aria-label="Public creative link" className="h-8 text-xs" readOnly value={url} onFocus={event => event.target.select()} />
-      <span className="text-muted-foreground">Anyone with this link can view these reviews for 30 days. Revoke it in Shared links.</span>
-    </div> : null}
-    {mutation.error ? <p role="alert" className="max-w-sm text-xs text-destructive">{mutation.error.message}</p> : null}
-  </div>;
+  return <Dialog.Root>
+    <Dialog.Trigger
+      render={<Button size={size} variant="outline" />}
+      disabled={!jobIds.length || jobIds.length > 100 || mutation.isPending}
+      onClick={() => { if (!url) mutation.mutate(); }}
+      title={jobIds.length > 100 ? 'Select up to 100 creatives per link' : `Share ${jobIds.length} completed creative${jobIds.length === 1 ? '' : 's'} in one public link, valid for 30 days`}
+    >
+      {mutation.isPending ? <LoaderCircle className="animate-spin" /> : <Link2 />} {label ?? (jobIds.length > 1 ? `Share ${jobIds.length} creatives` : 'Share creative')}
+    </Dialog.Trigger>
+    <Dialog.Portal>
+      <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/45" onClick={event => event.stopPropagation()} />
+      <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 grid w-[calc(100%_-_2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-popover p-5 text-popover-foreground shadow-xl" onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Enter') event.stopPropagation(); }}>
+        <Dialog.Title className="font-semibold">Shareable link</Dialog.Title>
+        <Dialog.Description className="text-sm text-muted-foreground">
+          {jobIds.length} completed creative{jobIds.length === 1 ? '' : 's'} in one link. Anyone with this link can view these reviews for 30 days. Revoke it in Shared links.
+        </Dialog.Description>
+        {mutation.isPending ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />Creating link…</p> : null}
+        {url ? <div className="grid gap-2">
+          <p role="status" className="flex items-center gap-1 text-sm font-medium">{copied ? <Check className="size-4" /> : <Copy className="size-4" />}{copied ? 'Link copied' : 'Copy this link'}</p>
+          <Input aria-label="Public creative link" readOnly value={url} onFocus={event => event.target.select()} />
+          <Button variant="outline" onClick={() => void navigator.clipboard.writeText(url).then(() => setCopied(true)).catch(() => setCopied(false))}><Copy />Copy link</Button>
+        </div> : null}
+        {mutation.error ? <div className="grid gap-2"><p role="alert" className="text-sm text-destructive">{mutation.error.message}</p><Button variant="outline" onClick={() => mutation.mutate()}>Retry</Button></div> : null}
+        <Dialog.Close render={<Button className="justify-self-end" variant="ghost" />}>Done</Dialog.Close>
+      </Dialog.Popup>
+    </Dialog.Portal>
+  </Dialog.Root>;
 }
 
 export function SharedLinksPanel({ clientId }: { clientId?: string }) {

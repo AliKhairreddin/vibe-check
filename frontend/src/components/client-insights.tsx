@@ -1,4 +1,5 @@
 import { useWorkspace } from './workspace-context';
+import { ShareButton } from './share-controls';
 import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
@@ -126,7 +127,7 @@ export function ClientBatchPage() {
             <h1 className="font-heading text-3xl font-semibold tracking-tight">{batch?.label ?? 'Creative batch'}</h1>
             <p className="text-sm text-muted-foreground">A focused view of this batch’s effective results and client decisions.</p>
           </div>
-          {batch ? <StatusPills counts={counts} total={reviews.length} /> : null}
+          {batch ? <div className="flex flex-wrap items-center gap-3"><ShareButton jobIds={reviews.map(review => review.job_id)} clientId={clientId} label="Share batch" /><StatusPills counts={counts} total={reviews.length} /></div> : null}
         </div>
 
         {!portal ? (
@@ -289,17 +290,24 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
             </CardHeader>
             <CardContent className="grid gap-2">
               {batches.slice(0, 6).map((batch) => (
+                <div key={`${batch.clientId}:${batch.batchId}`} className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
                 <Link
                   key={`${batch.clientId}:${batch.batchId}`}
                   to="/client/$clientId/batches/$batchId"
                   params={{ clientId: batch.clientId, batchId: batch.batchId }}
-                  className="group flex flex-wrap items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="group flex min-w-0 flex-1 flex-wrap items-center gap-3 rounded-lg transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span className="grid size-9 place-items-center rounded-lg bg-muted/55 text-muted-foreground"><Layers3 className="size-4" /></span>
                   <span className="min-w-0 flex-1"><span className="block truncate font-medium">{batch.label}</span><span className="block text-xs text-muted-foreground">{formatDate(batch.createdAt)} · {batch.reviews.length} creatives</span></span>
                   <StatusPills counts={statusCounts(batch.reviews)} total={batch.reviews.length} compact />
                   <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                 </Link>
+                <ShareButton
+                  jobIds={allEntries.filter(entry => entry.clientId === batch.clientId && entry.review.batch_id === batch.batchId).map(entry => entry.review.job_id)}
+                  clientId={batch.clientId}
+                  label="Share batch"
+                />
+                </div>
               ))}
             </CardContent>
           </Card>

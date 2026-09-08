@@ -44,6 +44,7 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { CreativeThumbnail } from '@/components/creative-media';
+import { ShareButton } from '@/components/share-controls';
 import { useAdminAccess } from '@/components/admin-access-gate';
 import {
   getOfferColumns,
@@ -633,6 +634,7 @@ function RecentReviewRow({
       <Link to={target} params={{ jobId: review.job_id }} className={linkClassName}>
         {content}
       </Link>
+      {review.status === 'complete' ? <ShareButton jobIds={[review.job_id]} label="Share" size="xs" /> : null}
     </div>
   );
 }

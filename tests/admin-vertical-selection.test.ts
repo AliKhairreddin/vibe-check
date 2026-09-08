@@ -47,7 +47,7 @@ test('keeps the review form full width and renders batch progress as a table bel
   assert.match(adminSource, /aria-expanded=\{openMobile\}/);
   assert.match(adminSource, /<Table className="min-w-\[58rem\] table-fixed max-md:min-w-\[74rem\]">/);
   assert.match(adminSource, /<col className="max-md:w-56" \/>/);
-  assert.match(adminSource, /<Table className="table-fixed max-md:min-w-\[58rem\]">/);
+  assert.match(adminSource, /<Table className="min-w-\[64rem\] table-fixed">/);
   assert.match(adminSource, /<CardDescription className="max-sm:col-span-2">\s*Uploaded \{formatDate\(query\.data\.created_at\)\}/);
   assert.match(adminSource, /<CardAction className="max-sm:col-span-2 max-sm:col-start-1 max-sm:row-span-1 max-sm:row-start-3 max-sm:justify-self-stretch">/);
   assert.match(offerOutcomesSource, /compact && 'min-w-0 max-w-full overflow-hidden'/);
