@@ -1193,6 +1193,21 @@ export async function fetchClientReviewPdf(
   jobId: string
 ): Promise<{ blob: Blob; filename: string }> {
   const reportPath = `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/report.pdf`;
+  return fetchClientPdf(reportPath, `${jobId}-client-report.pdf`);
+}
+
+export async function fetchClientBatchPdf(
+  clientId: string,
+  batchId: string,
+  publisherId?: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const params = new URLSearchParams();
+  if (publisherId && publisherId !== 'all') params.set('publisher_id', publisherId);
+  const reportPath = `/api/client/${encodeURIComponent(clientId)}/batches/${encodeURIComponent(batchId)}/report.pdf`;
+  return fetchClientPdf(`${reportPath}${params.size ? `?${params}` : ''}`, `${batchId}-client-report.pdf`);
+}
+
+async function fetchClientPdf(reportPath: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(reportPath, { headers: clientHeaders() });
   if (!response.ok) {
     const body = await response.text();
@@ -1204,13 +1219,13 @@ export async function fetchClientReviewPdf(
   const disposition = response.headers.get('content-disposition') ?? '';
   const encodedName = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1];
   const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
-  let filename = `${jobId}-client-report.pdf`;
+  let filename = fallbackFilename;
   try {
     filename = encodedName ? decodeURIComponent(encodedName) : (quotedName || filename);
   } catch {
     filename = quotedName || filename;
   }
-  filename = filename.split(/[\\/]/).pop() || `${jobId}-client-report.pdf`;
+  filename = filename.split(/[\\/]/).pop() || fallbackFilename;
   if (!filename.toLowerCase().endsWith('.pdf')) filename += '.pdf';
   return { blob: new Blob([blob], { type: 'application/pdf' }), filename };
 }

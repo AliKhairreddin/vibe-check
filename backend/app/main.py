@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 import httpx
+from pypdf.errors import PdfReadError
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -103,6 +104,7 @@ from .review_pipeline.source_links import resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
 from .review_pipeline.pdf_reports import (
     PdfArtifact,
+    build_client_batch_pdf,
     ensure_batch_pdf,
     ensure_review_pdf,
     read_pdf_artifact,
@@ -1451,6 +1453,39 @@ def client_reviews(client_id:str, request:Request, limit:int=1000, publisher_id:
         'display_name':config['display_name'],
         'reviews':[public_client_review(review) for review in reviews],
     }
+
+
+@app.get('/api/client/{client_id}/batches/{batch_id}/report.pdf')
+def client_batch_pdf(client_id:str, batch_id:str, request:Request, publisher_id:str|None=None):
+    config=require_client(request, client_id)
+    if not BATCH_ID_PATTERN.fullmatch(batch_id):
+        raise HTTPException(404, 'Batch not found.')
+    session=authenticate_client(request)
+    if session['role'] == 'publisher':
+        publisher_id=session.get('publisher_ids', {}).get(client_id, session['publisher_id'])
+    elif publisher_id == 'all':
+        publisher_id=None
+    reviews=[
+        review for review in list_client_reviews(client_id, config['offer_id'], 1000, **({'publisher_id':publisher_id} if publisher_id else {}))
+        if review.get('batchId') == batch_id
+        and (not publisher_id or review.get('publisherId') == publisher_id)
+    ]
+    if not reviews:
+        raise HTTPException(404, 'Batch not found.')
+    for review in reviews:
+        workspaces.require_submission(request, client_id, review['jobId'])
+        if get_client_review_report(client_id, config['offer_id'], review['jobId']) is None:
+            raise HTTPException(409, 'A report is not ready. Refresh the page and try again.')
+    try:
+        content, filename=build_client_batch_pdf(batch_id, reviews, config['offer_id'])
+    except (FileNotFoundError, KeyError):
+        raise HTTPException(409, 'A report is not ready. Refresh the page and try again.') from None
+    except (httpx.HTTPError, PdfReadError):
+        raise HTTPException(503, 'PDF report storage is temporarily unavailable. Try again.') from None
+    return Response(content=content, media_type='application/pdf', headers={
+        'content-disposition':f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+        'cache-control':'no-store',
+    })
 
 
 @app.get('/api/client/{client_id}/reviews/{job_id}')

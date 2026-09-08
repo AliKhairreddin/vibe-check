@@ -32,6 +32,7 @@ import {
 
 import {
   ClientPortalFrame,
+  ClientPdfDownloadButton,
   effectiveReviewStatus,
   isClientOverride,
   useClientAuth,
@@ -127,7 +128,13 @@ export function ClientBatchPage() {
             <h1 className="font-heading text-3xl font-semibold tracking-tight">{batch?.label ?? 'Creative batch'}</h1>
             <p className="text-sm text-muted-foreground">A focused view of this batch’s effective results and client decisions.</p>
           </div>
-          {batch ? <div className="flex flex-wrap items-center gap-3"><ShareButton jobIds={reviews.map(review => review.job_id)} clientId={clientId} label="Share batch" /><StatusPills counts={counts} total={reviews.length} /></div> : null}
+          {batch ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <ClientPdfDownloadButton key={`${clientId}:${batchId}:${publisherId}`} clientId={clientId} batchId={batchId} publisherId={publisherId} />
+              <ShareButton jobIds={reviews.map(review => review.job_id)} clientId={clientId} label="Share batch" />
+              <StatusPills counts={counts} total={reviews.length} />
+            </div>
+          ) : null}
         </div>
 
         {!portal ? (

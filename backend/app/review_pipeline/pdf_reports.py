@@ -1422,6 +1422,28 @@ def _failed_creative_pdf(item: Any) -> bytes:
     return buffer.getvalue()
 
 
+def build_client_batch_pdf(
+    batch_id: str,
+    reviews: Sequence[dict[str, Any]],
+    offer_id: str,
+) -> tuple[bytes, str]:
+    """Combine only authorized client reviews, without caching a shared batch artifact."""
+    writer = PdfWriter()
+    for review in reviews:
+        artifact = ensure_review_pdf(review['jobId'], offer_id)
+        reader = PdfReader(io.BytesIO(read_pdf_artifact(artifact)))
+        if not reader.pages:
+            raise FileNotFoundError(review['jobId'])
+        for page in reader.pages:
+            writer.add_page(page)
+    if not writer.pages:
+        raise FileNotFoundError(batch_id)
+    output = io.BytesIO()
+    writer.write(output)
+    filename = _safe_filename(reviews[0].get('batchSourceLabel'), f'batch-{batch_id[:8]}')
+    return output.getvalue(), filename
+
+
 def build_and_store_batch_pdf(
     batch: ReviewBatch,
     offer_id: str | None = None,

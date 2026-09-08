@@ -1,12 +1,15 @@
 import importlib
+import io
 import time
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from pypdf import PdfReader
 
 from app import workspaces
 from app.review_pipeline.models import JobRecord, JobStatus, OfferProfile
+from app.review_pipeline import pdf_reports
 
 main = importlib.import_module('app.main')
 JOB = 'a' * 32
@@ -113,6 +116,102 @@ async def test_publisher_list_cannot_override_its_publisher_scope(portal, monkey
         assert calls[0][1]['publisher_id'] == 'publisher-a'
         await client.get('/api/client/kissterra/submissions?publisher_id=publisher-b')
         assert portal['calls'][-1][1]['publisherId'] == 'publisher-a'
+
+
+@pytest.fixture
+def batch_reports(portal, monkeypatch):
+    batch_id = 'e' * 32
+    rows = [
+        {'jobId': JOB, 'batchId': batch_id, 'publisherId': 'publisher-a', 'batchSourceLabel': 'September Home'},
+        {'jobId': OTHER, 'batchId': batch_id, 'publisherId': 'publisher-b', 'batchSourceLabel': 'September Home'},
+        {'jobId': 'd' * 32, 'batchId': 'f' * 32, 'publisherId': 'publisher-a'},
+    ]
+    calls = []
+    # Return mixed rows to exercise the endpoint's scope checks too.
+    monkeypatch.setattr(main, 'list_client_reviews', lambda *args, **kwargs: rows)
+    monkeypatch.setattr(main, 'get_client_review_report', lambda *args: {'summary': 'Ready'})
+
+    def report(job_id, offer_id):
+        calls.append((job_id, offer_id))
+        return pdf_reports.build_and_store_review_pdf(
+            job_id,
+            JobRecord(job_id=job_id, file_name=f'Creative {job_id[0]}.mp4', offer_ids=['kissterra', 'acp']),
+            {'schema_version': 2, 'primary_offer_id': 'acp', 'offer_results': [
+                {'offer_id': 'acp', 'offer_name': 'ACP', 'overall_status': 'red', 'summary': 'Private other advertiser result', 'findings': []},
+                {'offer_id': 'kissterra', 'offer_name': 'Kissterra', 'overall_status': 'green', 'summary': f'Visible creative {job_id[0]} result', 'findings': []},
+            ]},
+            offer_id=offer_id,
+        )
+
+    monkeypatch.setattr(pdf_reports, 'ensure_review_pdf', report)
+    return batch_id, calls
+
+
+@pytest.mark.anyio
+async def test_advertiser_batch_pdf_combines_only_batch_and_offer_reports(portal, batch_reports):
+    batch_id, calls = batch_reports
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']('client')) as client:
+        response = await client.get(f'/api/client/kissterra/batches/{batch_id}/report.pdf')
+    assert response.status_code == 200, response.text
+    assert response.headers['content-type'] == 'application/pdf'
+    assert response.headers['cache-control'] == 'no-store'
+    assert 'September%20Home-report.pdf' in response.headers['content-disposition']
+    pages = PdfReader(io.BytesIO(response.content)).pages
+    assert len(pages) == 2
+    assert 'Visible creative a result' in pages[0].extract_text()
+    assert 'Visible creative b result' in pages[1].extract_text()
+    assert 'Private other advertiser result' not in ''.join(page.extract_text() for page in pages)
+    assert calls == [(JOB, 'kissterra'), (OTHER, 'kissterra')]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('role,requested_publisher,expected_job', [
+    ('client', 'publisher-b', OTHER),
+    ('publisher', 'publisher-b', JOB),
+    ('publisher', 'all', JOB),
+])
+async def test_batch_pdf_respects_publisher_filter_and_session_scope(portal, batch_reports, role, requested_publisher, expected_job):
+    batch_id, calls = batch_reports
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies'](role)) as client:
+        response = await client.get(f'/api/client/kissterra/batches/{batch_id}/report.pdf?publisher_id={requested_publisher}')
+    assert response.status_code == 200, response.text
+    assert len(PdfReader(io.BytesIO(response.content)).pages) == 1
+    assert calls == [(expected_job, 'kissterra')]
+
+
+@pytest.mark.anyio
+async def test_batch_pdf_requires_workspace_access_and_visible_batch(portal, batch_reports):
+    batch_id, calls = batch_reports
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com') as client:
+        assert (await client.get(f'/api/client/kissterra/batches/{batch_id}/report.pdf')).status_code == 401
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']()) as client:
+        assert (await client.get(f'/api/client/acp/batches/{batch_id}/report.pdf')).status_code == 404
+        assert (await client.get('/api/client/kissterra/batches/invalid/report.pdf')).status_code == 404
+        assert (await client.get(f'/api/client/kissterra/batches/{"9" * 32}/report.pdf')).status_code == 404
+    assert calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('failure', ['unavailable', 'missing', 'storage', 'corrupt'])
+async def test_batch_pdf_never_returns_a_partial_download(portal, batch_reports, monkeypatch, failure):
+    batch_id, _ = batch_reports
+    original = pdf_reports.ensure_review_pdf
+    if failure == 'unavailable':
+        monkeypatch.setattr(main, 'get_client_review_report', lambda client_id, offer_id, job_id: None if job_id == OTHER else {})
+    else:
+        def report(job_id, offer_id):
+            if job_id == OTHER:
+                if failure == 'storage':
+                    raise httpx.ConnectError('Storage unavailable')
+                if failure == 'corrupt':
+                    raise main.PdfReadError('Invalid PDF')
+                raise FileNotFoundError(job_id)
+            return original(job_id, offer_id)
+        monkeypatch.setattr(pdf_reports, 'ensure_review_pdf', report)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']('client')) as client:
+        response = await client.get(f'/api/client/kissterra/batches/{batch_id}/report.pdf')
+    assert response.status_code == (503 if failure in {'storage', 'corrupt'} else 409)
+    assert response.headers['content-type'] == 'application/json'
 
 
 @pytest.mark.anyio

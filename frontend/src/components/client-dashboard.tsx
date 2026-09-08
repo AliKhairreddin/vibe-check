@@ -89,6 +89,7 @@ import { SessionLoadingScreen } from '@/components/session-loading-screen';
 import {
   clearClientSession,
   decideClientReview,
+  fetchClientBatchPdf,
   fetchClientReviewPdf,
   getClientSession,
   getClientReview,
@@ -1472,7 +1473,10 @@ function ClientDecisionBadge({ decision }: { decision: 'approved' | 'disapproved
   );
 }
 
-function ClientPdfDownloadButton({ clientId, jobId }: { clientId: string; jobId: string }) {
+export function ClientPdfDownloadButton(props: { clientId: string } & (
+  | { jobId: string; batchId?: never; publisherId?: never }
+  | { batchId: string; publisherId?: string; jobId?: never }
+)) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState('');
   async function download() {
@@ -1480,7 +1484,9 @@ function ClientPdfDownloadButton({ clientId, jobId }: { clientId: string; jobId:
     setIsDownloading(true);
     setError('');
     try {
-      const { blob, filename } = await fetchClientReviewPdf(clientId, jobId);
+      const { blob, filename } = await (props.batchId !== undefined
+        ? fetchClientBatchPdf(props.clientId, props.batchId, props.publisherId)
+        : fetchClientReviewPdf(props.clientId, props.jobId));
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
@@ -1496,7 +1502,7 @@ function ClientPdfDownloadButton({ clientId, jobId }: { clientId: string; jobId:
       setIsDownloading(false);
     }
   }
-  return <div className="grid gap-1"><Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing report' : 'Download report'}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
+  return <div className="grid gap-1"><Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing report' : props.batchId !== undefined ? 'Download PDF' : 'Download report'}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
 }
 
 function CompactFilterMenu<T extends string>({ icon, label, onChange, options, value }: {
