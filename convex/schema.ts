@@ -219,6 +219,7 @@ export default defineSchema({
     .index("by_job_id", ["jobId"])
     .index("by_run_id", ["runId"]),
   reviews: defineTable({
+    processingInstanceId: v.optional(v.string()),
     apiBatchId: v.optional(v.string()),
     automationRunId: v.optional(v.string()),
     batchId: v.optional(v.string()),

@@ -55,6 +55,9 @@ class InterruptedReview:
     offer_ids: tuple[str, ...]
     has_ad_copy: bool
     vertical: ReviewVertical = 'auto-insurance'
+    status: str = 'queued'
+    updated_at: int = 0
+    processing_instance_id: str | None = None
 
 
 def _upload_blob(value: bytes | Path, content_type: str) -> str:
@@ -166,12 +169,13 @@ async def persist_job_payload(
 
 
 def list_interrupted_reviews(limit: int = 500) -> list[InterruptedReview]:
+    from ..platform_monitoring import INSTANCE_ID
     if not storage.convex_enabled():
         return []
     rows = storage._convex_call(
         'query',
         'reviews:listInterrupted',
-        {'limit': max(1, min(limit, 500))},
+        {'limit': max(1, min(limit, 500)), 'idleInstanceId': INSTANCE_ID},
     )
     if not isinstance(rows, list):
         raise RuntimeError('Interrupted review lookup returned an invalid response.')
@@ -220,6 +224,9 @@ def list_interrupted_reviews(limit: int = 500) -> list[InterruptedReview]:
             ),
             offer_ids=offer_ids or ('acp',),
             has_ad_copy=bool(row.get('hasAdCopy')),
+            status=str(row.get('status') or 'queued'),
+            updated_at=int(row.get('updatedAt') or 0),
+            processing_instance_id=row.get('processingInstanceId'),
             vertical=(
                 row['vertical']
                 if row.get('vertical') in {'auto-insurance', 'home-insurance'}
@@ -227,6 +234,15 @@ def list_interrupted_reviews(limit: int = 500) -> list[InterruptedReview]:
             ),
         ))
     return interrupted
+
+
+def claim_interrupted_review(review: InterruptedReview) -> bool:
+    from ..platform_monitoring import INSTANCE_ID
+    return storage._convex_call('mutation', 'reviews:claimInterrupted', {
+        'jobId': review.job_id,
+        'expectedUpdatedAt': review.updated_at,
+        'instanceId': INSTANCE_ID,
+    }) is True
 
 
 def reconstruct_drive_payloads(
@@ -457,6 +473,7 @@ async def restore_media(
 
 
 def fail_unrecoverable_jobs(job_ids: list[str]) -> list[str]:
+    from ..platform_monitoring import INSTANCE_ID
     failed: list[str] = []
     for offset in range(0, len(job_ids), 100):
         result = storage._convex_call(
@@ -465,6 +482,7 @@ def fail_unrecoverable_jobs(job_ids: list[str]) -> list[str]:
             {
                 'jobIds': job_ids[offset:offset + 100],
                 'message': INTERRUPTED_MESSAGE,
+                'idleInstanceId': INSTANCE_ID,
             },
         )
         if isinstance(result, dict) and isinstance(result.get('failedJobIds'), list):

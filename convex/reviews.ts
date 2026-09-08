@@ -8,6 +8,10 @@ import { assertApiLease, syncApiJobState } from "./apiJobState.ts";
 
 type ResultStatus = "green" | "yellow" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
+const RECOVERY_GRACE_MS = 3 * 60_000;
+// Older containers did not record ownership. Allow their maximum job deadline
+// to pass before treating an unchanged review as abandoned during rollout.
+const LEGACY_RECOVERY_GRACE_MS = 2 * 60 * 60_000;
 const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 const INTERRUPTIBLE_STATUSES = [
   "queued",
@@ -54,6 +58,7 @@ type OfferReportForStorage = {
 };
 
 const statusArgs = {
+  processingInstanceId: v.optional(v.string()),
   apiLeaseId: v.optional(v.string()),
   automationRunId: v.optional(v.string()),
   batchId: v.optional(v.string()),
@@ -692,6 +697,7 @@ export const upsertStatus = mutation({
     }
 
     const value = {
+      processingInstanceId: args.processingInstanceId ?? existing?.processingInstanceId,
       automationRunId: jobState?.runId ?? existing?.automationRunId,
       batchId: args.batchId ?? existing?.batchId,
       batchItemId: args.batchItemId ?? existing?.batchItemId,
@@ -994,15 +1000,37 @@ export const listRecent = query({
   },
 });
 
+async function isInterrupted(
+  ctx: QueryCtx,
+  review: Doc<"reviews">,
+  now: number,
+  idleInstanceId?: string,
+): Promise<boolean> {
+  if (review.deletedAt !== undefined || review.automationRunId !== undefined
+    || review.apiBatchId !== undefined || !INTERRUPTIBLE_STATUSES.includes(review.status)
+    || review.updatedAt > now - RECOVERY_GRACE_MS) return false;
+  if (!review.processingInstanceId) {
+    return review.updatedAt <= now - LEGACY_RECOVERY_GRACE_MS;
+  }
+  // The caller may recover its own abandoned jobs only after its queue is idle.
+  if (review.processingInstanceId === idleInstanceId) return true;
+  const owner = await ctx.db.query("platformInstances")
+    .withIndex("by_instance_id", q => q.eq("instanceId", review.processingInstanceId!))
+    .unique();
+  return !owner || owner.updatedAt <= now - RECOVERY_GRACE_MS;
+}
+
 export const listInterrupted = query({
   args: {
     secret: v.string(),
     limit: v.number(),
+    idleInstanceId: v.optional(v.string()),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const limit = Math.max(1, Math.min(args.limit, 500));
+    const now = Date.now();
     const reviews = [];
     for (const status of INTERRUPTIBLE_STATUSES) {
       const remaining = limit - reviews.length;
@@ -1015,10 +1043,14 @@ export const listInterrupted = query({
             .eq("deletedAt", undefined)
             .eq("automationRunId", undefined)
             .eq("apiBatchId", undefined)
+            .lte("updatedAt", now - RECOVERY_GRACE_MS)
         )
         .order("asc")
-        .take(remaining);
-      reviews.push(...matches);
+        .take(500);
+      for (const review of matches) {
+        if (await isInterrupted(ctx, review, now, args.idleInstanceId)) reviews.push(review);
+        if (reviews.length >= limit) break;
+      }
     }
     return reviews.map((review) => ({
       batchId: review.batchId,
@@ -1028,6 +1060,7 @@ export const listInterrupted = query({
       hasAdCopy: review.hasAdCopy,
       jobId: review.jobId,
       offerIds: review.offerIds,
+      processingInstanceId: review.processingInstanceId,
       sourceFileId: review.sourceFileId,
       sourceKind: review.sourceKind,
       sourceUrl: review.sourceUrl,
@@ -1037,11 +1070,31 @@ export const listInterrupted = query({
   },
 });
 
+export const claimInterrupted = mutation({
+  args: {
+    secret: v.string(), jobId: v.string(), expectedUpdatedAt: v.number(), instanceId: v.string(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const review = await ctx.db.query("reviews")
+      .withIndex("by_job_id", q => q.eq("jobId", args.jobId)).unique();
+    const now = Date.now();
+    // Recovery downloads manifests before enqueueing. Recheck in a transaction
+    // so progress, completion, a fresh heartbeat, or another claim wins the race.
+    if (!review || review.updatedAt !== args.expectedUpdatedAt
+      || !await isInterrupted(ctx, review, now, args.instanceId)) return false;
+    await ctx.db.patch(review._id, { processingInstanceId: args.instanceId, updatedAt: now });
+    return true;
+  },
+});
+
 export const failInterrupted = mutation({
   args: {
     secret: v.string(),
     jobIds: v.array(v.string()),
     message: v.string(),
+    idleInstanceId: v.optional(v.string()),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
@@ -1056,10 +1109,7 @@ export const failInterrupted = mutation({
         .unique();
       if (
         !review
-        || review.deletedAt !== undefined
-        || review.automationRunId !== undefined
-        || review.apiBatchId !== undefined
-        || TERMINAL_BATCH_STATUSES.has(review.status)
+        || !await isInterrupted(ctx, review, now, args.idleInstanceId)
       ) {
         continue;
       }

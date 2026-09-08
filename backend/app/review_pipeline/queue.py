@@ -16,6 +16,7 @@ from .live_scan_storage import finish_live_review
 from .telegram import finish_batch_item_and_notify, send_job_event, send_review_started
 from .recovery import (
     RecoveredReviewPayload,
+    claim_interrupted_review,
     delete_job_payload,
     fail_unrecoverable_jobs,
     list_interrupted_reviews,
@@ -340,7 +341,8 @@ async def recover_interrupted_jobs() -> dict[str, int]:
         payloads.update(reconstructed)
         requeued = 0
         unrecoverable_ids: set[str] = set()
-        for job_id in job_ids:
+        for review in interrupted:
+            job_id = review.job_id
             payload = payloads.get(job_id)
             if payload is None:
                 unrecoverable_ids.add(job_id)
@@ -351,6 +353,8 @@ async def recover_interrupted_jobs() -> dict[str, int]:
                 and payload.media_url is None
             ):
                 unrecoverable_ids.add(job_id)
+                continue
+            if not await asyncio.to_thread(claim_interrupted_review, review):
                 continue
             file_name = Path(payload.file_name).name
             media_path = (
@@ -378,10 +382,11 @@ async def recover_interrupted_jobs() -> dict[str, int]:
                 logger.exception('Could not requeue interrupted review %s.', job_id)
                 continue
             requeued += 1
-            await asyncio.to_thread(
-                send_job_event, job_id, payload.meta, 'recovered',
-                'Processing resumed from the saved review source. Final results will follow.',
-            )
+            if review.processing_instance_id and review.status != JobStatus.queued.value:
+                await asyncio.to_thread(
+                    send_job_event, job_id, payload.meta, 'recovered',
+                    'Processing resumed from the saved review source. Final results will follow.',
+                )
         failed = await asyncio.to_thread(
             fail_unrecoverable_jobs,
             list(unrecoverable_ids),

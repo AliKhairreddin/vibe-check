@@ -37,7 +37,8 @@ items or counts. Names and source labels are escaped for Telegram HTML.
 | Uploads never reach processing | Once no batch progress has been recorded for two hours, an attention alert identifies the outstanding count and links to the batch. Uploads are not cancelled by the alert. |
 | Pipeline error, media/Drive download error, or final timeout | Failed individual/live review alert with the job details link; batch jobs appear in the final batch summary. |
 | A timeout can be retried automatically | Review delayed — retrying, with attempt count and progress link. The eventual final result follows. |
-| A job resumes after a container interruption | Review resumed after interruption, with a progress link. |
+| A started job resumes after its owning container stops reporting heartbeats | Review resumed after interruption, with a progress link. Active work on other containers is excluded, and recovery rechecks ownership and progress before requeuing. |
+| A waiting job is restored before processing has started, or an older job has no recorded owner | Recover quietly; no claim that processing was interrupted. |
 | Interrupted work has no recovery source | Failed review with re-upload instructions, or a failed item in the final batch summary. |
 | Live creative or primary text completes | Live review done, client counts, Meta account/creative context, report and Live Scans links. |
 | Live review fails | Live failure alert with job and Live Scans links. |

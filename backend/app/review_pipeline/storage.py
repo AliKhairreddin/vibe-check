@@ -202,6 +202,7 @@ def _convex_call_with_retry(kind:str, path:str, args:dict[str, Any])->Any:
     raise RuntimeError('Convex retry loop exited unexpectedly.')
 
 def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None, automation_run_id:str|None=None, vertical:ReviewVertical|None=None)->JobRecord:
+    from ..platform_monitoring import INSTANCE_ID
     current_file_name=file_name
     current_file_size=file_size
     current_has_ad_copy=True if has_ad_copy is None else has_ad_copy
@@ -247,6 +248,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
     rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,offer_ids=current_offer_ids,primary_offer_id=current_primary_offer_id,created_at=created_at,updated_at=now_ms(),vertical=current_vertical,**source_values)
     write_json(local_path, rec.model_dump(mode='json'))
     review_args = {
+        'processingInstanceId': INSTANCE_ID,
         'fileName': rec.file_name,
         'hasAdCopy': rec.has_ad_copy,
         'hasCreative': rec.has_creative,

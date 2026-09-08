@@ -3836,6 +3836,7 @@ async def test_startup_recovery_requeues_durable_jobs_and_fails_missing_jobs(
         return job_ids
 
     monkeypatch.setattr(review_queue, 'load_recovery_payloads', fake_load)
+    monkeypatch.setattr(review_queue, 'claim_interrupted_review', lambda review: True)
     monkeypatch.setattr(review_queue, 'enqueue_job', fake_enqueue)
     monkeypatch.setattr(review_queue, 'fail_unrecoverable_jobs', fake_fail)
 
