@@ -376,8 +376,8 @@ function OfferFilterOption({
       onClick={onClick}
     >
       <span className={cn(
-        'grid size-4 shrink-0 place-items-center rounded border',
-        checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background'
+        'grid size-4 shrink-0 place-items-center rounded-full border',
+        checked ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-500 dark:bg-blue-500' : 'border-input bg-background'
       )}>
         {checked ? <Check className="size-3" /> : null}
       </span>

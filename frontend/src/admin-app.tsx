@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { selectedControlClassName } from '@/lib/control-styles';
 import { ReleaseButton } from '@/components/release-controls';
 import { deletableBatchReviewIds, hasBatchReleases, hasReviewReleases, isReviewDeletable } from '@/lib/review-releases';
@@ -2023,20 +2024,14 @@ function HistoryCheckbox({
   indeterminate?: boolean;
   onChange: () => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (inputRef.current) inputRef.current.indeterminate = indeterminate;
-  }, [indeterminate]);
-
   return (
-    <input
-      ref={inputRef}
-      type="checkbox"
+    <Checkbox
+      indeterminate={indeterminate}
       checked={checked}
       disabled={disabled}
       aria-label={ariaLabel}
       onChange={onChange}
-      className="size-4 cursor-pointer rounded border-input accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      className="size-4"
     />
   );
 }

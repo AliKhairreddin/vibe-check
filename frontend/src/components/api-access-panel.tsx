@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { selectedControlClassName } from '@/lib/control-styles';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -533,9 +534,8 @@ export function ApiAccessPanel() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     {(offersQuery.data ?? []).map((offer) => (
                       <label key={offer.offer_id} className="flex items-start gap-3 rounded-lg border p-3">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 size-4 accent-primary"
+                        <Checkbox
+                          className="mt-0.5 size-4"
                           checked={draft.allowed_offer_ids.includes(offer.offer_id)}
                           onChange={(event) => toggleOffer(offer.offer_id, event.currentTarget.checked)}
                         />
@@ -570,9 +570,8 @@ export function ApiAccessPanel() {
                     <div className="grid gap-2 sm:grid-cols-2">
                       {(offersQuery.data ?? []).map((offer) => (
                         <label key={offer.offer_id} className="flex items-start gap-3 rounded-lg border bg-background p-3">
-                          <input
-                            type="checkbox"
-                            className="mt-0.5 size-4 accent-primary"
+                          <Checkbox
+                            className="mt-0.5 size-4"
                             checked={draft.shared_review_offer_ids.includes(offer.offer_id)}
                             onChange={(event) => toggleSharedReviewOffer(offer.offer_id, event.currentTarget.checked)}
                           />
@@ -666,9 +665,8 @@ export function ApiAccessPanel() {
                       <div className="grid gap-2 sm:grid-cols-2">
                         {(partnersQuery.data?.available_scopes ?? []).map((scope) => (
                           <label key={scope} className="flex items-start gap-3 rounded-lg border bg-background p-3">
-                            <input
-                              type="checkbox"
-                              className="mt-0.5 size-4 accent-primary"
+                            <Checkbox
+                              className="mt-0.5 size-4"
                               checked={keyScopes.includes(scope)}
                               onChange={(event) => toggleScope(scope, event.currentTarget.checked)}
                             />

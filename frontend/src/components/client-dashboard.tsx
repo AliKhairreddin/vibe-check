@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select } from '@/components/ui/select';
 import {
   createContext,
@@ -129,6 +130,13 @@ type ReviewGroup = {
 type StatusFilter = 'all' | 'pending' | 'approved' | 'disapproved';
 type ResultFilter = 'all' | OverallStatus;
 type BatchFilter = 'all' | 'unchecked' | 'checked';
+
+function reviewRowColumns(publisher: boolean) {
+  return publisher
+    ? 'min-[1200px]:grid-cols-[minmax(0,1fr)_4.5rem_5rem_8.5rem_5rem]'
+    : 'min-[1200px]:grid-cols-[minmax(0,1fr)_4.5rem_5rem_7rem_22rem]';
+}
+
 type DecisionInput = {
   decision: ClientDecisionValue;
   feedbackNote?: string;
@@ -332,8 +340,10 @@ function ClientDashboard() {
   const { session } = useClientAuth();
   const queryClient = useQueryClient();
   const { clientId: selectedClientId, publisherId } = useWorkspace();
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  useEffect(() => setSelectedIds(new Set()), [selectedClientId, publisherId]);
+  const [selection, setSelection] = useState<{
+    scope: string;
+    ids: Set<string>;
+  } | null>(null);
   const [preferences, setPreferences] = useState<ClientPreferences>(() => readClientPreferences());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [expandedCreatives, setExpandedCreatives] = useState<Set<string>>(new Set());
@@ -371,8 +381,11 @@ function ClientDashboard() {
     });
     return visibleReviews.length ? [{ ...group, reviews: visibleReviews }] : [];
   }), [allGroups, batchFilter, normalizedSearch, resultFilter, statusFilter]);
-  const visibleIds = visibleGroups.flatMap(group => group.reviews.map(review => review.job_id));
-  const selectedVisibleCount = visibleIds.filter(id => selectedIds.has(id)).length;
+  const selectionScope = JSON.stringify([selectedClientId, publisherId, normalizedSearch, statusFilter, resultFilter, batchFilter]);
+  const isSelecting = selection?.scope === selectionScope;
+  const visibleReviewIds = visibleGroups.flatMap(group => group.reviews.map(review => review.job_id));
+  const selectedReviewIds = isSelecting ? visibleReviewIds.filter(id => selection.ids.has(id)) : [];
+  useEffect(() => setSelection(null), [selectionScope]);
 
   useEffect(() => {
     if (!selectedPortal) return;
@@ -528,34 +541,29 @@ function ClientDashboard() {
           </section>
 
           <section aria-label="Review filters" className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 shadow-xs">
-            <label className="flex h-9 shrink-0 cursor-pointer items-center gap-2 px-2 text-xs font-medium" title="Select creatives matching your filters across all batches">
-              <input
-                type="checkbox"
-                className="size-3.5 accent-foreground"
-                aria-label="Select visible creatives"
-                disabled={!visibleIds.length}
-                checked={visibleIds.length > 0 && selectedVisibleCount === visibleIds.length}
-                ref={input => { if (input) input.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length; }}
-                onChange={event => {
-                  const checked = event.target.checked;
-                  setSelectedIds(current => {
-                    const next = new Set(current);
-                    for (const id of visibleIds) {
-                      if (checked) next.add(id);
-                      else next.delete(id);
-                    }
-                    return next;
-                  });
-                }}
-              />
-              Select visible
-            </label>
-            {selectedIds.size ? (
-              <div className="flex items-center gap-1 border-l pl-2" aria-label="Selected creative actions">
-                <ShareButton key={`${selectedClientId}:${publisherId}:${[...selectedIds].join(',')}`} jobIds={[...selectedIds]} clientId={selectedClientId} />
-                <Button size="icon-sm" variant="ghost" aria-label="Clear selection" title="Clear selection" onClick={() => setSelectedIds(new Set())}><X /></Button>
-              </div>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              {isSelecting ? (
+                <>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setSelection(null)}><X />Cancel</Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="selected"
+                    disabled={!visibleReviewIds.length || selectedReviewIds.length === visibleReviewIds.length}
+                    title={`Select all ${visibleReviewIds.length} creatives matching the current filters, including collapsed batches`}
+                    onClick={() => setSelection({ scope: selectionScope, ids: new Set(visibleReviewIds) })}
+                  >
+                    <CheckCircle2 />Select all
+                  </Button>
+                  <span className="text-xs tabular-nums text-muted-foreground" role="status" aria-live="polite">{selectedReviewIds.length} selected</span>
+                  {selectedReviewIds.length ? <ShareButton jobIds={selectedReviewIds} clientId={selectedPortal.client_id} label="Share selected" size="sm" /> : null}
+                </>
+              ) : (
+                <Button type="button" size="sm" variant="outline" disabled={!visibleReviewIds.length} onClick={() => setSelection({ scope: selectionScope, ids: new Set() })}>
+                  <CheckCircle2 />Select
+                </Button>
+              )}
+            </div>
             <div className="relative min-w-40 flex-[1_1_12rem]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input aria-label="Search creatives" className="h-9 border-0 bg-muted/45 pl-9 shadow-none focus-visible:bg-background" value={search} placeholder="Search creatives by filename or review summary…" onChange={(event) => setSearch(event.currentTarget.value)} />
@@ -647,6 +655,7 @@ function ClientDashboard() {
             <div className="grid gap-3">
               {visibleGroups.map((group) => {
                 const isExpanded = expandedGroups.has(group.id);
+                const selectedCount = isSelecting ? group.reviews.filter(review => selection.ids.has(review.job_id)).length : 0;
                 const red = group.reviews.filter((review) => effectiveReviewStatus(review) === 'red').length;
                 const yellow = group.reviews.filter((review) => effectiveReviewStatus(review) === 'yellow').length;
                 const green = group.reviews.filter((review) => effectiveReviewStatus(review) === 'green').length;
@@ -656,12 +665,34 @@ function ClientDashboard() {
                   .map((review) => review.job_id);
                 return (
                   <Card key={group.id} className="overflow-hidden py-0">
-                    <div className="flex flex-col gap-2 px-4 py-2.5 transition-colors hover:bg-muted/35 sm:flex-row sm:items-center">
-                      <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-expanded={isExpanded} onClick={() => setExpandedGroups((current) => toggleSetValue(current, group.id))}>
-                        {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-                        <span className="min-w-0 truncate font-semibold">{formatBatchTitle(group)}</span>
-                        <Badge variant="outline" className="hidden sm:inline-flex">{pending.length ? 'Needs review' : 'Reviewed'}</Badge>
-                      </button>
+                    <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 transition-colors hover:bg-muted/35">
+                      <div className="flex min-w-0 flex-[1_1_18rem] items-center gap-2">
+                        {isSelecting ? (
+                          <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-blue-500/10" title={`Select or deselect all creatives shown in ${formatBatchTitle(group)}`}>
+                            <Checkbox
+                              aria-label={`Select batch ${formatBatchTitle(group)}`}
+                              checked={selectedCount === group.reviews.length}
+                              indeterminate={selectedCount > 0 && selectedCount < group.reviews.length}
+                              onChange={event => {
+                                const checked = event.target.checked;
+                                setSelection(current => {
+                                  const ids = new Set(current?.scope === selectionScope ? current.ids : []);
+                                  for (const review of group.reviews) {
+                                    if (checked) ids.add(review.job_id);
+                                    else ids.delete(review.job_id);
+                                  }
+                                  return { scope: selectionScope, ids };
+                                });
+                              }}
+                            />
+                          </label>
+                        ) : null}
+                        <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-expanded={isExpanded} onClick={() => setExpandedGroups((current) => toggleSetValue(current, group.id))}>
+                          {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+                          <span className="min-w-0 truncate font-semibold">{formatBatchTitle(group)}</span>
+                          <Badge variant="outline" className="hidden sm:inline-flex">{pending.length ? 'Needs review' : 'Reviewed'}</Badge>
+                        </button>
+                      </div>
                       {group.kind === 'batch' ? (
                         <Link
                           to="/client/$clientId/batches/$batchId"
@@ -677,7 +708,7 @@ function ClientDashboard() {
                         label={group.kind === 'batch' ? 'Share batch' : 'Share group'}
                         size="xs"
                       />
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-7 text-xs tabular-nums text-muted-foreground sm:pl-0">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-muted-foreground">
                         <span>{group.reviews.length} total</span>
                         <span className="text-red-700 dark:text-red-300">{red} red</span>
                         <span className="text-yellow-700 dark:text-yellow-300">{yellow} yellow</span>
@@ -693,11 +724,12 @@ function ClientDashboard() {
                     {isExpanded ? (
                       <CardContent className="border-t bg-muted/15 p-3">
                         {preferences.reviewView === 'list' ? (
-                          <div className="mb-1 hidden grid-cols-[minmax(0,1fr)_7rem_7rem_8rem] gap-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
+                          <div className={cn('mb-1 hidden gap-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground min-[1200px]:grid', reviewRowColumns(session.role === 'publisher'))}>
                             <span>Creative</span>
                             <span>Result</span>
                             <span>Findings</span>
                             <span>Decision</span>
+                            <span className="text-right">Actions</span>
                           </div>
                         ) : null}
                         <div className={cn(
@@ -708,9 +740,16 @@ function ClientDashboard() {
                             : 'grid-cols-1'
                         )}>
                           {group.reviews.map((review) => (
-                            <div key={review.job_id} className="grid gap-1">
-                            <label className="flex items-center gap-2 px-1 text-xs text-muted-foreground"><input type="checkbox" aria-label={`Select ${review.file_name}`} checked={selectedIds.has(review.job_id)} onChange={event => setSelectedIds(current => { const next = new Set(current); if (event.target.checked) next.add(review.job_id); else next.delete(review.job_id); return next; })} />Select creative</label>
                             <CreativeReviewCard
+                              key={review.job_id}
+                              isSelecting={isSelecting}
+                              isSelected={isSelecting && selection.ids.has(review.job_id)}
+                              onSelectionChange={checked => setSelection(current => {
+                                const ids = new Set(current?.scope === selectionScope ? current.ids : []);
+                                if (checked) ids.add(review.job_id);
+                                else ids.delete(review.job_id);
+                                return { scope: selectionScope, ids };
+                              })}
                               clientId={selectedPortal.client_id}
                               density={preferences.density}
                               isExpanded={expandedCreatives.has(review.job_id)}
@@ -724,7 +763,6 @@ function ClientDashboard() {
                                 setExpandedCreatives((current) => toggleSetValue(current, review.job_id));
                               }}
                             />
-                            </div>
                           ))}
                         </div>
                       </CardContent>
@@ -982,9 +1020,12 @@ function ClientSidebarBorderTrigger() {
   );
 }
 
-function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide, onPrefetch, onToggle, review, view }: {
+function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecting, isSelected, onSelectionChange, onDecide, onPrefetch, onToggle, review, view }: {
   clientId: string;
   density: ClientPreferences['density'];
+  isSelecting: boolean;
+  isSelected: boolean;
+  onSelectionChange: (checked: boolean) => void;
   isExpanded: boolean;
   isSaving: boolean;
   onDecide: (input: DecisionInput) => void;
@@ -1025,36 +1066,35 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
       effectiveStatus === 'green' && 'border-emerald-600/45 bg-emerald-500/[0.025]',
       effectiveStatus === 'yellow' && 'border-yellow-600/45',
       effectiveStatus === 'red' && 'border-red-600/45',
-      isExpanded && 'ring-1 ring-ring/30'
+      isExpanded && 'ring-1 ring-ring/30',
+      isSelected && 'ring-2 ring-blue-500/60'
     )} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
       <div className={cn(
         'gap-2',
         density === 'compact' ? 'p-2' : 'p-3',
         view === 'list'
-          ? 'grid md:grid-cols-[minmax(0,1fr)_7rem_7rem_8rem] md:items-center md:gap-3'
+          ? cn('grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3', reviewRowColumns(session.role === 'publisher'))
           : 'grid'
       )}>
-        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:bg-muted/60" aria-expanded={isExpanded} onClick={onToggle}>
-          {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-          <span className="truncate text-sm font-medium" title={review.file_name}>{review.file_name}</span>
-        </button>
-        {view === 'list' ? <StatusBadge status={effectiveStatus} /> : null}
-        {view === 'list' ? <span className="text-xs tabular-nums text-muted-foreground">{review.preview.finding_count} finding{review.preview.finding_count === 1 ? '' : 's'}</span> : null}
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-          <Link
-            to="/client/$clientId/reviews/$jobId"
-            params={{ clientId, jobId: review.job_id }}
-            className={buttonVariants({ size: 'icon-xs', variant: 'ghost' })}
-            aria-label={`Open full review for ${review.file_name}`}
-            title="Open full review"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <FileText />
-          </Link>
-          <ShareButton jobIds={[review.job_id]} clientId={clientId} />
-          {session.role === 'publisher' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : review.decision ? (
+        <div className={cn('flex min-w-0 items-center gap-2', view === 'list' && 'col-span-2 min-[1200px]:col-span-1')}>
+          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left transition-colors hover:bg-muted/60" aria-expanded={isExpanded} onClick={onToggle}>
+            {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+            <span className="truncate text-sm font-medium" title={review.file_name}>{review.file_name}</span>
+          </button>
+          {isSelecting ? (
+            <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-blue-500/10" title={isSelected ? 'Deselect creative' : 'Select creative'}>
+              <Checkbox aria-label={`Select ${review.file_name}`} checked={isSelected} onChange={event => onSelectionChange(event.target.checked)} />
+            </label>
+          ) : null}
+        </div>
+        {view === 'list' ? <div><StatusBadge status={effectiveStatus} /></div> : null}
+        {view === 'list' ? <span className="text-xs tabular-nums text-muted-foreground max-[1199px]:justify-self-end">{review.preview.finding_count} finding{review.preview.finding_count === 1 ? '' : 's'}</span> : null}
+        {view === 'list' ? <div className={session.role !== 'publisher' ? 'col-span-2 min-[1200px]:col-span-1' : undefined}>{session.role === 'publisher' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : review.decision ? <ClientDecisionBadge decision={review.decision.decision} /> : <Badge variant="outline">Pending</Badge>}</div> : null}
+        <div className={cn('flex min-w-0 flex-wrap items-center gap-1.5', view === 'list' && (session.role === 'publisher' ? 'justify-end' : 'col-span-2 min-[1200px]:col-span-1 min-[1200px]:justify-end'))}>
+          <ShareButton jobIds={[review.job_id]} clientId={clientId} size="xs" label={view === 'list' ? 'Share' : undefined} />
+          {session.role === 'publisher' ? (view === 'grid' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : null) : review.decision ? (
             <>
-              <ClientDecisionBadge decision={review.decision.decision} />
+              {view === 'grid' ? <ClientDecisionBadge decision={review.decision.decision} /> : null}
               <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
                 <MessageSquareText />{review.decision.feedback_note ? 'Edit note' : 'Add note'}
               </Button>
@@ -1146,7 +1186,7 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
       </div>
       <div className="flex flex-wrap gap-2">
         {preview.google_drive_url ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={preview.google_drive_url} target="_blank" rel="noreferrer"><ExternalLink />Open in Drive</a> : null}
-        <Link to="/client/$clientId/reviews/$jobId" params={{ clientId, jobId: review.job_id }} className={buttonVariants({ size: 'sm' })}><FileText />View full details</Link>
+        <Link to="/client/$clientId/reviews/$jobId" params={{ clientId, jobId: review.job_id }} aria-label={`Open full review for ${review.file_name}`} className={buttonVariants({ size: 'sm' })}><FileText />View full details</Link>
       </div>
     </div>
   );

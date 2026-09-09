@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { useState } from 'react';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -72,7 +73,7 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
                 {confirming ? <ul className="grid gap-2 rounded-lg border p-4 text-sm">{chosen.map(offer => <li key={offer.offer_id} className="flex justify-between gap-4"><span>{offer.offer_name}</span><span>{offer.pending} creative{offer.pending === 1 ? '' : 's'}</span></li>)}</ul> : <div className="grid gap-3">
                   {pending.length > 1 ? <Button className="justify-self-start" variant="secondary" size="sm" onClick={() => setSelected(pending.map(offer => offer.offer_id))}>Select all unreleased offers</Button> : null}
                   {selection.data.offers.map(offer => <label key={offer.offer_id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 has-disabled:cursor-default">
-                    <input className="size-4 accent-foreground" type="checkbox" checked={selected.includes(offer.offer_id)} disabled={!offer.pending} onChange={event => setSelected(current => event.target.checked ? [...current, offer.offer_id] : current.filter(id => id !== offer.offer_id))} />
+                    <Checkbox className="size-4" checked={selected.includes(offer.offer_id)} disabled={!offer.pending} onChange={event => setSelected(current => event.target.checked ? [...current, offer.offer_id] : current.filter(id => id !== offer.offer_id))} />
                     <span className="flex-1 text-sm font-medium">{offer.offer_name}</span><span className="text-right text-xs text-muted-foreground">{offer.pending ? `${offer.total > offer.pending ? `${offer.total - offer.pending} released · ` : ''}${offer.pending} to release` : 'Already released'}</span>
                   </label>)}
                   {!pending.length ? <p role="status" className="text-sm text-muted-foreground">All evaluated offers have already been released.</p> : null}

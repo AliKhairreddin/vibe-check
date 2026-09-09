@@ -518,8 +518,8 @@ export function OfferEligibilityGrid({
           >
             <span className="flex min-w-0 items-start gap-2.5">
               <span className={cn(
-                'mt-0.5 grid size-5 shrink-0 place-items-center rounded border',
-                selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background'
+                'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border',
+                selected ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-500 dark:bg-blue-500' : 'border-input bg-background'
               )} aria-hidden="true">
                 {selected ? <Check className="size-3.5" /> : null}
               </span>

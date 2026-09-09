@@ -369,8 +369,8 @@ function FileRow({
 function SelectionBox({ selected, disabled = false }: { selected: boolean; disabled?: boolean }) {
   return (
     <span className={cn(
-      'grid size-5 shrink-0 place-items-center rounded border',
-      selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+      'grid size-5 shrink-0 place-items-center rounded-full border',
+      selected ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-500 dark:bg-blue-500' : 'border-input',
       disabled && 'bg-muted'
     )} aria-hidden="true">
       {selected ? <Check className="size-3.5" /> : disabled ? <AlertCircle className="size-3" /> : null}
