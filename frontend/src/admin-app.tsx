@@ -1,4 +1,5 @@
 import { ReleaseButton } from '@/components/release-controls';
+import { hasReviewReleases } from '@/lib/review-releases';
 import { Select } from '@/components/ui/select';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { matchesReviewFilter, REVIEW_RESULT_FILTERS, validateReviewSearch, type ReviewResultFilter } from '@/lib/review-filters';
@@ -1099,7 +1100,7 @@ function ReviewWorkspace() {
             </CardDescription>
             <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
               <div className="flex items-center gap-2">
-                {completeCount > 0 ? <ReleaseButton jobIds={rows.flatMap(({ status }) => status?.status === 'complete' ? [status.job_id] : [])} /> : null}
+                {completeCount > 0 ? <ReleaseButton jobIds={rows.flatMap(({ status }) => status?.status === 'complete' ? [status.job_id] : [])} hasReleased={rows.some(({ status }) => hasReviewReleases(status))} /> : null}
                 {completeCount > 0 ? <ShareButton jobIds={rows.flatMap(({ status }) => status?.status === 'complete' ? [status.job_id] : [])} label="Share batch" /> : null}
                 {activeBatchId ? (
                   <Link
@@ -1282,7 +1283,7 @@ function BatchRow({
           </Button>
         ) : status?.report_ready ? (
           <div className="flex flex-wrap justify-end gap-1">
-          <ReleaseButton jobIds={[status.job_id]} />
+          <ReleaseButton jobIds={[status.job_id]} hasReleased={hasReviewReleases(status)} />
           <ShareButton jobIds={[status.job_id]} label="Share" size="xs" />
           <Link
             to="/reviews/$jobId/report"
@@ -1630,7 +1631,7 @@ function HistoryCard({
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/30 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{selectedCount} selected</Badge>
-                    {selectedShareIds.length ? <ReleaseButton jobIds={selectedShareIds} /> : null}
+                    {selectedShareIds.length ? <ReleaseButton jobIds={selectedShareIds} hasReleased={reviews.some(review => selectedShareIds.includes(review.job_id) && hasReviewReleases(review)) || historyEntries.some(entry => entry.kind === 'batch' && entry.batch?.items.some(item => item.job_id && selectedShareIds.includes(item.job_id) && item.has_releases))} /> : null}
                     {selectedShareIds.length ? <ShareButton jobIds={selectedShareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} /> : null}
                     {selectedShareIds.length < selectedCount ? <span className="text-xs text-muted-foreground">Only completed results can be shared</span> : null}
                     {allVisibleSelected ? (
@@ -1803,9 +1804,7 @@ function HistoryCard({
                           {formatHistoryDateTime(entry.createdAt)}
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
-                          <div className="flex flex-col items-start gap-1"><StatusBadge status={historyEntryStatus(entry)} />
-                            {(entry.kind === 'review' ? [entry.review] : entry.reviews).some(review => review.released_offer_ids !== null && review.released_offer_ids !== undefined) ? <span className="text-[10px] text-muted-foreground">{(entry.kind === 'review' ? [entry.review] : entry.reviews).some(review => review.released_at) ? 'Released · protected' : 'Private'}</span> : null}
-                          </div>
+                          <StatusBadge status={historyEntryStatus(entry)} />
                         </TableCell>
                         <TableCell className="px-2 py-1.5">
                           {entry.kind === 'batch' ? (
@@ -1819,7 +1818,12 @@ function HistoryCard({
                         </TableCell>
                         <TableCell className="px-2 py-1.5 text-right">
                           <div className="flex min-w-max justify-end gap-1">
-                            {historyEntryStatus(entry) === 'complete' || historyEntryStatus(entry) === 'complete_with_failures' ? <ReleaseButton {...(entry.kind === 'batch' ? { batchId: entry.batchId } : { jobIds: [entry.review.job_id] })} /> : null}
+                            {historyEntryStatus(entry) === 'complete' || historyEntryStatus(entry) === 'complete_with_failures' ? <ReleaseButton
+                              {...(entry.kind === 'batch' ? { batchId: entry.batchId } : { jobIds: [entry.review.job_id] })}
+                              hasReleased={entry.kind === 'batch'
+                                ? entry.batch?.items.some(item => item.has_releases) || entry.reviews.some(hasReviewReleases)
+                                : hasReviewReleases(entry.review)}
+                            /> : null}
                             {shareIds.length && (entry.kind !== 'batch' || entry.batch) ? <ShareButton jobIds={shareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} label={entry.kind === 'batch' ? 'Share batch' : 'Share'} size="xs" /> : null}
                             {entry.kind === 'batch' ? (
                               <Link
@@ -2365,7 +2369,7 @@ function ProgressPage() {
             <FileJson data-icon="inline-start" />
             Open report
           </Link>
-          <ReleaseButton jobIds={[jobId]} size="sm" />
+          <ReleaseButton jobIds={[jobId]} hasReleased={hasReviewReleases(status)} size="sm" />
           <ShareButton jobIds={[jobId]} />
           </div>
         ) : null}
@@ -2668,7 +2672,7 @@ function ReportPage() {
 
   return (
     <div className="grid gap-4">
-      <div className="flex justify-end gap-2"><ReleaseButton jobIds={[jobId]} /><ShareButton key={`${jobId}:${activeOffer.offer_id}`} jobIds={[jobId]} offerId={activeOffer.offer_id} /></div>
+      <div className="flex justify-end gap-2"><ReleaseButton jobIds={[jobId]} hasReleased={hasReviewReleases(statusQuery.data)} /><ShareButton key={`${jobId}:${activeOffer.offer_id}`} jobIds={[jobId]} offerId={activeOffer.offer_id} /></div>
       <Card size="sm">
         <CardHeader>
           <CardTitle as="h1" className="text-xl">Offer availability</CardTitle>
@@ -3004,7 +3008,7 @@ function BatchPage() {
         </CardDescription>
         <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
           <div className="flex flex-wrap justify-end gap-2">
-            {batchComplete && completeCount > 0 ? <ReleaseButton batchId={batchId} size="sm" /> : null}
+            {batchComplete && completeCount > 0 ? <ReleaseButton batchId={batchId} hasReleased={query.data.items.some(item => item.has_releases)} size="sm" /> : null}
             <ShareButton jobIds={batchShareIds} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} label="Share batch" />
             {batchComplete ? (
               <PdfDownloadMenu

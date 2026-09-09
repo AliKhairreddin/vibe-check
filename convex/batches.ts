@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -25,6 +25,7 @@ type BatchItem = {
   driveFileId?: string;
   driveId?: string;
   fileName: string;
+  hasReleases?: boolean;
   itemId: string;
   jobId?: string;
   mediaKind: string;
@@ -75,6 +76,8 @@ type BatchReviewState = {
   deletedAt?: number;
   jobId: string;
   message: string;
+  releasedOfferIds?: string[];
+  reportReady: boolean;
   status: string;
 };
 
@@ -104,6 +107,7 @@ const publicBatchValidator = v.object({
     drive_file_id: v.union(v.string(), v.null()),
     drive_id: v.union(v.string(), v.null()),
     file_name: v.string(),
+    has_releases: v.union(v.boolean(), v.null()),
     item_id: v.string(),
     job_id: v.union(v.string(), v.null()),
     media_kind: v.string(),
@@ -238,6 +242,7 @@ function publicBatch(batch: {
       drive_file_id: item.driveFileId ?? null,
       drive_id: item.driveId ?? null,
       file_name: item.fileName,
+      has_releases: item.hasReleases ?? null,
       item_id: item.itemId,
       job_id: item.jobId ?? null,
       media_kind: item.mediaKind,
@@ -390,6 +395,7 @@ async function hydrateBatchItems(
         : []
     ),
   );
+  const reviewByJobId = new Map(reviews.filter(review => review.deletedAt === undefined).map(review => [review.jobId, review]));
   const jobIds = includeClientDecisions ? [...new Set([
     ...items.flatMap((item) => item.jobId ? [item.jobId] : []),
     ...reviews.map((review) => review.jobId),
@@ -412,7 +418,7 @@ async function hydrateBatchItems(
     }
   }
   return items.map((item) => {
-    const review = reviewByItemId.get(item.itemId);
+    const review = reviewByItemId.get(item.itemId) ?? (item.jobId ? reviewByJobId.get(item.jobId) : undefined);
     const hydratedItem = !review || (
       TERMINAL_BATCH_STATUSES.has(item.status)
       && !TERMINAL_BATCH_STATUSES.has(review.status)
@@ -424,6 +430,11 @@ async function hydrateBatchItems(
       };
     return {
       ...hydratedItem,
+      hasReleases: review
+        ? review.releasedOfferIds !== undefined
+          ? review.releasedOfferIds.length > 0
+          : review.status === "complete" && review.reportReady
+        : undefined,
       offerOutcomes: (hydratedItem.offerOutcomes ?? []).map((outcome) => {
         const automatedStatus = normalizeResultStatus(outcome.overallStatus);
         const decision = hydratedItem.jobId

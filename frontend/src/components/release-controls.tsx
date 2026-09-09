@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, LoaderCircle, Send } from 'lucide-react';
+import { LoaderCircle, Send } from 'lucide-react';
 import { requestJson } from '@/lib/api';
 import { Button, buttonVariants } from './ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 type Selection = {
   job_ids: string[];
@@ -11,14 +12,15 @@ type Selection = {
 };
 const post = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-export function ReleaseButton({ jobIds, batchId, clientId, size = 'xs' }: {
-  jobIds?: string[]; batchId?: string; clientId?: string; size?: 'xs' | 'sm';
+export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, size = 'xs' }: {
+  jobIds?: string[]; batchId?: string; clientId?: string; hasReleased?: boolean; size?: 'xs' | 'sm';
 }) {
   const cache = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
-  const [success, setSuccess] = useState(false);
+  const targetKey = JSON.stringify([clientId, batchId, jobIds]);
+  const [releasedTarget, setReleasedTarget] = useState<string | null>(null);
   const base = clientId ? `/api/client/${encodeURIComponent(clientId)}/reviews` : '/api/reviews';
   const selection = useQuery({
     queryKey: ['release-selection', clientId, batchId, jobIds],
@@ -29,14 +31,26 @@ export function ReleaseButton({ jobIds, batchId, clientId, size = 'xs' }: {
   });
   const release = useMutation({
     mutationFn: () => requestJson<{ released: number }>(`${base}/release`, post({ job_ids: selection.data?.job_ids, offer_ids: selected, confirmed: true })),
-    onSuccess: () => { setOpen(false); setSuccess(true); void cache.invalidateQueries(); },
+    onSuccess: () => { setOpen(false); setReleasedTarget(targetKey); void cache.invalidateQueries(); },
   });
+  const managing = hasReleased || releasedTarget === targetKey || Boolean(selection.data?.offers.some(offer => offer.pending < offer.total));
   const chosen = selection.data?.offers.filter(offer => selected.includes(offer.offer_id) && offer.pending > 0) ?? [];
   const pending = selection.data?.offers.filter(offer => offer.pending > 0) ?? [];
   return <>
-    <Button variant="outline" size={size} onClick={() => { setSelected([]); setConfirming(false); release.reset(); setOpen(true); }}>
-      {success ? <Check /> : <Send />}Release
-    </Button>
+    <Tooltip>
+      <TooltipTrigger render={<Button
+        variant="outline"
+        size={size}
+        aria-label={managing ? 'Manage releases' : 'Release to advertisers'}
+        className={managing
+          ? 'border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 hover:text-purple-800 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 dark:hover:bg-purple-900/50 dark:hover:text-purple-200'
+          : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-900/50 dark:hover:text-blue-200'}
+        onClick={() => { setSelected([]); setConfirming(false); release.reset(); setOpen(true); }}
+      />}>
+        <Send aria-hidden="true" />{managing ? 'Manage' : 'Release'}
+      </TooltipTrigger>
+      <TooltipContent>{managing ? 'Manage releases' : 'Release to advertisers'}</TooltipContent>
+    </Tooltip>
     <AlertDialog.Root open={open} onOpenChange={value => { if (!release.isPending) setOpen(value); }}>
       <AlertDialog.Portal>
         <AlertDialog.Backdrop className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px]" />
@@ -44,11 +58,13 @@ export function ReleaseButton({ jobIds, batchId, clientId, size = 'xs' }: {
           <AlertDialog.Popup className="w-full max-w-lg rounded-xl bg-popover p-6 text-popover-foreground shadow-xl ring-1 ring-foreground/10">
             <div className="grid gap-5">
               <div className="grid gap-2">
-                <AlertDialog.Title className="text-lg font-semibold">{confirming ? 'Are you sure you want to release?' : 'Release to advertisers'}</AlertDialog.Title>
+                <AlertDialog.Title className="text-lg font-semibold">{confirming ? 'Are you sure you want to release?' : managing ? 'Manage releases' : 'Release to advertisers'}</AlertDialog.Title>
                 <AlertDialog.Description className="text-sm leading-6 text-muted-foreground">
                   {confirming
                     ? 'The selected advertisers will be able to see these results immediately. Released creatives cannot be deleted, and a release cannot be undone. You can release to additional offers later.'
-                    : 'Choose which advertisers can see the completed results. Unselected offers stay private. You’ll confirm the recipients before anything is released.'}
+                    : managing
+                      ? 'See which advertisers already have access and release to additional advertisers. Existing releases cannot be undone, and released creatives cannot be deleted.'
+                      : 'Choose which advertisers can see the completed results. Unselected offers stay private. You’ll confirm the recipients before anything is released.'}
                 </AlertDialog.Description>
               </div>
               {selection.isFetching && !confirming ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />Checking completed results…</p> : selection.error ? <p role="alert" className="text-sm text-destructive">{selection.error.message}</p> : selection.data ? <>
@@ -57,7 +73,7 @@ export function ReleaseButton({ jobIds, batchId, clientId, size = 'xs' }: {
                   {pending.length > 1 ? <Button className="justify-self-start" variant="secondary" size="sm" onClick={() => setSelected(pending.map(offer => offer.offer_id))}>Select all unreleased offers</Button> : null}
                   {selection.data.offers.map(offer => <label key={offer.offer_id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 has-disabled:cursor-default">
                     <input className="size-4 accent-foreground" type="checkbox" checked={selected.includes(offer.offer_id)} disabled={!offer.pending} onChange={event => setSelected(current => event.target.checked ? [...current, offer.offer_id] : current.filter(id => id !== offer.offer_id))} />
-                    <span className="flex-1 text-sm font-medium">{offer.offer_name}</span><span className="text-xs text-muted-foreground">{offer.pending ? `${offer.pending} to release` : 'Already released'}</span>
+                    <span className="flex-1 text-sm font-medium">{offer.offer_name}</span><span className="text-right text-xs text-muted-foreground">{offer.pending ? `${offer.total > offer.pending ? `${offer.total - offer.pending} released · ` : ''}${offer.pending} to release` : 'Already released'}</span>
                   </label>)}
                   {!pending.length ? <p role="status" className="text-sm text-muted-foreground">All evaluated offers have already been released.</p> : null}
                 </div>}

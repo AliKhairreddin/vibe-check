@@ -317,6 +317,7 @@ export type ReviewHistoryPage = {
 
 export type ReviewBatchItem = {
   item_id: string;
+  has_releases?: boolean | null;
   file_name: string;
   media_kind: 'video' | 'image' | 'copy_only';
   drive_id?: string | null;

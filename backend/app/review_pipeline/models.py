@@ -595,6 +595,7 @@ class BatchFailure(BaseModel):
 
 class ReviewBatchItem(CreateBatchItem):
     status: str = 'pending'
+    has_releases: bool | None = None
     job_id: str | None = None
     result: ResultStatus | None = None
     offer_outcomes: list[OfferOutcome] = Field(default_factory=list)

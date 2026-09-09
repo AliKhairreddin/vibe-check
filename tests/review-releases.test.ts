@@ -5,9 +5,22 @@ import { upsertStatus, softDelete, syncReviewOfferStats } from '../convex/review
 import { list, getDetail, getReport, hasReview, decide, clearDecision } from '../convex/clientReviews.ts';
 import { listSubmissions, createShare, getShare } from '../convex/workspaces.ts';
 import { getAccessibleReview, getSharedOfferReport, listSharedOfferReviews } from '../convex/apiPartners.ts';
+import { getBatch, getBatches } from '../convex/batches.ts';
+import { hasReviewReleases } from '../frontend/src/lib/review-releases.ts';
 
 const secret = 'release-test-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
+
+test('release button distinguishes private, released, and legacy reviews', () => {
+  const complete = { status: 'complete', report_ready: true };
+  assert.equal(hasReviewReleases({ ...complete, released_offer_ids: [] }), false);
+  assert.equal(hasReviewReleases({ ...complete, released_offer_ids: ['smart-financial'] }), true);
+  assert.equal(hasReviewReleases({ ...complete, released_offer_ids: ['smart-financial', 'kissterra'] }), true);
+  assert.equal(hasReviewReleases({ ...complete, released_offer_ids: null }), true);
+  assert.equal(hasReviewReleases(complete), true);
+  assert.equal(hasReviewReleases({ status: 'queued', report_ready: false }), false);
+  assert.equal(hasReviewReleases(undefined), false);
+});
 const invoke = (fn: any, ctx: any, args: any = {}) => fn._handler(ctx, { secret, ...args });
 function fixture() {
   const tables: Record<string, any[]> = {};
@@ -119,6 +132,32 @@ test('batch selection checks completion, releases all eligible creatives, and sk
   assert.deepEqual(preview.job_ids, ['a', 'b']);
   assert.ok(preview.offers.every((offer: any) => offer.pending === 2));
   assert.equal((await invoke(release, ctx, { ...releaseArgs, jobIds: preview.job_ids })).released, 2);
+});
+
+test('batch responses include releases beyond the loaded history page and retain legacy visibility', async () => {
+  const { ctx, add, releaseArgs } = fixture();
+  await add('private', { batchId: 'batch', batchItemId: 'private' });
+  await add('released', { batchId: 'batch', batchItemId: 'released' });
+  // Older reviews may link to a batch item by job ID alone.
+  await add('legacy', { batchId: 'batch', releasedOfferIds: undefined });
+  await add('failed', { batchId: 'batch', batchItemId: 'failed', status: 'failed' });
+  await ctx.db.insert('reviewBatches', {
+    batchId: 'batch', createdAt: 1, updatedAt: 1, expectedCount: 4, notificationStatus: 'sent',
+    items: ['private', 'released', 'legacy', 'failed'].map(jobId => ({
+      itemId: jobId, jobId, fileName: `${jobId}.mp4`, mediaKind: 'video',
+      status: jobId === 'failed' ? 'failed' : 'complete', message: '',
+    })),
+  });
+  await invoke(release, ctx, { ...releaseArgs, jobIds: ['released'] });
+  const single = await invoke(getBatch, ctx, { batchId: 'batch' });
+  const [listed] = await invoke(getBatches, ctx, { batchIds: ['batch'] });
+  for (const batch of [single, listed]) {
+    assert.deepEqual(batch.items.map((item: any) => [item.job_id, item.has_releases]), [
+      ['private', false], ['released', true], ['legacy', true], ['failed', false],
+    ]);
+  }
+  assert.equal(hasReviewReleases({ status: 'complete', report_ready: true, released_offer_ids: [] }), false);
+  assert.equal(listed.items.some((item: any) => item.has_releases), true);
 });
 
 test('API owners retain private previews while shared offer access is gated', async () => {
