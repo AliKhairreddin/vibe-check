@@ -1207,10 +1207,10 @@ function ClientReviewDetail() {
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle as="h1" className="text-xl">{review.file_name}</CardTitle>
+          <CardHeader className="max-sm:flex max-sm:flex-col">
+            <CardTitle as="h1" className="min-w-0 max-w-full wrap-anywhere text-xl">{review.file_name}</CardTitle>
             <CardDescription>{formatDateTime(review.created_at)} · {mediaLabel(review.media_kind)}</CardDescription>
-            <CardAction className="max-sm:col-span-2 max-sm:col-start-1 max-sm:row-start-3 max-sm:justify-self-start"><AiRecommendation status={review.ai_status} /></CardAction>
+            <CardAction className="max-sm:mt-1"><AiRecommendation status={review.ai_status} /></CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4 sm:flex-row">
             <CreativeThumbnail
