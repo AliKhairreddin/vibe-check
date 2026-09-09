@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { hasReviewReleases } from "./reviewReleaseState.ts";
 
 type ResultStatus = "green" | "yellow" | "red";
 
@@ -76,6 +77,7 @@ type BatchReviewState = {
   deletedAt?: number;
   jobId: string;
   message: string;
+  releasedAt?: number;
   releasedOfferIds?: string[];
   reportReady: boolean;
   status: string;
@@ -430,11 +432,7 @@ async function hydrateBatchItems(
       };
     return {
       ...hydratedItem,
-      hasReleases: review
-        ? review.releasedOfferIds !== undefined
-          ? review.releasedOfferIds.length > 0
-          : review.status === "complete" && review.reportReady
-        : undefined,
+      hasReleases: review ? hasReviewReleases(review) : undefined,
       offerOutcomes: (hydratedItem.offerOutcomes ?? []).map((outcome) => {
         const automatedStatus = normalizeResultStatus(outcome.overallStatus);
         const decision = hydratedItem.jobId

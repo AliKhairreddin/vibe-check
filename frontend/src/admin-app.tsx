@@ -1,5 +1,5 @@
 import { ReleaseButton } from '@/components/release-controls';
-import { hasReviewReleases } from '@/lib/review-releases';
+import { deletableBatchReviewIds, hasBatchReleases, hasReviewReleases, isReviewDeletable } from '@/lib/review-releases';
 import { Select } from '@/components/ui/select';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { matchesReviewFilter, REVIEW_RESULT_FILTERS, validateReviewSearch, type ReviewResultFilter } from '@/lib/review-filters';
@@ -113,7 +113,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useTheme, type Theme } from '@/hooks/use-theme';
 import { DashboardPage } from '@/components/dashboard';
@@ -1459,6 +1459,14 @@ function HistoryCard({
     setSelectedReviewIds(new Set());
   }, [normalizedSearch, offerFilter, resultFilter, typeFilter, verticalFilter]);
 
+  useEffect(() => {
+    const deletableIds = new Set(historyEntries.flatMap(deletableHistoryEntryIds));
+    setSelectedReviewIds(current => {
+      const next = new Set([...current].filter(jobId => deletableIds.has(jobId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [historyEntries]);
+
   function resetFilters() {
     setSearchQuery('');
     setOfferFilter('all');
@@ -1723,6 +1731,9 @@ function HistoryCard({
                 <TableBody>
                   {filteredEntries.map((entry) => {
                     const entryIds = deletableHistoryEntryIds(entry);
+                    const hasReleased = entry.kind === 'batch'
+                      ? hasBatchReleases(entry.reviews, entry.batch)
+                      : hasReviewReleases(entry.review);
                     const selected = entryIds.length > 0 &&
                       entryIds.every((jobId) => selectedReviewIds.has(jobId));
                     const partiallySelected = !selected &&
@@ -1820,9 +1831,7 @@ function HistoryCard({
                           <div className="flex min-w-max justify-end gap-1">
                             {historyEntryStatus(entry) === 'complete' || historyEntryStatus(entry) === 'complete_with_failures' ? <ReleaseButton
                               {...(entry.kind === 'batch' ? { batchId: entry.batchId } : { jobIds: [entry.review.job_id] })}
-                              hasReleased={entry.kind === 'batch'
-                                ? entry.batch?.items.some(item => item.has_releases) || entry.reviews.some(hasReviewReleases)
-                                : hasReviewReleases(entry.review)}
+                              hasReleased={hasReleased}
                             /> : null}
                             {shareIds.length && (entry.kind !== 'batch' || entry.batch) ? <ShareButton jobIds={shareIds} offerId={offerFilter === 'all' ? undefined : offerFilter} label={entry.kind === 'batch' ? 'Share batch' : 'Share'} size="xs" /> : null}
                             {entry.kind === 'batch' ? (
@@ -1855,7 +1864,21 @@ function HistoryCard({
                                 Job
                               </Link>
                             )}
-                            {allHistory && entryIds.length ? (
+                            {allHistory && hasReleased ? (
+                              <Tooltip>
+                                <TooltipTrigger render={<Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  disabled
+                                  focusableWhenDisabled
+                                  className="cursor-not-allowed opacity-50"
+                                  aria-label={`Cannot remove ${label}: released creatives cannot be deleted`}
+                                />}>
+                                  <Trash2 />
+                                </TooltipTrigger>
+                                <TooltipContent>Released creatives can’t be deleted.</TooltipContent>
+                              </Tooltip>
+                            ) : allHistory && entryIds.length ? (
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -2013,10 +2036,6 @@ function HistoryCheckbox({
   );
 }
 
-function isReviewDeletable(review: ReviewHistoryItem) {
-  return !review.released_at && (review.report_ready || review.status === 'failed');
-}
-
 function buildHistoryEntries(
   reviews: ReviewHistoryItem[],
   batches: ReviewBatch[]
@@ -2144,12 +2163,7 @@ function deletableHistoryEntryIds(entry: HistoryEntry) {
   if (entry.kind === 'review') {
     return isReviewDeletable(entry.review) ? [entry.review.job_id] : [];
   }
-  if (entry.reviews.some(review => review.released_at)) return [];
-  return historyEntryBatchItems(entry).flatMap((item) =>
-    item.job_id && (item.status === 'complete' || item.status === 'failed')
-      ? [item.job_id]
-      : []
-  );
+  return deletableBatchReviewIds(entry.reviews, entry.batch);
 }
 
 function historyEntryMatchesSearch(entry: HistoryEntry, normalizedSearch: string) {

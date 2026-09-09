@@ -1575,7 +1575,12 @@ def delete_review(job_id:str)->DeletedReview:
     record=get_status(job_id)
     if record.status not in {JobStatus.complete, JobStatus.failed}:
         raise ValueError('Only completed or failed reviews can be removed from history.')
-    if record.released_at is not None:
+    has_releases = (
+        bool(record.released_offer_ids)
+        if record.released_offer_ids is not None
+        else record.status == JobStatus.complete and record.report_ready
+    )
+    if record.released_at is not None or has_releases:
         raise ValueError('Released reviews cannot be deleted.')
     try:
         remote=_convex_call('mutation', 'reviews:softDelete', {'jobId':job_id})

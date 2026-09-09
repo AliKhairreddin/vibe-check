@@ -6,7 +6,8 @@ import { list, getDetail, getReport, hasReview, decide, clearDecision } from '..
 import { listSubmissions, createShare, getShare } from '../convex/workspaces.ts';
 import { getAccessibleReview, getSharedOfferReport, listSharedOfferReviews } from '../convex/apiPartners.ts';
 import { getBatch, getBatches } from '../convex/batches.ts';
-import { hasReviewReleases } from '../frontend/src/lib/review-releases.ts';
+import { deletableBatchReviewIds, hasBatchReleases, hasReviewReleases, isReviewDeletable } from '../frontend/src/lib/review-releases.ts';
+import { hasReviewReleases as hasStoredReviewReleases } from '../convex/reviewReleaseState.ts';
 
 const secret = 'release-test-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
@@ -20,6 +21,28 @@ test('release button distinguishes private, released, and legacy reviews', () =>
   assert.equal(hasReviewReleases(complete), true);
   assert.equal(hasReviewReleases({ status: 'queued', report_ready: false }), false);
   assert.equal(hasReviewReleases(undefined), false);
+});
+
+test('Manage and deletion agree for legacy, partial, timestamp-only, private and active reviews', () => {
+  const cases = [
+    { status: 'complete', report_ready: true, released_offer_ids: [], released: false, deletable: true },
+    { status: 'complete', report_ready: true, released_offer_ids: ['kissterra'], released: true, deletable: false },
+    { status: 'complete', report_ready: true, released_offer_ids: null, released: true, deletable: false },
+    { status: 'complete', report_ready: true, released: true, deletable: false },
+    { status: 'complete', report_ready: true, released_offer_ids: [], released_at: 0, released: true, deletable: false },
+    { status: 'failed', report_ready: false, released_offer_ids: [], released: false, deletable: true },
+    { status: 'failed', report_ready: false, released: false, deletable: true },
+    { status: 'failed', report_ready: false, released_offer_ids: ['kissterra'], released: true, deletable: false },
+    { status: 'queued', report_ready: true, released_offer_ids: [], released: false, deletable: false },
+  ];
+  for (const review of cases) {
+    assert.equal(hasReviewReleases(review), review.released);
+    assert.equal(isReviewDeletable(review), review.deletable);
+    assert.equal(hasStoredReviewReleases({
+      status: review.status, reportReady: review.report_ready,
+      releasedOfferIds: review.released_offer_ids ?? undefined, releasedAt: review.released_at,
+    }), review.released);
+  }
 });
 const invoke = (fn: any, ctx: any, args: any = {}) => fn._handler(ctx, { secret, ...args });
 function fixture() {
@@ -106,6 +129,32 @@ test('release is confirmed, per-offer, additive, idempotent and blocks deletion'
   assert.ok(tables.reviewOfferStats.every(row => !row.withheld));
 });
 
+test('Convex rejects deletion without modifying released reviews, media or statistics', async () => {
+  for (const extra of [
+    { releasedOfferIds: undefined },
+    { releasedOfferIds: ['smart-financial'] },
+    { releasedOfferIds: [], releasedAt: 0 },
+    { status: 'failed', releasedOfferIds: ['kissterra'] },
+  ]) {
+    const { ctx, tables, add } = fixture();
+    const review = await add('protected', extra);
+    await ctx.db.insert('reviewMedia', { jobId: review.jobId, storageId: 'media' });
+    const before = structuredClone(tables);
+    ctx.storage.delete = async () => assert.fail('Released media must not be deleted');
+    await assert.rejects(invoke(softDelete, ctx, { jobId: review.jobId }), /Released reviews cannot be deleted/);
+    assert.deepEqual(tables, before);
+  }
+});
+
+test('private completed and failed reviews remain deletable, including legacy failures', async () => {
+  for (const extra of [{}, { status: 'failed', reportReady: false }, { status: 'failed', reportReady: false, releasedOfferIds: undefined }]) {
+    const { ctx, add } = fixture();
+    const review = await add('private', extra);
+    await invoke(softDelete, ctx, { jobId: review.jobId });
+    assert.equal(typeof review.deletedAt, 'number');
+  }
+});
+
 test('invalid, failed, deleted, unreviewed, unauthorized or foreign releases cannot write', async () => {
   const { ctx, add, releaseArgs, tables } = fixture(); const review = await add();
   for (const args of [{ secret: 'wrong' }, { confirmed: false }, { offerIds: ['acp'] }, { clientId: 'kissterra', publisherId: 'other' }]) {
@@ -158,6 +207,15 @@ test('batch responses include releases beyond the loaded history page and retain
   }
   assert.equal(hasReviewReleases({ status: 'complete', report_ready: true, released_offer_ids: [] }), false);
   assert.equal(listed.items.some((item: any) => item.has_releases), true);
+  const loadedReviews = [{ status: 'complete', report_ready: true, released_offer_ids: [] }];
+  assert.equal(hasBatchReleases(loadedReviews, listed), true);
+  assert.deepEqual(deletableBatchReviewIds(loadedReviews, listed), []);
+  assert.deepEqual(deletableBatchReviewIds(loadedReviews), []);
+  const privateBatch = { items: listed.items.filter((item: any) => ['private', 'failed'].includes(item.job_id)) };
+  assert.equal(hasBatchReleases(loadedReviews, privateBatch), false);
+  assert.deepEqual(deletableBatchReviewIds(loadedReviews, privateBatch), ['private', 'failed']);
+  // Fresh history release data must also protect against an older batch response.
+  assert.deepEqual(deletableBatchReviewIds([{ status: 'complete', report_ready: true }], privateBatch), []);
 });
 
 test('API owners retain private previews while shared offer access is gated', async () => {
@@ -182,15 +240,15 @@ test('public links cannot publish private reviews and recalled offers disappear 
   assert.equal(await invoke(getShare, ctx, { tokenHash: 'token' }), null);
 });
 
-test('private deletion hides all offers, and legacy visibility stays compatible', async () => {
+test('private deletion hides all offers, while legacy advertiser visibility is protected', async () => {
   const { ctx, add } = fixture(); await add();
   await invoke(softDelete, ctx, { jobId: 'creative' });
   await assert.rejects(invoke(release, ctx, { jobIds: ['creative'], offerIds: ['kissterra'], confirmed: true, releasedBy: 'admin' }), /unavailable/);
   const legacy = await add('legacy', { releasedOfferIds: undefined });
   assert.equal(await invoke(hasReview, ctx, { jobId: 'legacy', offerId: 'kissterra' }), true);
   assert.equal((await invoke(getSelection, ctx, { jobIds: ['legacy'] })).offers[0].pending, 0);
-  await invoke(softDelete, ctx, { jobId: legacy.jobId });
-  assert.equal(await invoke(hasReview, ctx, { jobId: legacy.jobId, offerId: 'kissterra' }), false);
+  await assert.rejects(invoke(softDelete, ctx, { jobId: legacy.jobId }), /Released reviews cannot be deleted/);
+  assert.equal(await invoke(hasReview, ctx, { jobId: legacy.jobId, offerId: 'kissterra' }), true);
 });
 
 test('SmartFinancial repair matches only the verified batch and survives projection refresh', async () => {

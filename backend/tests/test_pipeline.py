@@ -3026,6 +3026,41 @@ async def test_review_delete_api_rejects_active_then_removes_terminal_job(tmp_pa
     assert stats.json()['total_reviews'] == 0
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(('status', 'release_fields', 'expected_status'), [
+    (JobStatus.complete, {}, 409),
+    (JobStatus.complete, {'released_offer_ids': None}, 409),
+    (JobStatus.complete, {'released_offer_ids': ['acp']}, 409),
+    (JobStatus.complete, {'released_offer_ids': [], 'released_at': 0}, 409),
+    (JobStatus.failed, {'released_offer_ids': ['acp']}, 409),
+    (JobStatus.complete, {'released_offer_ids': []}, 200),
+    (JobStatus.failed, {'released_offer_ids': []}, 200),
+    (JobStatus.failed, {}, 200),
+])
+async def test_review_delete_api_protects_all_released_creatives(tmp_path, monkeypatch, status, release_fields, expected_status):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setenv('ADMIN_PASSWORD', 'test-admin-password')
+    job_id = 'b' * 32
+    set_status(job_id, status, 100, 'Done', 'test.png')
+    set_report(job_id, {'overall_status': 'green', 'summary': 'Clear.', 'findings': []})
+    status_path = tmp_path / job_id / 'status.json'
+    stored = json.loads(status_path.read_text())
+    stored.pop('released_offer_ids', None)
+    stored.pop('released_at', None)
+    stored.update(release_fields)
+    status_path.write_text(json.dumps(stored))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.delete(f'/api/reviews/{job_id}', headers={'x-admin-password': 'test-admin-password'})
+    assert response.status_code == expected_status
+    assert (tmp_path / job_id / 'deleted.json').exists() == (expected_status == 200)
+    if expected_status == 409:
+        assert 'Released reviews cannot be deleted' in response.json()['detail']
+        assert get_status(job_id).status == status
+        assert get_report(job_id) is not None
+
+@pytest.mark.anyio
 async def test_offer_admin_routes_require_password_and_catalog_is_sanitized(tmp_path, monkeypatch):
     monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
@@ -3338,7 +3373,10 @@ def test_client_report_fallback_requires_a_visible_completed_review(tmp_path, mo
         'kissterra','kissterra',job_id
     )['summary'] == 'Stored before completion.'
 
-    delete_review(job_id)
+    with pytest.raises(ValueError, match='Released reviews cannot be deleted'):
+        delete_review(job_id)
+    # A review deleted before release protection existed must still stay hidden.
+    review_storage.write_json(tmp_path / job_id / 'deleted.json', {'job_id': job_id, 'deleted_at': 1})
     assert review_storage.get_client_review_report('kissterra','kissterra',job_id) is None
 
     (tmp_path/job_id/'deleted.json').unlink()

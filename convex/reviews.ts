@@ -5,6 +5,7 @@ import { getConvexSize, v, type Value } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { classifyReviewVertical } from "./reviewVerticals.ts";
 import { assertApiLease, syncApiJobState } from "./apiJobState.ts";
+import { hasReviewReleases } from "./reviewReleaseState.ts";
 
 type ResultStatus = "green" | "yellow" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
@@ -977,7 +978,7 @@ export const softDelete = mutation({
       throw new Error("Only complete or failed review jobs can be deleted");
     }
 
-    if (review.releasedAt !== undefined) throw new Error("Released reviews cannot be deleted");
+    if (hasReviewReleases(review)) throw new Error("Released reviews cannot be deleted");
 
     const media = await ctx.db.query('reviewMedia').withIndex('by_job_id', q => q.eq('jobId', args.jobId)).unique();
     if (media) { await ctx.storage.delete(media.storageId); await ctx.db.delete(media._id); }
