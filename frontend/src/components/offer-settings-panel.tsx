@@ -397,7 +397,7 @@ export function OfferSettingsPanel() {
                 <Button
                   key={profile.offer_id}
                   type="button"
-                  variant={selectedOfferId === profile.offer_id && !isCreating ? 'secondary' : 'ghost'}
+                  variant={selectedOfferId === profile.offer_id && !isCreating ? 'selected' : 'ghost'}
                   className="h-auto min-h-10 w-full justify-start px-3 py-2 text-left"
                   aria-current={selectedOfferId === profile.offer_id && !isCreating ? 'page' : undefined}
                   disabled={isMutating}

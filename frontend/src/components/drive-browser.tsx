@@ -1,3 +1,4 @@
+import { selectedControlClassName } from '@/lib/control-styles';
 import { useId, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -286,20 +287,20 @@ function FolderRow({
   return (
     <div className={cn(
       'flex items-center gap-1 rounded-lg border bg-background transition-colors',
-      selected && 'border-primary/50 bg-primary/5'
+      selected && selectedControlClassName
     )}>
       <button
         type="button"
         aria-pressed={selected}
         aria-label={`${selected ? 'Remove' : 'Select'} entire folder ${item.name}`}
-        className="ml-2 grid size-6 shrink-0 place-items-center rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="ml-2 grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50"
         onClick={onToggle}
       >
         <SelectionBox selected={selected} />
       </button>
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left outline-none transition-colors enabled:hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50"
         aria-label={`Open folder ${item.name}`}
         onClick={onOpen}
       >
@@ -335,7 +336,7 @@ function FileRow({
   return (
     <div className={cn(
       'flex items-center gap-1 rounded-lg border bg-background transition-colors',
-      effectiveSelected && !disabled && 'border-primary/50 bg-primary/5',
+      effectiveSelected && !disabled && selectedControlClassName,
       disabled && 'bg-muted/30 text-muted-foreground'
     )}>
       <button
@@ -348,7 +349,7 @@ function FileRow({
             ? `${item.name} is included through a selected folder`
             : `${selected ? 'Remove' : 'Select'} file ${item.name}`}
         title={disabled ? detail : includedByFolder ? 'Included through a selected folder' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-70"
+        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left outline-none transition-colors enabled:hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-70"
         onClick={onToggle}
       >
         <SelectionBox selected={effectiveSelected && !disabled} disabled={disabled} />

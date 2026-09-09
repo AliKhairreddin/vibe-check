@@ -1,3 +1,4 @@
+import { selectedControlClassName } from '@/lib/control-styles';
 import { Select } from '@/components/ui/select';
 import { useState, type ReactNode } from 'react';
 import { CheckCircle2, LayoutGrid, List, RotateCcw, Save, Settings2 } from 'lucide-react';
@@ -159,7 +160,7 @@ function PreferenceOption({ active, description, icon, label, onClick }: {
       aria-pressed={active}
       className={cn(
         'grid gap-2 rounded-xl border p-4 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring',
-        active && 'border-primary bg-muted/35 ring-1 ring-primary/10'
+        active && selectedControlClassName
       )}
       onClick={onClick}
     >

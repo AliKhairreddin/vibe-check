@@ -300,7 +300,7 @@ export function AutomationsPage() {
                 <Button
                   key={automation.automation_id}
                   type="button"
-                  variant={selectedId === automation.automation_id && !isCreating ? 'secondary' : 'ghost'}
+                  variant={selectedId === automation.automation_id && !isCreating ? 'selected' : 'ghost'}
                   className="h-auto min-h-10 justify-start px-3 py-2 text-left"
                   onClick={() => selectAutomation(automation)}
                 >
@@ -437,7 +437,7 @@ export function AutomationsPage() {
                           <Button
                             key={day.value}
                             type="button"
-                            variant={selected ? 'secondary' : 'outline'}
+                            variant={selected ? 'selected' : 'outline'}
                             aria-pressed={selected}
                             onClick={() => updateDraft({
                               days_of_week: selected

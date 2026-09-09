@@ -1,3 +1,4 @@
+import { selectedControlClassName } from '@/lib/control-styles';
 import { Popover } from '@base-ui/react/popover';
 import { Check, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
@@ -511,7 +512,7 @@ export function OfferEligibilityGrid({
             className={cn(
               'flex items-center justify-between gap-3 rounded-lg border bg-background p-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50',
               eligible && 'cursor-pointer hover:bg-accent/50',
-              selected && 'border-primary/50 bg-primary/5',
+              selected && selectedControlClassName,
               !eligible && 'cursor-not-allowed opacity-60'
             )}
           >

@@ -85,6 +85,7 @@ export function BatchStatusDistribution({
           <span className="text-xs font-medium text-muted-foreground">Filter by offer</span>
           <Select
             value={selectedOfferId}
+            active={selectedOfferId !== 'all'}
             onValueChange={(value) => onOfferChange(value)}
             className="h-8 text-xs"
             options={[

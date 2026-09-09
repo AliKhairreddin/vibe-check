@@ -1,3 +1,4 @@
+import { selectedControlClassName } from '@/lib/control-styles';
 import { ReleaseButton } from '@/components/release-controls';
 import { deletableBatchReviewIds, hasBatchReleases, hasReviewReleases, isReviewDeletable } from '@/lib/review-releases';
 import { Select } from '@/components/ui/select';
@@ -870,7 +871,7 @@ function ReviewWorkspace() {
               <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative vertical">
                 <Button
                   type="button"
-                  variant={selectedVertical === 'auto-insurance' ? 'secondary' : 'ghost'}
+                  variant={selectedVertical === 'auto-insurance' ? 'selected' : 'ghost'}
                   aria-pressed={selectedVertical === 'auto-insurance'}
                   onClick={() => setSelectedVertical('auto-insurance')}
                 >
@@ -879,7 +880,7 @@ function ReviewWorkspace() {
                 </Button>
                 <Button
                   type="button"
-                  variant={selectedVertical === 'home-insurance' ? 'secondary' : 'ghost'}
+                  variant={selectedVertical === 'home-insurance' ? 'selected' : 'ghost'}
                   aria-pressed={selectedVertical === 'home-insurance'}
                   onClick={() => setSelectedVertical('home-insurance')}
                 >
@@ -897,7 +898,7 @@ function ReviewWorkspace() {
               <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/40 p-1" role="group" aria-label="Creative source">
                 <Button
                   type="button"
-                  variant={creativeSource === 'drive' ? 'secondary' : 'ghost'}
+                  variant={creativeSource === 'drive' ? 'selected' : 'ghost'}
                   aria-pressed={creativeSource === 'drive'}
                   onClick={() => {
                     setCreativeSource('drive');
@@ -909,7 +910,7 @@ function ReviewWorkspace() {
                 </Button>
                 <Button
                   type="button"
-                  variant={creativeSource === 'computer' ? 'secondary' : 'ghost'}
+                  variant={creativeSource === 'computer' ? 'selected' : 'ghost'}
                   aria-pressed={creativeSource === 'computer'}
                   onClick={() => {
                     setCreativeSource('computer');
@@ -1585,6 +1586,7 @@ function HistoryCard({
                   <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden="true" />
                   <Select
                     value={verticalFilter}
+                    active={verticalFilter !== 'all'}
                     onValueChange={(value) => setVerticalFilter(value as HistoryVerticalFilter)}
                     aria-label="Filter by vertical"
                     className={historyFilterClassName}
@@ -1596,6 +1598,7 @@ function HistoryCard({
                   />
                   <Select
                     value={offerFilter}
+                    active={offerFilter !== 'all'}
                     onValueChange={(value) => setOfferFilter(value)}
                     aria-label="Filter by offer"
                     className={historyFilterClassName}
@@ -1606,6 +1609,7 @@ function HistoryCard({
                   />
                   <Select
                     value={resultFilter}
+                    active={resultFilter !== 'all'}
                     onValueChange={(value) => setResultFilter(value as HistoryResultFilter)}
                     aria-label="Filter by result"
                     className={historyFilterClassName}
@@ -1619,6 +1623,7 @@ function HistoryCard({
                   />
                   <Select
                     value={typeFilter}
+                    active={typeFilter !== 'all'}
                     onValueChange={(value) => setTypeFilter(value as HistoryTypeFilter)}
                     aria-label="Filter by review type"
                     className={historyFilterClassName}
@@ -1630,7 +1635,7 @@ function HistoryCard({
                   />
                   {filtersActive ? (
                     <Button type="button" variant="ghost" size="xs" onClick={resetFilters}>
-                      Reset
+                      Clear filters
                     </Button>
                   ) : null}
                 </div>
@@ -2497,7 +2502,7 @@ function PdfDownloadMenu({
               <Menu.LinkItem
                 {...downloadLinkProps(baseHref)}
                 closeOnClick
-                className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
               >
                 <Download className="size-4 text-muted-foreground" />
                 <span className="grid">
@@ -2513,7 +2518,7 @@ function PdfDownloadMenu({
                     key={offer.offer_id}
                     {...downloadLinkProps(href)}
                     closeOnClick
-                    className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
                   >
                     <Download className="size-4 text-muted-foreground" />
                     <span className="grid">
@@ -2724,7 +2729,7 @@ function ReportPage() {
                   aria-pressed={isSelected}
                   className={cn(
                     'grid gap-2 rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50',
-                    isSelected && 'border-primary/50 bg-primary/5'
+                    isSelected && selectedControlClassName
                   )}
                   onClick={() => setSelectedOfferId(result.offer_id)}
                 >
@@ -3064,6 +3069,7 @@ function BatchPage() {
             <Select
               className="h-8"
               value={selectedResult}
+              active={selectedResult !== 'all'}
               onValueChange={(value) => void navigate({ search: { ...search, result: value as ReviewResultFilter } })}
               options={[
                 ...(REVIEW_RESULT_FILTERS.map((result) => ({
@@ -3346,7 +3352,7 @@ function SettingsViewMenu({
                   <Menu.Item
                     key={option.value}
                     closeOnClick
-                    className="flex cursor-default items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                    className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
                     onClick={() => onChange(option.value)}
                   >
                     <span className={cn('grid size-8 shrink-0 place-items-center rounded-md', active ? 'bg-primary text-primary-foreground' : 'bg-secondary')}>

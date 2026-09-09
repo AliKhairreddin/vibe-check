@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type AriaAttributes, type ReactNode } from
 import { Select as SelectPrimitive } from '@base-ui/react/select';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { selectedControlClassName } from '@/lib/control-styles';
 
 export type SelectOption = {
   value: string;
@@ -23,9 +24,10 @@ type SelectProps = AriaAttributes & {
   className?: string;
   icon?: ReactNode;
   menuLabel?: string;
+  active?: boolean;
 };
 
-export function Select({ options, value, defaultValue, onValueChange, id, name, form, required, disabled, className, icon, menuLabel, ...aria }: SelectProps) {
+export function Select({ options, value, defaultValue, onValueChange, id, name, form, required, disabled, className, icon, menuLabel, active = false, ...aria }: SelectProps) {
   const initialValue = defaultValue ?? options[0]?.value ?? '';
   const [localValue, setLocalValue] = useState(initialValue);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -59,9 +61,11 @@ export function Select({ options, value, defaultValue, onValueChange, id, name, 
         ref={triggerRef}
         form={form}
         data-slot="select-trigger"
+        data-active={active || undefined}
         className={cn(
           'group/select inline-flex h-9 min-w-0 max-w-full items-center justify-between gap-2.5 rounded-lg border border-input bg-background px-3 text-left text-sm text-foreground shadow-xs outline-none transition-[background-color,border-color,box-shadow] hover:bg-muted/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/20 data-popup-open:border-ring data-popup-open:ring-3 data-popup-open:ring-ring/10 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive dark:bg-input/20',
           className,
+          active && selectedControlClassName,
         )}
       >
         {icon ? <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span> : null}

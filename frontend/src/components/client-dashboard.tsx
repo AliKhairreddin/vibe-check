@@ -558,7 +558,7 @@ function ClientDashboard() {
             ) : null}
             <div className="relative min-w-40 flex-[1_1_12rem]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input className="h-9 border-0 bg-muted/45 pl-9 shadow-none focus-visible:bg-background" value={search} placeholder="Search creatives by filename or review summary…" onChange={(event) => setSearch(event.currentTarget.value)} />
+              <Input aria-label="Search creatives" className="h-9 border-0 bg-muted/45 pl-9 shadow-none focus-visible:bg-background" value={search} placeholder="Search creatives by filename or review summary…" onChange={(event) => setSearch(event.currentTarget.value)} />
             </div>
             <CompactFilterMenu
               icon={<SlidersHorizontal />}
@@ -599,7 +599,7 @@ function ClientDashboard() {
               <Button
                 type="button"
                 size="icon-xs"
-                variant={preferences.reviewView === 'grid' ? 'secondary' : 'ghost'}
+                variant={preferences.reviewView === 'grid' ? 'selected' : 'ghost'}
                 aria-label="Grid view"
                 aria-pressed={preferences.reviewView === 'grid'}
                 title="Grid view"
@@ -610,7 +610,7 @@ function ClientDashboard() {
               <Button
                 type="button"
                 size="icon-xs"
-                variant={preferences.reviewView === 'list' ? 'secondary' : 'ghost'}
+                variant={preferences.reviewView === 'list' ? 'selected' : 'ghost'}
                 aria-label="List view"
                 aria-pressed={preferences.reviewView === 'list'}
                 title="List view"
@@ -620,13 +620,13 @@ function ClientDashboard() {
               </Button>
             </div>
             {(search || statusFilter !== 'all' || resultFilter !== 'all' || batchFilter !== 'all') ? (
-              <Button type="button" size="icon-sm" variant="ghost" aria-label="Clear filters" title="Clear filters" onClick={() => {
+              <Button type="button" size="sm" variant="ghost" aria-label="Clear filters" onClick={() => {
                 setSearch('');
                 setStatusFilter('all');
                 setResultFilter('all');
                 setBatchFilter('all');
               }}>
-                <X />
+                <X />Clear filters
               </Button>
             ) : null}
             <Button type="button" size="icon-sm" variant="ghost" aria-label="Refresh reviews" title="Refresh reviews" disabled={selectedQuery?.isFetching} onClick={() => void selectedQuery?.refetch()}>
@@ -683,7 +683,7 @@ function ClientDashboard() {
                         <span className="text-yellow-700 dark:text-yellow-300">{yellow} yellow</span>
                         <span className="text-emerald-700 dark:text-emerald-300">{green} green</span>
                         {isExpanded && session.role !== 'publisher' ? (
-                          <Button type="button" size="xs" variant="outline" className="ml-1" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
+                          <Button type="button" size="xs" variant="success" className="ml-1" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
                             {bulkMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
                             Approve recommendations ({recommendedPending.length})
                           </Button>
@@ -818,6 +818,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
                   icon={<Users />}
                   menuLabel="Switch publisher"
                   value={publisherId}
+                  active={publisherId !== 'all'}
                   onValueChange={(value) => {
                     setPublisherId(value);
                     if (
@@ -1033,7 +1034,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
           ? 'grid md:grid-cols-[minmax(0,1fr)_7rem_7rem_8rem] md:items-center md:gap-3'
           : 'grid'
       )}>
-        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={isExpanded} onClick={onToggle}>
+        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:bg-muted/60" aria-expanded={isExpanded} onClick={onToggle}>
           {isExpanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="truncate text-sm font-medium" title={review.file_name}>{review.file_name}</span>
         </button>
@@ -1063,8 +1064,8 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, onDecide,
             </>
           ) : (
             <>
-              <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('approved')}><Check />Approve</Button>
-              <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
+              <Button type="button" size="xs" variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}><Check />Approve</Button>
+              <Button type="button" size="xs" variant="destructive" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
               <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
                 <MessageSquareText />{draftNote ? 'Edit note' : 'Add note'}
               </Button>
@@ -1209,7 +1210,7 @@ function ClientReviewDetail() {
           <CardHeader>
             <CardTitle as="h1" className="text-xl">{review.file_name}</CardTitle>
             <CardDescription>{formatDateTime(review.created_at)} · {mediaLabel(review.media_kind)}</CardDescription>
-            <CardAction><AiRecommendation status={review.ai_status} /></CardAction>
+            <CardAction className="max-sm:col-span-2 max-sm:col-start-1 max-sm:row-start-3 max-sm:justify-self-start"><AiRecommendation status={review.ai_status} /></CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4 sm:flex-row">
             <CreativeThumbnail
@@ -1363,8 +1364,8 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
           </>
         ) : (
           <>
-            <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
-            <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X /> Disapprove</Button>
+            <Button type="button" size="xs" variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />} Approve</Button>
+            <Button type="button" size="xs" variant="destructive" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X /> Disapprove</Button>
             <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}><MessageSquareText />{draftNote ? 'Edit note' : 'Add note'}</Button>
           </>
         )}
@@ -1502,7 +1503,7 @@ export function ClientPdfDownloadButton(props: { clientId: string } & (
       setIsDownloading(false);
     }
   }
-  return <div className="grid gap-1"><Button type="button" size="sm" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing report' : props.batchId !== undefined ? 'Download PDF' : 'Download report'}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
+  return <div className="grid gap-1"><Button type="button" size="sm" variant="outline" disabled={isDownloading} onClick={() => void download()}>{isDownloading ? <LoaderCircle className="animate-spin" /> : <Download />}{isDownloading ? 'Preparing report' : props.batchId !== undefined ? 'Download PDF' : 'Download report'}</Button>{error ? <span role="alert" className="max-w-72 text-xs text-destructive">{error}</span> : null}</div>;
 }
 
 function CompactFilterMenu<T extends string>({ icon, label, onChange, options, value }: {
@@ -1517,7 +1518,7 @@ function CompactFilterMenu<T extends string>({ icon, label, onChange, options, v
   return (
     <Menu.Root>
       <Menu.Trigger
-        className={cn(buttonVariants({ size: 'sm', variant: value === options[0]?.value ? 'outline' : 'secondary' }), 'shrink-0')}
+        className={cn(buttonVariants({ size: 'sm', variant: value === options[0]?.value ? 'outline' : 'selected' }), 'shrink-0')}
         aria-label={`${label}: ${selected?.label ?? ''}`}
       >
         {icon}
@@ -1534,7 +1535,7 @@ function CompactFilterMenu<T extends string>({ icon, label, onChange, options, v
               <Menu.Item
                 key={option.value}
                 closeOnClick
-                className="flex cursor-default items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
                 onClick={() => onChange(option.value)}
               >
                 <span className="flex-1 font-medium">{option.label}</span>
@@ -1606,7 +1607,7 @@ function DecisionLayerLine({ label, values }: {
 
 function AiRecommendation({ status }: { status: OverallStatus }) {
   const approved = status !== 'red';
-  return <Badge className={cn(status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300')} variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}>{approved ? <CheckCircle2 /> : <XCircle />}{approved ? 'Approve' : 'Disapprove'}</Badge>;
+  return <Badge className={cn(status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300')} variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}>{approved ? <CheckCircle2 /> : <XCircle />}{approved ? 'AI recommends approval' : 'AI recommends disapproval'}</Badge>;
 }
 
 function StatusBadge({ status }: { status: OverallStatus }) {

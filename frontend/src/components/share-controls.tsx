@@ -63,7 +63,7 @@ export function SharedLinksPanel({ clientId }: { clientId?: string }) {
       const active = !link.revokedAt && link.expiresAt > Date.now();
       return <div key={link.shareId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
         <div><p className="font-medium">{link.title}</p><p className="mt-1 text-xs text-muted-foreground">{link.count} creatives · {link.revokedAt ? 'Revoked' : active ? 'Expires' : 'Expired'} {new Date(link.revokedAt ?? link.expiresAt).toLocaleDateString()}</p></div>
-        <Button variant="outline" size="sm" disabled={!active || mutation.isPending} onClick={() => mutation.mutate(link.shareId)}><ShieldOff />{active ? 'Revoke link' : 'Inactive'}</Button>
+        <Button variant={active ? "destructive" : "outline"} size="sm" disabled={!active || mutation.isPending} onClick={() => mutation.mutate(link.shareId)}><ShieldOff />{active ? 'Revoke link' : 'Inactive'}</Button>
       </div>;
     })}
     {mutation.error ? <p role="alert" className="text-sm text-destructive">{mutation.error.message}</p> : null}

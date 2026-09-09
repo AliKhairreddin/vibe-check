@@ -130,6 +130,21 @@
     @apply min-h-screen bg-background text-foreground antialiased;
   }
 
+  /* Native controls and custom accessible controls share the same click affordance.
+     Text fields, static badges, and charts keep their normal cursors. */
+  :where(button, a[href], select, summary, input[type="checkbox"], input[type="radio"], input[type="file"], input[type="range"], [role="button"], [role="link"], [role="combobox"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"]):not(:disabled):not([disabled]):not([aria-disabled="true"]):not([data-disabled]) {
+    cursor: pointer;
+  }
+
+  :where(button, select, input, [role="button"], [role="combobox"], [role="option"], [role="menuitem"], [role="switch"], [role="checkbox"], [role="radio"]):is(:disabled, [disabled], [aria-disabled="true"], [data-disabled]) {
+    cursor: not-allowed;
+  }
+
+  :where(button, a[href], summary, input[type="checkbox"], input[type="radio"], [role="button"], [role="link"]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
   ::selection {
     @apply bg-primary text-primary-foreground;
   }

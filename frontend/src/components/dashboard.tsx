@@ -157,6 +157,7 @@ export function DashboardPage() {
             Vertical
             <Select
               value={selectedVertical}
+              active={selectedVertical !== 'all'}
               onValueChange={(value) => setSelectedVertical(value as ReviewVertical | 'all')}
               className="h-10 min-w-40 font-medium"
               options={[
@@ -290,7 +291,7 @@ function OfferFilter({
       ) : (
         <Button
           type="button"
-          variant="outline"
+          variant={selectedOfferIds.length ? "selected" : "outline"}
           size="lg"
           aria-expanded={isOpen}
           aria-haspopup="dialog"

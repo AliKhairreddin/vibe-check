@@ -1,3 +1,4 @@
+import { selectedControlClassName } from '@/lib/control-styles';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -346,9 +347,10 @@ export function ApiAccessPanel() {
               <button
                 key={partner.partner_id}
                 type="button"
+                aria-pressed={!isCreating && selectedPartnerId === partner.partner_id}
                 className={cn(
-                  'grid gap-1 rounded-lg px-3 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring',
-                  !isCreating && selectedPartnerId === partner.partner_id && 'bg-background shadow-sm ring-1 ring-border'
+                  'grid gap-1 rounded-lg border border-transparent px-3 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring',
+                  !isCreating && selectedPartnerId === partner.partner_id && selectedControlClassName
                 )}
                 onClick={() => selectPartner(partner)}
               >
