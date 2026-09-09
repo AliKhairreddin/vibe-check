@@ -95,6 +95,7 @@ export const submit = mutation({
         message: "Queued for processing", createdAt: now, updatedAt: now,
       });
       await ctx.db.insert("reviews", {
+        releasedOfferIds: [],
         jobId: creative.jobId, apiBatchId: args.batchId, fileName: creative.creativeName,
         offerIds: [args.offerId], primaryOfferId: args.offerId, hasCreative: true, hasAdCopy: false,
         status: "queued", progress: 0, message: "Queued for processing", reportReady: false, createdAt: now, updatedAt: now,

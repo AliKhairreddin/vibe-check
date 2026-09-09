@@ -245,7 +245,8 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
         }
         created_at=current.created_at or created_at
 
-    rec=JobRecord(job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,offer_ids=current_offer_ids,primary_offer_id=current_primary_offer_id,created_at=created_at,updated_at=now_ms(),vertical=current_vertical,**source_values)
+    release_values = {'released_offer_ids': current.released_offer_ids, 'released_at': current.released_at} if local_path.exists() else {'released_offer_ids': []}
+    rec=JobRecord(**release_values,job_id=job_id,file_name=current_file_name,file_size=current_file_size,status=status,progress=progress,message=message,report_ready=(status==JobStatus.complete),has_creative=current_has_creative,has_ad_copy=current_has_ad_copy,batch_id=current_batch_id,batch_item_id=current_batch_item_id,offer_ids=current_offer_ids,primary_offer_id=current_primary_offer_id,created_at=created_at,updated_at=now_ms(),vertical=current_vertical,**source_values)
     write_json(local_path, rec.model_dump(mode='json'))
     review_args = {
         'processingInstanceId': INSTANCE_ID,
@@ -974,10 +975,11 @@ def _client_review_preview(
     }
 
 
-def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_id:str|None=None)->list[dict[str, Any]]:
+def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_id:str|None=None, preview_publisher_id:str|None=None)->list[dict[str, Any]]:
     limit=max(1, min(limit, 1000))
     remote=_convex_call('query', 'clientReviews:list', {
         **({'publisherId':publisher_id} if publisher_id else {}),
+        **({'previewPublisherId':preview_publisher_id} if preview_publisher_id else {}),
         'clientId':client_id,
         'offerId':offer_id,
         'limit':limit,
@@ -988,7 +990,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
     previous_decisions=_latest_local_previous_decisions()
     reviews=[]
     for review in list_reviews(limit):
-        if review.status != JobStatus.complete:
+        if review.status != JobStatus.complete or (review.released_offer_ids is not None and offer_id not in review.released_offer_ids):
             continue
         outcome=next((
             value for value in review.offer_outcomes
@@ -1047,36 +1049,39 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
     return reviews
 
 
-def get_client_review_report(client_id:str, offer_id:str, job_id:str)->dict[str, Any]|None:
+def get_client_review_report(client_id:str, offer_id:str, job_id:str, preview_publisher_id:str|None=None)->dict[str, Any]|None:
     remote=_convex_call('query', 'clientReviews:getReport', {
         'clientId':client_id,
         'offerId':offer_id,
         'jobId':job_id,
+        **({'previewPublisherId':preview_publisher_id} if preview_publisher_id else {}),
     })
     if convex_enabled():
         return remote if isinstance(remote, dict) else None
     try:
         record=get_status(job_id)
-        if record.status != JobStatus.complete or offer_id not in record.offer_ids:
+        if record.status != JobStatus.complete or offer_id not in record.offer_ids or (record.released_offer_ids is not None and offer_id not in record.released_offer_ids):
             return None
         return _report_offer_result(get_report(job_id), offer_id)
     except FileNotFoundError:
         return None
 
 
-def get_client_review_detail(client_id:str, offer_id:str, job_id:str)->dict[str, Any]|None:
+def get_client_review_detail(client_id:str, offer_id:str, job_id:str, preview_publisher_id:str|None=None)->dict[str, Any]|None:
     remote=_convex_call('query', 'clientReviews:getDetail', {
         'clientId':client_id,
         'offerId':offer_id,
         'jobId':job_id,
+        **({'previewPublisherId':preview_publisher_id} if preview_publisher_id else {}),
     })
     return remote if isinstance(remote, dict) else None
 
 
-def client_review_exists(offer_id:str, job_id:str)->bool:
+def client_review_exists(offer_id:str, job_id:str, preview_publisher_id:str|None=None)->bool:
     remote=_convex_call('query', 'clientReviews:hasReview', {
         'offerId':offer_id,
         'jobId':job_id,
+        **({'previewPublisherId':preview_publisher_id} if preview_publisher_id else {}),
     })
     if isinstance(remote, bool):
         return remote
@@ -1111,7 +1116,7 @@ def set_client_review_decision(
     remote=_convex_call('mutation', 'clientReviews:decide', args)
     if isinstance(remote, dict):
         return remote
-    report=_report_offer_result(get_report(job_id), offer_id)
+    report=get_client_review_report(client_id, offer_id, job_id)
     if report is None:
         raise FileNotFoundError(job_id)
     ai_status=_normalize_result_status(report.get('overall_status'))
@@ -1222,7 +1227,7 @@ def clear_client_review_decision(
     })
     if isinstance(remote, dict):
         return
-    report=_report_offer_result(get_report(job_id), offer_id)
+    report=get_client_review_report(client_id, offer_id, job_id)
     if report is None:
         raise FileNotFoundError(job_id)
     decisions=_read_local_client_decisions()
@@ -1570,7 +1575,14 @@ def delete_review(job_id:str)->DeletedReview:
     record=get_status(job_id)
     if record.status not in {JobStatus.complete, JobStatus.failed}:
         raise ValueError('Only completed or failed reviews can be removed from history.')
-    remote=_convex_call('mutation', 'reviews:softDelete', {'jobId':job_id})
+    if record.released_at is not None:
+        raise ValueError('Released reviews cannot be deleted.')
+    try:
+        remote=_convex_call('mutation', 'reviews:softDelete', {'jobId':job_id})
+    except RuntimeError as exc:
+        if 'Released reviews cannot be deleted' in str(exc):
+            raise ValueError('Released reviews cannot be deleted.') from None
+        raise
     deleted_at=int(remote.get('deleted_at')) if isinstance(remote, dict) else now_ms()
     write_json(JOB_DATA_DIR/job_id/'deleted.json', {'job_id':job_id, 'deleted_at':deleted_at})
     artifact_owner_ids=[job_id, f'{job_id}:layout:{REPORT_PDF_LAYOUT_VERSION}']

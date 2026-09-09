@@ -106,6 +106,47 @@ def require_submission(request: Request, client_id: str, job_id: str) -> None:
             raise HTTPException(404, 'Creative not found.')
 
 
+def preview_scope(request: Request, client_id: str) -> dict:
+    """Only a signed-in publisher can preview their own unreleased results."""
+    from .main import authenticate_client
+    session = authenticate_client(request)
+    if session['role'] != 'publisher':
+        return {}
+    return {'preview_publisher_id': session.get('publisher_ids', {}).get(client_id, session['publisher_id'])}
+
+
+class ReleaseSelectionInput(BaseModel):
+    job_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    batch_id: str | None = None
+
+
+class ReleaseInput(BaseModel):
+    job_ids: list[str] = Field(min_length=1, max_length=100)
+    offer_ids: list[str] = Field(min_length=1, max_length=20)
+    confirmed: bool = False
+
+
+def release_call(function: str, args: dict, *, mutation: bool = False):
+    if not storage.convex_enabled():
+        raise HTTPException(503, 'Release storage is unavailable. Please retry later.')
+    try:
+        return storage._convex_call('mutation' if mutation else 'query', f'reviewReleases:{function}', args)
+    except RuntimeError as exc:
+        for public in ('Creative unavailable', 'Batch unavailable', 'Select creatives or a batch', 'Select up to 100 creatives', 'Wait for the batch to finish processing before release', 'Select between 1 and 100 completed creatives', 'Only completed creatives can be released', 'Confirm the release before continuing', 'Choose offers that were evaluated for these creatives'):
+            if public in str(exc):
+                raise HTTPException(409, public) from None
+        raise HTTPException(503, 'Could not save the release. Please retry.') from None
+
+
+def release_scope(request: Request, client_id: str | None = None) -> dict:
+    from .main import require_admin
+    if client_id:
+        context = upload_context(request)
+        return {key: context[key] for key in ('clientId', 'publisherId')}
+    require_admin(request)
+    return {}
+
+
 def upload_context(request: Request) -> dict | None:
     if not request.url.path.startswith('/api/client/'):
         return None
@@ -186,9 +227,10 @@ def new_share(payload: ShareInput, request: Request, client_id: str | None = Non
                 record = get_status(job_id)
             except FileNotFoundError:
                 raise HTTPException(404, 'Creative not found.') from None
-            offer_id = payload.offer_id or record.primary_offer_id or 'acp'
+            released = record.released_offer_ids
+            offer_id = payload.offer_id or (released[0] if released else record.primary_offer_id) or 'acp'
         if get_client_review_report(client_id or offer_id, offer_id, job_id) is None:
-            raise HTTPException(409, 'Only completed, available creatives can be shared.')
+            raise HTTPException(409, 'Release these creatives to the selected offer before sharing.')
         items.append({'jobId': job_id, 'offerId': offer_id})
     token = secrets.token_urlsafe(32)
     share_id = uuid.uuid4().hex
@@ -285,7 +327,47 @@ def register(app):
         session = authenticate_client(request)
         if session['role'] == 'publisher':
             publisher_id = session.get('publisher_ids', {}).get(client_id, session['publisher_id'])
-        return call('listSubmissions', {'clientId': client_id, **({'publisherId': publisher_id} if publisher_id else {})})
+        return call('listSubmissions', {'clientId': client_id, **({'publisherId': publisher_id} if publisher_id else {}), **({'previewPublisherId': publisher_id} if session['role'] == 'publisher' else {})})
+
+    def release_selection(payload: ReleaseSelectionInput, request: Request, client_id: str | None = None):
+        scope = release_scope(request, client_id)
+        return release_call('getSelection', {**scope, **({'jobIds': payload.job_ids} if payload.job_ids else {}), **({'batchId': payload.batch_id} if payload.batch_id else {})})
+
+    def release_creatives(payload: ReleaseInput, request: Request, client_id: str | None = None):
+        scope = release_scope(request, client_id)
+        return release_call('release', {**scope, 'jobIds': payload.job_ids, 'offerIds': payload.offer_ids, 'confirmed': payload.confirmed, 'releasedBy': 'admin'}, mutation=True)
+
+    @app.post('/api/reviews/release-selection')
+    def admin_release_selection(payload: ReleaseSelectionInput, request: Request):
+        return release_selection(payload, request)
+
+    @app.post('/api/reviews/release')
+    def admin_release(payload: ReleaseInput, request: Request):
+        return release_creatives(payload, request)
+
+    @app.post('/api/client/{client_id}/reviews/release-selection')
+    def publisher_release_selection(client_id: str, payload: ReleaseSelectionInput, request: Request):
+        return release_selection(payload, request, client_id)
+
+    @app.post('/api/client/{client_id}/reviews/release')
+    def publisher_release(client_id: str, payload: ReleaseInput, request: Request):
+        return release_creatives(payload, request, client_id)
+
+    @app.delete('/api/client/{client_id}/submissions/{job_id}')
+    def delete_submission(client_id: str, job_id: str, request: Request):
+        from .main import JOB_ID_PATTERN
+        release_scope(request, client_id)
+        require_submission(request, client_id, job_id)
+        if not JOB_ID_PATTERN.fullmatch(job_id):
+            raise HTTPException(404, 'Creative not found.')
+        # Shared internal uploads may belong to more than one publisher workspace;
+        # deleting an unreleased job is allowed only before any advertiser release.
+        try:
+            return storage.delete_review(job_id)
+        except FileNotFoundError:
+            raise HTTPException(404, 'Creative not found.') from None
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.get('/api/client/{client_id}/plan')
     def get_plan(client_id: str, request: Request):

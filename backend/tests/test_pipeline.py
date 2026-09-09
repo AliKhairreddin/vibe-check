@@ -3146,6 +3146,10 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
         'findings':[],
     })
     set_status(job_id, JobStatus.complete, 100, 'Complete')
+    # This fixture represents a review already released to its evaluated offers.
+    record = review_storage.get_status(job_id)
+    record.released_offer_ids = record.offer_ids
+    review_storage.write_json(tmp_path / job_id / 'status.json', record.model_dump(mode='json'))
     transport=httpx.ASGITransport(app=app)
     headers={
         'x-client-username':'kissterra',
@@ -3326,6 +3330,10 @@ def test_client_report_fallback_requires_a_visible_completed_review(tmp_path, mo
     assert review_storage.get_client_review_report('kissterra','kissterra',job_id) is None
 
     set_status(job_id, JobStatus.complete, 100, 'Complete')
+    # This fixture represents a review already released to its evaluated offers.
+    record = review_storage.get_status(job_id)
+    record.released_offer_ids = record.offer_ids
+    review_storage.write_json(tmp_path / job_id / 'status.json', record.model_dump(mode='json'))
     assert review_storage.get_client_review_report(
         'kissterra','kissterra',job_id
     )['summary'] == 'Stored before completion.'
@@ -4044,6 +4052,10 @@ async def test_dashboard_media_streams_drive_ranges_and_enforces_client_scope(tm
         'findings':[],
     })
     set_status(job_id, JobStatus.complete, 100, 'Complete')
+    # This fixture represents a review already released to its evaluated offers.
+    record = review_storage.get_status(job_id)
+    record.released_offer_ids = record.offer_ids
+    review_storage.write_json(tmp_path / job_id / 'status.json', record.model_dump(mode='json'))
 
     opened_ranges=[]
     closed_streams=[]

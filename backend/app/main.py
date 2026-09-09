@@ -1447,7 +1447,7 @@ def client_reviews(client_id:str, request:Request, limit:int=1000, publisher_id:
     session=authenticate_client(request)
     if session['role'] == 'publisher':
         publisher_id=session.get('publisher_ids', {}).get(client_id, session['publisher_id'])
-    reviews=list_client_reviews(client_id, config['offer_id'], limit, **({'publisher_id':publisher_id} if publisher_id else {}))
+    reviews=list_client_reviews(client_id, config['offer_id'], limit, **({'publisher_id':publisher_id} if publisher_id else {}), **workspaces.preview_scope(request, client_id))
     return {
         'client_id':client_id,
         'display_name':config['display_name'],
@@ -1466,7 +1466,7 @@ def client_batch_pdf(client_id:str, batch_id:str, request:Request, publisher_id:
     elif publisher_id == 'all':
         publisher_id=None
     reviews=[
-        review for review in list_client_reviews(client_id, config['offer_id'], 1000, **({'publisher_id':publisher_id} if publisher_id else {}))
+        review for review in list_client_reviews(client_id, config['offer_id'], 1000, **({'publisher_id':publisher_id} if publisher_id else {}), **workspaces.preview_scope(request, client_id))
         if review.get('batchId') == batch_id
         and (not publisher_id or review.get('publisherId') == publisher_id)
     ]
@@ -1474,7 +1474,7 @@ def client_batch_pdf(client_id:str, batch_id:str, request:Request, publisher_id:
         raise HTTPException(404, 'Batch not found.')
     for review in reviews:
         workspaces.require_submission(request, client_id, review['jobId'])
-        if get_client_review_report(client_id, config['offer_id'], review['jobId']) is None:
+        if get_client_review_report(client_id, config['offer_id'], review['jobId'], **workspaces.preview_scope(request, client_id)) is None:
             raise HTTPException(409, 'A report is not ready. Refresh the page and try again.')
     try:
         content, filename=build_client_batch_pdf(batch_id, reviews, config['offer_id'])
@@ -1494,7 +1494,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
     workspaces.require_submission(request, client_id, job_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review not found.')
-    fast_detail=get_client_review_detail(client_id, config['offer_id'], job_id)
+    fast_detail=get_client_review_detail(client_id, config['offer_id'], job_id, **workspaces.preview_scope(request, client_id))
     if fast_detail:
         return {
             'client_id':client_id,
@@ -1510,7 +1510,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
             'google_drive_url':fast_detail.get('googleDriveUrl'),
             'report_pdf_url':f'/api/client/{client_id}/reviews/{job_id}/report.pdf',
         }
-    report=get_client_review_report(client_id, config['offer_id'], job_id)
+    report=get_client_review_report(client_id, config['offer_id'], job_id, **workspaces.preview_scope(request, client_id))
     if report is None:
         raise HTTPException(404, 'Review not found.')
     matching=next((
@@ -1559,7 +1559,7 @@ def client_review_pdf(client_id:str, job_id:str, request:Request):
     workspaces.require_submission(request, client_id, job_id)
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(404, 'Review not found.')
-    if get_client_review_report(client_id, config['offer_id'], job_id) is None:
+    if get_client_review_report(client_id, config['offer_id'], job_id, **workspaces.preview_scope(request, client_id)) is None:
         raise HTTPException(404, 'Review not found.')
     try:
         return pdf_artifact_response(ensure_review_pdf(job_id, config['offer_id']))
@@ -1613,7 +1613,7 @@ def decide_client_review(
 def client_review_thumbnail(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
     workspaces.require_submission(request, client_id, job_id)
-    if not client_review_exists(config['offer_id'], job_id):
+    if not client_review_exists(config['offer_id'], job_id, **workspaces.preview_scope(request, client_id)):
         raise HTTPException(404, 'Review not found.')
     frames=list_review_evidence_frames(job_id)
     if not frames:
@@ -1625,7 +1625,7 @@ def client_review_thumbnail(client_id:str, job_id:str, request:Request):
 def client_review_frame(client_id:str, job_id:str, filename:str, request:Request):
     config=require_client(request, client_id)
     workspaces.require_submission(request, client_id, job_id)
-    if not client_review_exists(config['offer_id'], job_id):
+    if not client_review_exists(config['offer_id'], job_id, **workspaces.preview_scope(request, client_id)):
         raise HTTPException(404, 'Review not found.')
     return evidence_frame_response(job_id, filename)
 
@@ -1634,7 +1634,7 @@ def client_review_frame(client_id:str, job_id:str, filename:str, request:Request
 def client_review_media(client_id:str, job_id:str, request:Request):
     config=require_client(request, client_id)
     workspaces.require_submission(request, client_id, job_id)
-    if not client_review_exists(config['offer_id'], job_id):
+    if not client_review_exists(config['offer_id'], job_id, **workspaces.preview_scope(request, client_id)):
         raise HTTPException(404, 'Review not found.')
     return review_media_response(job_id, request)
 

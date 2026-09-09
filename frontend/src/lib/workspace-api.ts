@@ -1,7 +1,7 @@
 import { requestJson, type ClientSession, type ClientReviewItem, type OfferResult, type ReviewEvidenceFrame } from './api';
 export type Publisher = { managedLogin?: boolean; publisherId: string; name: string; username: string; status: 'invited' | 'active' | 'suspended'; createdAt: number; inviteExpiresAt: number | null };
 export type Invitation = { publisher_id: string; username: string; invite_url: string };
-export type Submission = { jobId: string; publisherId: string; fileName: string; status: string; progress: number; message: string; createdAt: number };
+export type Submission = { released: boolean; jobId: string; publisherId: string; fileName: string; status: string; progress: number; message: string; createdAt: number };
 export type Plan = { clientId: string; plan: 'pilot' | 'starter' | 'growth' | 'enterprise'; publisherLimit: number; monthlyReviewLimit: number; monthlyReviews: number; publishers: number };
 export type SharedLink = { shareId: string; title: string; createdAt: number; expiresAt: number; revokedAt: number | null; count: number };
 export type SharedDetail = { review: ClientReviewItem; report: OfferResult; media_url: string; evidence_frames: ReviewEvidenceFrame[] };

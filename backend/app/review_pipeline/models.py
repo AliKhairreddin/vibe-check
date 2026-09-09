@@ -259,6 +259,8 @@ class JobRecord(BaseModel):
     batch_item_id: str | None = None
     offer_ids: list[str] = Field(default_factory=lambda: ['acp'])
     primary_offer_id: str = 'acp'
+    released_offer_ids: list[str] | None = None
+    released_at: int | None = None
     source_kind: ReviewSourceKind | None = None
     source_status: ReviewSourceStatus | None = None
     source_url: str | None = None

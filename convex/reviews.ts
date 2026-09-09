@@ -41,6 +41,8 @@ type ReviewForStats = {
   fileName?: string;
   hasCreative?: boolean;
   jobId: string;
+  releasedOfferIds?: string[];
+  releasedAt?: number;
   offerIds?: string[];
   primaryOfferId?: string;
   report?: unknown;
@@ -337,7 +339,7 @@ function previewForReport(report: Record<string, unknown> | null, status: Result
   };
 }
 
-async function syncReviewOfferStats(
+export async function syncReviewOfferStats(
   ctx: MutationCtx,
   review: ReviewForStats,
   updatedAt: number
@@ -376,6 +378,7 @@ async function syncReviewOfferStats(
       batchId: review.batchId,
       createdAt: review.createdAt,
       deletedAt: review.deletedAt,
+      withheld: review.releasedOfferIds !== undefined && !review.releasedOfferIds.includes(offerId) ? true as const : undefined,
       fileName: review.fileName ?? "",
       hasCreative: review.hasCreative ?? true,
       internalDisposition,
@@ -602,6 +605,8 @@ function publicReview(review: {
   hasCreative?: boolean;
   jobId: string;
   message: string;
+  releasedOfferIds?: string[];
+  releasedAt?: number;
   offerIds?: string[];
   primaryOfferId?: string;
   progress: number;
@@ -635,6 +640,8 @@ function publicReview(review: {
       publicOfferOutcomes(review.report, hasCreative, hasAdCopy),
       clientDecisions,
     ),
+    released_offer_ids: review.releasedOfferIds ?? null,
+    released_at: review.releasedAt ?? null,
     offer_ids: review.offerIds ?? ["acp"],
     overall_status: overallStatus(review.report),
     primary_offer_id: review.primaryOfferId ?? "acp",
@@ -722,6 +729,7 @@ export const upsertStatus = mutation({
       ...existing,
       ...value,
       createdAt: existing?.createdAt ?? now,
+      ...(!existing ? { releasedOfferIds: [] } : {}),
     };
     const reviewId = existing?._id ?? await ctx.db.insert("reviews", review);
     if (existing) await ctx.db.patch(existing._id, value);
@@ -953,6 +961,7 @@ export const softDelete = mutation({
     secret: v.string(),
     jobId: v.string(),
   },
+  returns: v.object({ deleted_at: v.number(), job_id: v.string() }),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const review = await ctx.db
@@ -967,6 +976,8 @@ export const softDelete = mutation({
     if (review.status !== "complete" && review.status !== "failed") {
       throw new Error("Only complete or failed review jobs can be deleted");
     }
+
+    if (review.releasedAt !== undefined) throw new Error("Released reviews cannot be deleted");
 
     const media = await ctx.db.query('reviewMedia').withIndex('by_job_id', q => q.eq('jobId', args.jobId)).unique();
     if (media) { await ctx.storage.delete(media.storageId); await ctx.db.delete(media._id); }

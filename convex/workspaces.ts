@@ -132,15 +132,15 @@ export const releaseUnstartedSubmission = mutation({
   },
 });
 export const listSubmissions = query({
-  args: { ...secret, clientId: v.string(), publisherId: v.optional(v.string()) }, returns: v.any(), handler: async (ctx, args) => {
+  args: { ...secret, clientId: v.string(), publisherId: v.optional(v.string()), previewPublisherId: v.optional(v.string()) }, returns: v.any(), handler: async (ctx, args) => {
     authorize(args.secret);
     const rows = args.publisherId
       ? await ctx.db.query('publisherSubmissions').withIndex('by_publisher_id', q => q.eq('publisherId', args.publisherId!)).order('desc').take(1000)
       : await ctx.db.query('publisherSubmissions').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).order('desc').take(1000);
     return (await Promise.all(rows.filter(row => row.clientId === args.clientId).map(async row => {
       const review = await ctx.db.query('reviewOfferStats').withIndex('by_job_id_and_offer_id', q => q.eq('jobId', row.jobId).eq('offerId', args.clientId)).unique();
-      if (review?.deletedAt !== undefined) return null;
-      return { jobId: row.jobId, publisherId: row.publisherId, createdAt: row.createdAt, fileName: review?.fileName ?? 'Preparing submission', status: review?.status ?? 'queued', progress: review?.progress ?? (review?.status === 'complete' ? 100 : 0), message: review?.message ?? (review?.status === 'complete' ? 'Review complete' : review?.status === 'failed' ? 'Review failed' : 'Preparing submission') };
+      if (review?.deletedAt !== undefined || ((!review || review.withheld) && args.previewPublisherId !== row.publisherId)) return null;
+      return { released: Boolean(review && !review.withheld), jobId: row.jobId, publisherId: row.publisherId, createdAt: row.createdAt, fileName: review?.fileName ?? 'Preparing submission', status: review?.status ?? 'queued', progress: review?.progress ?? (review?.status === 'complete' ? 100 : 0), message: review?.message ?? (review?.status === 'complete' ? 'Review complete' : review?.status === 'failed' ? 'Review failed' : 'Preparing submission') };
     }))).filter(Boolean);
   },
 });
@@ -152,7 +152,7 @@ export const createShare = mutation({
     for (const item of args.items) {
       const review = await ctx.db.query('reviews').withIndex('by_job_id', q => q.eq('jobId', item.jobId)).unique();
       const stat = await ctx.db.query('reviewOfferStats').withIndex('by_job_id_and_offer_id', q => q.eq('jobId', item.jobId).eq('offerId', item.offerId)).unique();
-      if (!review || review.deletedAt !== undefined || !stat || stat.deletedAt !== undefined || stat.status !== 'complete') throw new Error('Only completed, available creatives can be shared');
+      if (!review || review.deletedAt !== undefined || !stat || stat.withheld || stat.deletedAt !== undefined || stat.status !== 'complete') throw new Error('Only completed, available creatives can be shared');
       if (args.publisherId) {
         const submission = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', args.clientId!).eq('jobId', item.jobId)).unique();
         if (submission?.publisherId !== args.publisherId || submission?.clientId !== args.clientId) throw new Error('Creative unavailable');
@@ -168,7 +168,11 @@ export const getShare = query({
     authorize(args.secret);
     const row = await ctx.db.query('publicShares').withIndex('by_token_hash', q => q.eq('tokenHash', args.tokenHash)).unique();
     if (!row || row.revokedAt !== undefined || row.expiresAt <= Date.now()) return null;
-    return row;
+    const items = (await Promise.all(row.items.map(async item => {
+      const stat = await ctx.db.query('reviewOfferStats').withIndex('by_job_id_and_offer_id', q => q.eq('jobId', item.jobId).eq('offerId', item.offerId)).unique();
+      return stat && !stat.withheld && stat.deletedAt === undefined && stat.status === 'complete' ? item : null;
+    }))).filter((item): item is { jobId: string; offerId: string } => item !== null);
+    return items.length ? { ...row, items } : null;
   },
 });
 export const listShares = query({

@@ -308,7 +308,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
           <h2 className="font-heading text-2xl font-semibold tracking-tight">List results, then open media or details</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
             Use the review ID and returned URLs; do not construct a Google Drive URL from the filename.
-            The list response is already scoped to the requested offer.
+            The list response is scoped to the requested offer and includes only results released to that advertiser. New uploads stay private until the uploader confirms a release in AdChecked.
           </p>
         </div>
         <CodeBlock code={sharedHistoryExample} />

@@ -232,6 +232,8 @@ export default defineSchema({
     hasCreative: v.optional(v.boolean()),
     jobId: v.string(),
     message: v.string(),
+    releasedOfferIds: v.optional(v.array(v.string())),
+    releasedAt: v.optional(v.number()),
     offerIds: v.optional(v.array(v.string())),
     primaryOfferId: v.optional(v.string()),
     progress: v.number(),
@@ -264,7 +266,11 @@ export default defineSchema({
       "status", "deletedAt", "automationRunId", "apiBatchId", "updatedAt",
     ])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
+  reviewReleaseEvents: defineTable({
+    jobId: v.string(), offerIds: v.array(v.string()), releasedBy: v.string(), createdAt: v.number(),
+  }).index("by_job_id", ["jobId"]),
   reviewOfferStats: defineTable({
+    withheld: v.optional(v.literal(true)),
     progress: v.optional(v.number()),
     message: v.optional(v.string()),
     batchId: v.optional(v.string()),
@@ -296,6 +302,7 @@ export default defineSchema({
       v.literal("home-insurance")
     )),
   })
+    .index("by_offer_deleted_withheld_status_created", ["offerId", "deletedAt", "withheld", "status", "createdAt"])
     .index("by_offer_id_deleted_at", ["offerId", "deletedAt"])
     .index("by_offer_id_and_vertical_and_deleted_at", [
       "offerId",

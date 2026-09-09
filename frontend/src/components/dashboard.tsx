@@ -1,3 +1,4 @@
+import { ReleaseButton } from '@/components/release-controls';
 import { Select } from '@/components/ui/select';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -634,6 +635,7 @@ function RecentReviewRow({
       <Link to={target} params={{ jobId: review.job_id }} className={linkClassName}>
         {content}
       </Link>
+      {review.status === 'complete' ? <ReleaseButton jobIds={[review.job_id]} /> : null}
       {review.status === 'complete' ? <ShareButton jobIds={[review.job_id]} label="Share" size="xs" /> : null}
     </div>
   );

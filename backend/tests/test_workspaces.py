@@ -94,7 +94,7 @@ async def test_publisher_session_is_revoked_on_suspend_and_password_reset(portal
 
 @pytest.mark.anyio
 async def test_publisher_cannot_read_other_publishers_or_change_advertiser_decisions(portal, monkeypatch):
-    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args: detail())
+    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: detail())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies'](), headers={'origin': 'https://app.adchecked.com'}) as client:
         assert (await client.get(f'/api/client/kissterra/reviews/{JOB}')).status_code == 200
         for suffix in ('', '/thumbnail', '/frames/frame.jpg', '/media', '/report.pdf'):
@@ -129,7 +129,7 @@ def batch_reports(portal, monkeypatch):
     calls = []
     # Return mixed rows to exercise the endpoint's scope checks too.
     monkeypatch.setattr(main, 'list_client_reviews', lambda *args, **kwargs: rows)
-    monkeypatch.setattr(main, 'get_client_review_report', lambda *args: {'summary': 'Ready'})
+    monkeypatch.setattr(main, 'get_client_review_report', lambda *args, **kwargs: {'summary': 'Ready'})
 
     def report(job_id, offer_id):
         calls.append((job_id, offer_id))
@@ -197,7 +197,7 @@ async def test_batch_pdf_never_returns_a_partial_download(portal, batch_reports,
     batch_id, _ = batch_reports
     original = pdf_reports.ensure_review_pdf
     if failure == 'unavailable':
-        monkeypatch.setattr(main, 'get_client_review_report', lambda client_id, offer_id, job_id: None if job_id == OTHER else {})
+        monkeypatch.setattr(main, 'get_client_review_report', lambda client_id, offer_id, job_id, **kwargs: None if job_id == OTHER else {})
     else:
         def report(job_id, offer_id):
             if job_id == OTHER:
@@ -243,8 +243,8 @@ async def test_chunk_upload_ownership_prevents_cross_publisher_access(portal, mo
 
 @pytest.mark.anyio
 async def test_sharing_checks_ownership_and_public_link_has_no_login_or_internal_data(portal, monkeypatch):
-    monkeypatch.setattr(main, 'get_client_review_report', lambda *args: {'summary': 'Clear'})
-    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args: detail())
+    monkeypatch.setattr(main, 'get_client_review_report', lambda *args, **kwargs: {'summary': 'Clear'})
+    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: detail())
     portal['share'] = {'title': 'Selected creatives', 'clientId': 'kissterra', 'items': [{'jobId': JOB, 'offerId': 'kissterra'}], 'expiresAt': int(time.time() * 1000) + 60000}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', headers={'origin': 'https://app.adchecked.com'}) as public:
         assert (await public.get(f'/api/client/kissterra/reviews/{JOB}')).status_code == 401
@@ -345,3 +345,54 @@ async def test_digital_nudge_cookie_switches_advertisers_with_distinct_publisher
             assert scoped[-1] == f'digital-nudge-{client_id}'
         memberships.pop()
         assert (await client.get('/api/client/session')).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_release_routes_derive_publisher_scope_and_require_explicit_confirmation(portal, monkeypatch):
+    calls = []
+    def release_call(function, args, *, mutation=False):
+        calls.append((function, args, mutation))
+        if function == 'release' and not args['confirmed']:
+            raise HTTPException(409, 'Confirm the release before continuing')
+        return {'job_ids': [JOB], 'offers': []} if function == 'getSelection' else {'released': 1, 'offer_ids': ['kissterra']}
+    monkeypatch.setattr(workspaces, 'release_call', release_call)
+    payload = {'job_ids': [JOB], 'offer_ids': ['kissterra'], 'publisherId': 'someone-else'}
+    headers = {'origin': 'https://app.adchecked.com'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']()) as client:
+        assert (await client.post('/api/client/kissterra/reviews/release-selection', json={'job_ids': [JOB]}, headers=headers)).status_code == 200
+        assert (await client.post('/api/client/kissterra/reviews/release', json=payload, headers=headers)).status_code == 409
+        assert (await client.post('/api/client/kissterra/reviews/release', json={**payload, 'confirmed': True}, headers=headers)).status_code == 200
+        assert (await client.post('/api/client/acp/reviews/release', json={**payload, 'confirmed': True}, headers=headers)).status_code == 404
+        assert (await client.post('/api/reviews/release', json={**payload, 'confirmed': True}, headers=headers)).status_code != 200
+    assert len(calls) == 3
+    assert all(args['publisherId'] == 'publisher-a' and args['clientId'] == 'kissterra' for _, args, _ in calls)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']('client')) as client:
+        assert (await client.post('/api/client/kissterra/reviews/release', json={**payload, 'confirmed': True}, headers=headers)).status_code == 403
+        assert (await client.post('/api/client/kissterra/reviews/release-selection', json={'job_ids': [JOB]}, headers=headers)).status_code == 403
+    assert len(calls) == 3
+
+
+@pytest.mark.anyio
+async def test_private_preview_scope_is_not_taken_from_advertiser_filters(portal, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, 'list_client_reviews', lambda *args, **kwargs: calls.append(kwargs) or [])
+    for role in ['client', 'publisher']:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies'](role)) as client:
+            assert (await client.get('/api/client/kissterra/reviews?publisher_id=publisher-a&preview_publisher_id=publisher-a')).status_code == 200
+    assert calls == [{'publisher_id': 'publisher-a'}, {'publisher_id': 'publisher-a', 'preview_publisher_id': 'publisher-a'}]
+
+
+@pytest.mark.anyio
+async def test_publisher_deletion_checks_ownership_and_release_lock(portal, monkeypatch):
+    deleted = []
+    def remove(job_id):
+        deleted.append(job_id)
+        raise ValueError('Released reviews cannot be deleted.')
+    monkeypatch.setattr(workspaces.storage, 'delete_review', remove)
+    headers = {'origin': 'https://app.adchecked.com'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']()) as client:
+        assert (await client.delete(f'/api/client/kissterra/submissions/{OTHER}', headers=headers)).status_code == 404
+        response = await client.delete(f'/api/client/kissterra/submissions/{JOB}', headers=headers)
+        assert response.status_code == 409
+        assert 'Released' in response.json()['detail']
+    assert deleted == [JOB]

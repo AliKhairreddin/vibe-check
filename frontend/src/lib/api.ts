@@ -14,6 +14,8 @@ export type Status = {
   batch_item_id?: string | null;
   created_at?: number | null;
   updated_at?: number | null;
+  released_offer_ids?: string[] | null;
+  released_at?: number | null;
   offer_ids?: string[];
   primary_offer_id?: string | null;
   source_file_id?: string | null;

@@ -1,8 +1,8 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
-import { classifyReviewVertical } from "./reviewVerticals";
+import { classifyReviewVertical } from "./reviewVerticals.ts";
 import type { Doc } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 
 type ResultStatus = "green" | "yellow" | "red";
 
@@ -192,6 +192,13 @@ async function archiveDecision(
   });
 }
 
+async function canPreview(ctx: QueryCtx, jobId: string, offerId: string, publisherId?: string) {
+  if (!publisherId) return false;
+  const submission = await ctx.db.query("publisherSubmissions")
+    .withIndex("by_client_id_and_job_id", q => q.eq("clientId", offerId).eq("jobId", jobId)).unique();
+  return submission?.publisherId === publisherId;
+}
+
 export const list = query({
   args: {
     secret: v.string(),
@@ -199,18 +206,20 @@ export const list = query({
     offerId: v.string(),
     limit: v.number(),
     publisherId: v.optional(v.string()),
+    previewPublisherId: v.optional(v.string()),
   },
   returns: v.array(reviewValidator),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const limit = Math.max(1, Math.min(args.limit, 1000));
     const publisherRows = args.publisherId ? await ctx.db.query("publisherSubmissions").withIndex("by_publisher_id", q => q.eq("publisherId", args.publisherId!)).order("desc").take(1000) : null;
-    const rawStats = publisherRows ? (await Promise.all(publisherRows.filter(row => row.clientId === args.clientId).map(row => ctx.db.query("reviewOfferStats").withIndex("by_job_id_and_offer_id", q => q.eq("jobId", row.jobId).eq("offerId", args.offerId)).unique()))).filter((row): row is Doc<"reviewOfferStats"> => Boolean(row && row.deletedAt === undefined && row.status === "complete")).slice(0, limit) : await ctx.db
+    const rawStats = publisherRows ? (await Promise.all(publisherRows.filter(row => row.clientId === args.clientId).map(row => ctx.db.query("reviewOfferStats").withIndex("by_job_id_and_offer_id", q => q.eq("jobId", row.jobId).eq("offerId", args.offerId)).unique()))).filter((row): row is Doc<"reviewOfferStats"> => Boolean(row && row.deletedAt === undefined && row.status === "complete" && (row.withheld !== true || args.previewPublisherId === args.publisherId))).slice(0, limit) : await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_offer_id_and_deleted_at_and_status_and_created_at", (q) =>
+      .withIndex("by_offer_deleted_withheld_status_created", (q) =>
         q
           .eq("offerId", args.offerId)
           .eq("deletedAt", undefined)
+          .eq("withheld", undefined)
           .eq("status", "complete")
       )
       .order("desc")
@@ -322,6 +331,7 @@ export const getDetail = query({
     clientId: v.string(),
     offerId: v.string(),
     jobId: v.string(),
+    previewPublisherId: v.optional(v.string()),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
@@ -332,6 +342,7 @@ export const getDetail = query({
         q.eq("jobId", args.jobId).eq("offerId", args.offerId)
       )
       .unique();
+    if (stat?.withheld && !await canPreview(ctx, args.jobId, args.offerId, args.previewPublisherId)) return null;
     if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") return null;
     const [review, storedReport, decision, previousDecision, evidence] = await Promise.all([
       ctx.db
@@ -411,6 +422,7 @@ export const hasReview = query({
     secret: v.string(),
     offerId: v.string(),
     jobId: v.string(),
+    previewPublisherId: v.optional(v.string()),
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
@@ -421,6 +433,7 @@ export const hasReview = query({
         q.eq("jobId", args.jobId).eq("offerId", args.offerId)
       )
       .unique();
+    if (stat?.withheld && !await canPreview(ctx, args.jobId, args.offerId, args.previewPublisherId)) return false;
     return Boolean(
       stat
       && stat.deletedAt === undefined
@@ -435,6 +448,7 @@ export const getReport = query({
     clientId: v.string(),
     offerId: v.string(),
     jobId: v.string(),
+    previewPublisherId: v.optional(v.string()),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
@@ -445,6 +459,7 @@ export const getReport = query({
         q.eq("jobId", args.jobId).eq("offerId", args.offerId)
       )
       .unique();
+    if (stat?.withheld && !await canPreview(ctx, args.jobId, args.offerId, args.previewPublisherId)) return null;
     if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") {
       return null;
     }
@@ -488,7 +503,7 @@ export const decide = mutation({
         q.eq("jobId", args.jobId).eq("offerId", args.offerId)
       )
       .unique();
-    if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") {
+    if (!stat || stat.withheld || stat.deletedAt !== undefined || stat.status !== "complete") {
       throw new Error("Client review is unavailable");
     }
     const aiStatus = normalizeResultStatus(stat.resultStatus);
@@ -620,7 +635,7 @@ export const clearDecision = mutation({
         q.eq("jobId", args.jobId).eq("offerId", args.offerId)
       )
       .unique();
-    if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") {
+    if (!stat || stat.withheld || stat.deletedAt !== undefined || stat.status !== "complete") {
       throw new Error("Client review is unavailable");
     }
     const existing = await ctx.db

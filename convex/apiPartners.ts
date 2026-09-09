@@ -162,8 +162,8 @@ function publicReview(
   review: Doc<"reviews"> | null,
   stats: ReviewOfferStat[],
 ) {
-  const deleted = link.status === "deleted";
-  const preview = review
+  const deleted = link.status === "deleted" || review?.deletedAt !== undefined;
+  const preview = review && !deleted
     ? reviewPreview(review, stats, review.primaryOfferId ?? review.offerIds?.[0] ?? null)
     : {
         finding_count: null,
@@ -250,7 +250,7 @@ async function sharedOfferStatsForJob(
     .withIndex("by_job_id", (q) => q.eq("jobId", jobId))
     .take(10);
   return stats
-    .filter((stat) => stat.deletedAt === undefined && permitted.has(stat.offerId))
+    .filter((stat) => stat.deletedAt === undefined && !stat.withheld && permitted.has(stat.offerId))
     .sort((left, right) => left.offerId.localeCompare(right.offerId));
 }
 
@@ -1056,8 +1056,8 @@ export const listSharedOfferReviews = query({
     }
     const result = await ctx.db
       .query("reviewOfferStats")
-      .withIndex("by_offer_id_deleted_at", (q) =>
-        q.eq("offerId", args.offerId).eq("deletedAt", undefined)
+      .withIndex("by_offer_deleted_withheld_status_created", (q) =>
+        q.eq("offerId", args.offerId).eq("deletedAt", undefined).eq("withheld", undefined)
       )
       .order("desc")
       .paginate(args.paginationOpts);
@@ -1115,6 +1115,7 @@ export const getSharedOfferReport = query({
     ]);
     if (
       !stat
+      || stat.withheld
       || stat.deletedAt !== undefined
       || stat.status !== "complete"
       || !review
