@@ -32,7 +32,7 @@ from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_internal_override_context, build_policy_context, built_in_acp_profile
 from .enforcement import enforce_consequence_based_red
-from .ocr import run_ocr
+from .ocr import OcrResult, run_ocr
 from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 from .timing import ProcessingTimer
@@ -127,6 +127,7 @@ def build_review_evidence(
     evidence_note: str,
     offer_profile: OfferProfile | None = None,
     partner_feedback_precedents: list[dict] | None = None,
+    ocr_coverage: dict | None = None,
 ) -> dict:
     profile=offer_profile or built_in_acp_profile()
     return {
@@ -149,6 +150,7 @@ def build_review_evidence(
         },
         'audio_transcript': transcript,
         'onscreen_text_ocr': ocr[:200],
+        'ocr_coverage': ocr_coverage or {},
         'visual_frame_references': frames[:200],
         'visual_observations': visual_observations or {'source':'not_run','observations':[]},
         'policy_text': policy_text,
@@ -237,6 +239,7 @@ async def _review_offer(
     visual_observations:dict | None,
     evidence_note:str,
     job_id:str = '',
+    ocr_coverage:dict | None = None,
 )->OfferComplianceResult:
     policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
     # Raw disagreements no longer bypass the tested, versioned learning process.
@@ -254,6 +257,7 @@ async def _review_offer(
         evidence_note,
         profile,
         partner_feedback_precedents,
+        ocr_coverage,
     )
     try:
         report=await review_with_openrouter(evidence, meta.model)
@@ -286,9 +290,16 @@ async def _review_offer(
         )
     if evidence_note not in report.limitations:
         report.limitations.append(evidence_note)
+    for limitation in (ocr_coverage or {}).get('limitations', []):
+        if limitation not in report.limitations:
+            report.limitations.append(limitation)
     _validate_applied_overrides(report, profile)
     enforce_consequence_based_red(report, profile)
     report.internal_disposition=_internal_disposition(report)
+    if ((ocr_coverage or {}).get('status') in {'partial', 'unavailable'}
+            and report.internal_disposition in {'clear', 'accepted_with_override'}):
+        # A completed review with unread text is not a fully cleared creative.
+        report.internal_disposition='human_review'
     return OfferComplianceResult.model_validate(
         report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
     )
@@ -383,6 +394,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
     media_metadata:dict={}
     completed=False
     error_type=''
+    ocr_result=OcrResult(not_applicable=media_kind == 'copy_only')
     try:
         if media_kind == 'copy_only':
             with timer.stage('prepare_copy_only_evidence'):
@@ -434,7 +446,13 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 evidence_note='The prepared still image frame may be sent to a vision model; the final LLM receives OCR, supplied copy, notes, image metadata, and compact visual observations.'
             write_json(jd/'frames.json', frames)
             await _set_status(job_id, JobStatus.running_ocr, 60, 'Running OCR')
-            ocr=await _timed_thread_call(timer, 'ocr', run_ocr, jd/'frames', frames)
+            try:
+                ocr_result=await _timed_thread_call(timer, 'ocr', run_ocr, jd/'frames', frames)
+            except Exception:
+                # Preserve review completion even for an unexpected OCR-stage error.
+                logger.exception('OCR stage failed for %s; continuing with available evidence.', job_id)
+                ocr_result=OcrResult.unavailable(frames, 'stage_error')
+            ocr=ocr_result.rows
             write_json(jd/'ocr.json', ocr)
             await _set_status(job_id, JobStatus.analyzing_visuals, 70, 'Analyzing sampled frames with vision model')
             with timer.stage('vision_analysis'):
@@ -460,6 +478,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     visual_observations,
                     evidence_note,
                     job_id=job_id,
+                    ocr_coverage=ocr_result.coverage(),
                 )
                 for profile in profiles
             ])
@@ -486,9 +505,10 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 'submitted_policy_supplement':meta.policy_text,
                 'audio_transcript':transcript,
                 'onscreen_text_ocr':ocr[:200],
+                'ocr_coverage':ocr_result.coverage(),
                 'visual_frame_references':frames[:200],
                 'visual_observations':visual_observations,
-                'limitations':[evidence_note],
+                'limitations':[evidence_note, *ocr_result.coverage()['limitations']],
             }
             with timer.stage('persist_api_evidence'):
                 await anyio.to_thread.run_sync(

@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -42,7 +43,7 @@ from app.review_pipeline.pdf_reports import (
     timestamp_label,
 )
 from app.review_pipeline.policy_seeds import seeded_offer_inputs
-from app.review_pipeline.ocr import normalize_text, dedupe_ocr
+from app.review_pipeline.ocr import OcrResult, normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_batches, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
 from app.review_pipeline.automation_storage import claim_automation_files, claim_automation_run, finish_automation_run, list_review_automations, upsert_review_automation
 from app.review_pipeline.source_links import resolve_review_sources
@@ -3491,6 +3492,7 @@ def test_process_job_completes_copy_only_without_media(tmp_path, monkeypatch):
     assert report['overall_status'] == 'green'
     assert report['internal_disposition'] == 'clear'
     assert 'No creative was submitted' in report['limitations'][-1]
+    assert not any('recognition was incomplete' in note for note in report['limitations'])
     metrics=review_storage.read_json(tmp_path/'j1'/'processing_metrics.json')
     assert metrics['completed'] is True
     assert metrics['mediaKind'] == 'copy_only'
@@ -3591,7 +3593,7 @@ def test_video_transcription_overlaps_visual_preparation(tmp_path, monkeypatch):
     monkeypatch.setattr(review_jobs, 'extract_audio', fake_extract_audio)
     monkeypatch.setattr(review_jobs, 'transcribe', fake_transcribe)
     monkeypatch.setattr(review_jobs, 'extract_frames', fake_extract_frames)
-    monkeypatch.setattr(review_jobs, 'run_ocr', lambda *args: [])
+    monkeypatch.setattr(review_jobs, 'run_ocr', lambda *args: OcrResult())
     monkeypatch.setattr(review_jobs, 'observe_frames_with_openrouter', fake_vision)
     monkeypatch.setattr(review_jobs, 'review_with_openrouter', green_review)
     monkeypatch.setattr(review_jobs, 'persist_review_evidence_frames', lambda *args: [])
@@ -3607,6 +3609,103 @@ def test_video_transcription_overlaps_visual_preparation(tmp_path, monkeypatch):
         stages['extract_frames']['startedOffsetMs']
         + stages['extract_frames']['durationMs']
     )
+
+
+@pytest.mark.parametrize('failure', ['transient', 'permanent', 'unexpected'])
+def test_ocr_errors_complete_review_with_explicit_coverage(tmp_path, monkeypatch, failure):
+    from app.review_pipeline import ocr as review_ocr
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    media_path=tmp_path/'creative.png'
+    Image.new('RGB', (40, 40), 'white').save(media_path)
+    set_status('ocr-recovery', JobStatus.queued, 0, 'Queued', media_path.name, offer_ids=['acp', 'kissterra'])
+
+    def prepare(source, directory):
+        directory.mkdir(parents=True, exist_ok=True)
+        for name, color in [('01.jpg', 'white'), ('02.jpg', 'black')]:
+            Image.new('RGB', (40, 40), color).save(directory/name)
+        return [{'filename':'01.jpg', 'timestamp':0}, {'filename':'02.jpg', 'timestamp':1}]
+
+    calls=[]
+    def recognize(frame):
+        calls.append(frame.name)
+        if frame.name == '02.jpg' and (failure == 'permanent' or calls.count(frame.name) == 1):
+            raise review_ocr.OcrError('Temporary native inference error')
+        return 'Save today' if frame.name == '01.jpg' else 'Terms apply'
+
+    monkeypatch.setattr(review_jobs, 'prepare_image_frame', prepare)
+    monkeypatch.setattr(review_ocr, '_retry_pause', lambda _: None)
+    monkeypatch.setattr(review_ocr, 'initialize_ocr', lambda: SimpleNamespace(recognize=recognize))
+    if failure == 'unexpected':
+        monkeypatch.setattr(review_jobs, 'run_ocr', Mock(side_effect=RuntimeError('Unexpected OCR error')))
+    evidence_received=[]
+    async def review(evidence, model):
+        evidence_received.append(evidence)
+        return ComplianceReport(overall_status='green', summary='Available evidence reviewed.', findings=[],
+            source_results={'creative':{'status':'green', 'summary':'Available creative evidence reviewed.'},
+                            'ad_copy':{'status':'green', 'summary':'Copy reviewed.'}})
+
+    monkeypatch.setattr(review_jobs, 'review_with_openrouter', review)
+    monkeypatch.setattr(review_jobs, 'observe_frames_with_openrouter', AsyncMock(return_value={'source':'test', 'observations':[]}))
+    monkeypatch.setattr(review_jobs, 'transcribe', lambda *_: {'source':'manual', 'chunks':[]})
+    monkeypatch.setattr(review_jobs.learning, 'review_context', AsyncMock(return_value={}))
+    monkeypatch.setattr(review_jobs.learning, 'persist_evidence', AsyncMock())
+    api_evidence=[]
+    monkeypatch.setattr(review_jobs, 'persist_api_evidence', lambda **kwargs: api_evidence.append(kwargs['bundle']))
+    monkeypatch.setattr(review_jobs, 'persist_review_evidence_frames', lambda *_: [])
+    monkeypatch.setattr(review_jobs, 'build_and_store_review_pdf_variants', lambda *args, **kwargs: [])
+    profiles=[OfferProfile(offer_id=name, display_name=name, official_guidelines='Do not mislead.') for name in ['acp', 'kissterra']]
+    asyncio.run(process_job('ocr-recovery', media_path, 'image', ReviewRequestMeta(
+        ad_copy='Compare options', api_partner_id='test-partner', offer_profiles=profiles)))
+
+    assert get_status('ocr-recovery').status == JobStatus.complete
+    report=get_report('ocr-recovery')
+    expected_status={'transient':'complete', 'permanent':'partial', 'unexpected':'unavailable'}[failure]
+    assert len(evidence_received) == 2
+    for evidence in [*evidence_received, api_evidence[0]]:
+        assert evidence['ocr_coverage']['status'] == expected_status
+        expected_text={'transient':['Save today', 'Terms apply'], 'permanent':['Save today'], 'unexpected':[]}[failure]
+        assert [row['text'] for row in evidence['onscreen_text_ocr']] == expected_text
+        if failure != 'transient':
+            assert evidence['ocr_coverage']['limitations']
+    for result in [report, *report['offer_results'], api_evidence[0]]:
+        assert any('recognition was incomplete' in note for note in result['limitations']) == (failure != 'transient')
+    for result in [report, *report['offer_results']]:
+        assert result['internal_disposition'] == ('clear' if failure == 'transient' else 'human_review')
+    if failure != 'unexpected':
+        assert calls.count('02.jpg') == (2 if failure == 'transient' else 3)
+
+
+def test_frame_skipped_by_ocr_does_not_break_vision_preparation(tmp_path):
+    (tmp_path/'bad.jpg').write_bytes(b'invalid image')
+    Image.new('RGB', (40, 40), 'white').save(tmp_path/'good.jpg')
+    frames=[{'filename':'bad.jpg', 'timestamp':0}, {'filename':'good.jpg', 'timestamp':1}]
+    content, included, limitations=review_vision._frame_content(tmp_path, frames, [], 1024, 75)
+    assert included == [frames[1]]
+    assert len(content) == 2
+    assert 'not available in supplied OCR' in content[0]['text']
+    assert limitations == ['Frame bad.jpg could not be read for vision review.']
+
+
+@pytest.mark.anyio
+async def test_ocr_preload_failure_still_starts_and_stops_job_workers(monkeypatch):
+    import importlib
+    main=importlib.import_module('app.main')
+    monkeypatch.setattr(main, 'initialize_ocr', Mock(side_effect=RuntimeError('OCR cannot load')))
+    monkeypatch.setattr(main, 'shutdown_ocr', Mock())
+    monkeypatch.setattr(main, 'backfill_review_offer_stats', lambda: {'processed':0, 'is_done':True})
+    monkeypatch.setattr(main, 'recover_interrupted_automation_jobs', lambda: 0)
+    start=AsyncMock()
+    stop=AsyncMock()
+    monkeypatch.setattr(main, 'start_job_workers', start)
+    monkeypatch.setattr(main, 'stop_job_workers', stop)
+    monkeypatch.setattr(main, 'start_background_task', lambda coro: coro.close())
+    monkeypatch.setattr(main.platform_monitoring, 'monitor_loop', AsyncMock())
+    async with main.lifespan(main.app):
+        start.assert_awaited_once()
+        stop.assert_not_awaited()
+    stop.assert_awaited_once()
 
 
 def test_queue_uses_bounded_parallel_workers(monkeypatch):

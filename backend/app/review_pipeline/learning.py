@@ -224,7 +224,8 @@ async def persist_evidence(job_id: str, profile: OfferProfile, evidence: dict, v
         snapshot = {k: v for k, v in evidence.items() if k not in {
             'policy_text', 'policy_sources', 'internal_overrides', 'partner_feedback_precedents',
             'learned_clarifications', 'visual_frame_references', 'offer'}}
-        complete = not bool(evidence.get('additional_policy_present'))
+        complete = (not bool(evidence.get('additional_policy_present'))
+                    and evidence.get('ocr_coverage', {}).get('status') not in {'partial', 'unavailable'})
         if len(json.dumps(snapshot).encode()) > MAX_EVIDENCE_BYTES:
             # Truncated evidence must never serve as proof for automatic publication.
             snapshot = {'media_type': evidence['media_type'], 'summary': evidence_text(snapshot)[:12_000]}

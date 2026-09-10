@@ -42,6 +42,7 @@ Source rules:
 - "ad_copy" means only the submitted platform caption/body text in submitted_ad_copy.text. This is the Facebook, Instagram, TikTok, or platform caption/copy supplied by the user.
 - "audio" means only spoken words from audio_transcript. Never label submitted platform caption/body text as audio.
 - "onscreen_text" means only text detected in the creative image/video frames by OCR.
+- Check ocr_coverage before reasoning about on-screen text. Partial or unavailable OCR means some text was not read, not that no text or disclosure exists. Evaluate the available evidence, retain the coverage limitation, and never invent a missing-disclosure finding solely because OCR failed.
 - "visual" means non-text visual elements such as imagery, logos, people, products, scenes, or layout, based on visual_observations.
 - "policy" means a policy/guideline issue that is not tied to one observed creative surface.
 - If the same risky words appear in multiple places, create separate findings for each real source instead of merging them.

@@ -122,6 +122,19 @@ async def test_snapshot_failure_and_truncation_do_not_fail_reviews(monkeypatch):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize('status,complete', [('partial', False), ('unavailable', False), ('complete', True), ('not_applicable', True)])
+async def test_incomplete_ocr_cannot_validate_automatic_learning(monkeypatch, status, complete):
+    saved = []
+    async def capture(kind, path, args):
+        saved.append(args)
+    monkeypatch.setattr(learning, '_call', capture)
+    await learning.persist_evidence('job', profile(), {
+        'media_type': 'image', 'ocr_coverage': {'status': status}, 'onscreen_text_ocr': []}, 3)
+    assert saved[0]['complete'] is complete
+    assert saved[0]['evidence']['ocr_coverage']['status'] == status
+
+
+@pytest.mark.anyio
 async def test_insufficient_feedback_finishes_without_llm_calls(monkeypatch):
     saved = []
     async def call(kind, path, args):

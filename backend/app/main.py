@@ -416,9 +416,12 @@ def clean_live_source_url(value:str|None)->str|None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Fail startup if the bundled OCR models cannot load; never process a
-    # creative with an unavailable text-recognition engine.
-    await asyncio.to_thread(initialize_ocr)
+    # OCR retries on the next creative. Its readiness remains visible to the
+    # deployment health check, but an OCR outage must not stop the job workers.
+    try:
+        await asyncio.to_thread(initialize_ocr)
+    except Exception:
+        logger.exception('OCR preload failed; reviews will retry OCR and retain coverage limitations.')
     try:
         migration=await asyncio.to_thread(backfill_review_offer_stats)
         if migration['processed']:

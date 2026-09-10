@@ -151,6 +151,12 @@ def _frame_content(
         if not filename or not frame_path.exists():
             limitations.append(f'Frame {filename or index} was unavailable for vision review.')
             continue
+        try:
+            data_url = _frame_data_url(frame_path, max_edge, quality)
+        except (OSError, ValueError):
+            # A corrupt frame skipped by OCR must not fail the subsequent vision stage.
+            limitations.append(f'Frame {filename} could not be read for vision review.')
+            continue
 
         timestamp=_optional_timestamp(record.get('timestamp'))
         ocr_text=ocr_lookup.get(filename, '')
@@ -161,12 +167,12 @@ def _frame_content(
                 f'filename: {filename}\n'
                 f'timestamp_start: {timestamp or "null"}\n'
                 f'timestamp_end: null\n'
-                f'ocr_text: {ocr_text or "none"}'
+                f'ocr_text: {ocr_text or "not available in supplied OCR"}'
             ),
         })
         content.append({
             'type':'image_url',
-            'image_url': {'url': _frame_data_url(frame_path, max_edge, quality)},
+            'image_url': {'url': data_url},
         })
         included.append(record)
     return content, included, limitations

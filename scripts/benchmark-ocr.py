@@ -53,7 +53,10 @@ def measure(result_queue, root, workers, threads):
         initialize_ocr()
         initialization = time.perf_counter() - start
         baseline = [run_ocr(path, records) for path in paths]
-        for index, rows in enumerate(baseline):
+        for index, result in enumerate(baseline):
+            assert result.coverage()['status'] == 'complete', 'OCR coverage was incomplete'
+            assert result.successful_frames == 8
+            rows = result.rows
             assert len(rows) == 4, 'Identical frames were not deduplicated'
             assert [row['timestamp'] for row in rows] == [0., 2., 4., 6.]
             for row in rows:

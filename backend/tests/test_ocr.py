@@ -13,6 +13,11 @@ import pytest
 from app.review_pipeline import ocr, ocr_models
 
 
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch):
+    monkeypatch.setattr(ocr, '_retry_pause', lambda _: None)
+
+
 def save_frame(directory, name, color):
     Image.new('RGB', (24, 24), color).save(directory / name, format='PNG')
 
@@ -29,7 +34,10 @@ def test_identical_pixels_are_recognized_once_and_keep_first_timestamp(tmp_path,
     save_frame(tmp_path, '03.jpg', 'black')
     records = [{'filename': f'{i:02}.jpg', 'timestamp': i} for i in range(1, 4)]
     recognize = fake_recognizer(monkeypatch, side_effect=['Save  money\n', 'Terms apply'])
-    rows = ocr.run_ocr(tmp_path, records)
+    result = ocr.run_ocr(tmp_path, records)
+    rows = result.rows
+    assert result.successful_frames == 3
+    assert result.coverage()['status'] == 'complete'
     assert recognize.call_count == 2
     assert rows == [
         {'filename': '01.jpg', 'timestamp': 1, 'text': 'Save money'},
@@ -43,7 +51,7 @@ def test_even_one_changed_pixel_gets_ocr(tmp_path, monkeypatch):
         image.putpixel((0, 0), (254, 255, 255))
         image.save(tmp_path / '02.jpg', format='PNG')
     recognize = fake_recognizer(monkeypatch, return_value='Same text')
-    assert len(ocr.run_ocr(tmp_path, [])) == 1
+    assert len(ocr.run_ocr(tmp_path, []).rows) == 1
     assert recognize.call_count == 2
 
 
@@ -51,21 +59,65 @@ def test_empty_recognition_is_valid_and_reused(tmp_path, monkeypatch):
     save_frame(tmp_path, '01.jpg', 'white')
     save_frame(tmp_path, '02.jpg', 'white')
     recognize = fake_recognizer(monkeypatch, return_value='')
-    assert ocr.run_ocr(tmp_path, []) == []
+    result = ocr.run_ocr(tmp_path, [])
+    assert result.rows == []
+    assert result.coverage()['status'] == 'complete'
+    assert result.coverage()['limitations'] == []
     assert recognize.call_count == 1
 
 
-def test_ocr_failure_does_not_silently_omit_evidence(tmp_path, monkeypatch):
+def test_transient_failure_retries_and_keeps_text(tmp_path, monkeypatch):
     save_frame(tmp_path, '01.jpg', 'white')
-    fake_recognizer(monkeypatch, side_effect=ocr.OcrError('Recognition failed'))
-    with pytest.raises(ocr.OcrError, match='Recognition failed'):
-        ocr.run_ocr(tmp_path, [])
+    recognize = fake_recognizer(monkeypatch, side_effect=[ocr.OcrError('Busy'), 'Recovered'])
+    result = ocr.run_ocr(tmp_path, [])
+    assert recognize.call_count == 2
+    assert result.rows[0]['text'] == 'Recovered'
+    assert result.coverage()['status'] == 'complete'
 
 
-def test_corrupt_frame_does_not_silently_omit_evidence(tmp_path):
+def test_exhausted_frame_preserves_other_text_and_is_not_cached_as_blank(tmp_path, monkeypatch):
+    save_frame(tmp_path, '01.jpg', 'white')
+    save_frame(tmp_path, '02.jpg', 'white')
+    save_frame(tmp_path, '03.jpg', 'black')
+    recognize = fake_recognizer(monkeypatch, side_effect=[ocr.OcrError('Failed')] * 3 + ['Recovered', 'Terms apply'])
+    result = ocr.run_ocr(tmp_path, [{'filename': '01.jpg', 'timestamp': 1.5}])
+    assert recognize.call_count == 5
+    assert [r['text'] for r in result.rows] == ['Recovered', 'Terms apply']
+    assert result.coverage()['status'] == 'partial'
+    assert result.failed_frames == [{'filename': '01.jpg', 'timestamp': 1.5, 'reason': 'frame_unreadable', 'attempts': 3}]
+    assert '2 of 3 sampled frames read' in result.coverage()['limitations'][0]
+
+
+def test_corrupt_and_missing_frames_do_not_stop_other_frames(tmp_path, monkeypatch):
     (tmp_path / '01.jpg').write_bytes(b'not an image')
-    with pytest.raises(ocr.OcrError, match='could not open frame'):
-        ocr.run_ocr(tmp_path, [])
+    save_frame(tmp_path, '02.jpg', 'white')
+    fake_recognizer(monkeypatch, return_value='Terms apply')
+    result = ocr.run_ocr(tmp_path, [{'filename': 'missing.jpg', 'timestamp': 3}])
+    assert [r['text'] for r in result.rows] == ['Terms apply']
+    assert result.successful_frames == 1
+    assert len(result.failed_frames) == 2
+    assert result.coverage()['status'] == 'partial'
+
+
+def test_initialization_retries_are_bounded_across_all_frames_and_recover_on_next_job(tmp_path, monkeypatch):
+    records = [{'filename': f'{i}.jpg'} for i in range(50)]
+    initialize = Mock(side_effect=RuntimeError('Missing models'))
+    monkeypatch.setattr(ocr, 'initialize_ocr', initialize)
+    result = ocr.run_ocr(tmp_path, records)
+    assert initialize.call_count == 3
+    assert result.rows == []
+    assert result.coverage()['status'] == 'unavailable'
+    assert len(result.failed_frames) == 50
+    save_frame(tmp_path, '00.jpg', 'white')
+    initialize.side_effect = [SimpleNamespace(recognize=lambda _: 'Recovered')]
+    assert ocr.run_ocr(tmp_path, []).rows[0]['text'] == 'Recovered'
+
+
+def test_no_frames_is_unavailable_without_loading_models(tmp_path, monkeypatch):
+    initialize = Mock()
+    monkeypatch.setattr(ocr, 'initialize_ocr', initialize)
+    assert ocr.run_ocr(tmp_path, []).coverage()['status'] == 'unavailable'
+    initialize.assert_not_called()
 
 
 def test_predictors_are_reused_but_never_shared_concurrently(monkeypatch):
