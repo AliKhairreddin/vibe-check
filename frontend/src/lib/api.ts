@@ -407,7 +407,10 @@ export type ApiKeyRecord = {
   status: 'active' | 'revoked';
 };
 
+export type ApiAccountType = 'production' | 'testing';
+
 export type ApiPartner = {
+  account_type: ApiAccountType;
   allowed_origins: string[];
   active_reviews: number;
   allowed_offer_ids: string[];
@@ -434,6 +437,7 @@ export type ApiPartner = {
 
 export type ApiPartnerInput = Pick<
   ApiPartner,
+  | 'account_type'
   | 'allowed_origins'
   | 'allowed_offer_ids'
   | 'allow_custom_policy'
@@ -1002,7 +1006,7 @@ export async function listReviewHistoryPage(
   return requestJson<ReviewHistoryPage>(`/api/reviews/history?${params}`);
 }
 
-export type ReviewHistorySource = { value: string; label: string; kind: 'internal' | 'api' | 'publisher' };
+export type ReviewHistorySource = { value: string; label: string; kind: 'internal' | 'api' | 'publisher'; account_type?: ApiAccountType };
 export async function listReviewHistorySources(): Promise<ReviewHistorySource[]> {
   return requestJson<ReviewHistorySource[]>('/api/reviews/sources');
 }

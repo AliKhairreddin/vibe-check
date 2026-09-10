@@ -9,6 +9,7 @@ from test_partner_api import api_principal
 
 main = importlib.import_module('app.main')
 cors = importlib.import_module('app.partner_cors')
+partner_api = importlib.import_module('app.review_pipeline.partner_api')
 ORIGIN = 'https://lemonmaxx.com'
 JOB = 'a' * 32
 
@@ -124,3 +125,18 @@ def test_evidence_returns_protected_urls_instead_of_temporary_server_paths():
     assert result['frames'][0]['url'] == f'/api/v1/reviews/{JOB}/frames/frame%201.jpg'
     assert result['visual_frame_references'] == result['frames']
     assert bundle['media_metadata']['format']['filename'].startswith('/tmp/')
+
+
+@pytest.mark.parametrize('account_type', [None, 'production', 'testing'])
+def test_account_type_updates_are_explicit_so_older_clients_preserve_testing(monkeypatch, account_type):
+    calls = []
+    monkeypatch.setattr(partner_api, '_convex_call', lambda kind, name, args: calls.append(args) or {'partner_id': 'partner'})
+    payload = ApiPartnerInput(name='Partner', **({'account_type': account_type} if account_type else {}))
+    partner_api.save_api_partner('partner', payload)
+    assert calls[0].get('accountType') == account_type
+    assert ('accountType' in calls[0]) == (account_type is not None)
+
+
+def test_account_type_rejects_unknown_categories():
+    with pytest.raises(ValueError):
+        ApiPartnerInput(name='Partner', account_type='sandbox')

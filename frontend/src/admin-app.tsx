@@ -173,6 +173,7 @@ import {
   type ReviewBatch,
   type ReviewBatchItem,
   type ReviewHistoryItem,
+  type ReviewHistorySource,
   type ReviewVertical,
   type ReviewEvidenceFrame,
   type Status,
@@ -2332,14 +2333,20 @@ async function deleteReviewSelection(ids: string[]) {
 
 function AllHistoryPage() {
   const search = historyRoute.useSearch();
-  const source = search.source ?? 'digital-nudge';
   const navigate = historyRoute.useNavigate();
-  const setSource = (value: string) => void navigate({ search: { source: value === 'digital-nudge' ? undefined : value } });
   const sourcesQuery = useQuery({
     queryKey: ['review-history-sources'],
     queryFn: listReviewHistorySources,
   });
-  const sources = sourcesQuery.data ?? [{ value: 'digital-nudge', label: 'Digital Nudge', kind: 'internal' }];
+  const catalog: ReviewHistorySource[] = sourcesQuery.data ?? [{ value: 'digital-nudge', label: 'Digital Nudge', kind: 'internal' }];
+  const requestedSource = catalog.find(option => option.value === search.source);
+  const isTesting = requestedSource ? requestedSource.account_type === 'testing' : search.mode === 'testing';
+  const sources = catalog.filter(option => (option.account_type === 'testing') === isTesting);
+  const source = search.source ?? sources[0]?.value ?? (isTesting ? 'api:none' : 'digital-nudge');
+  const setSource = (value: string) => void navigate({ search: {
+    source: value === 'digital-nudge' ? undefined : value,
+    mode: isTesting ? 'testing' : undefined,
+  } });
   const sourceLabel = sources.find((option) => option.value === source)?.label ?? 'Selected source';
   const query = useInfiniteQuery({
     queryKey: ['reviews', 'all-history', source],
@@ -2366,7 +2373,9 @@ function AllHistoryPage() {
               options={sources}
               className="w-full sm:w-72"
             />
-            <span className="text-xs text-muted-foreground">Digital Nudge opens by default.</span>
+            <span className="text-xs text-muted-foreground">
+              {isTesting ? <>Testing API reviews. <Link to="/history" search={{}} className="underline">Back to Digital Nudge</Link></> : 'Digital Nudge opens by default.'}
+            </span>
           </div>
           {sourcesQuery.error ? (
             <Alert variant="destructive">
@@ -4088,9 +4097,10 @@ const progressRoute = createRoute({
 const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/history',
-  validateSearch: (search: Record<string, unknown>): { source?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { source?: string; mode?: 'testing' } => ({
     source: typeof search.source === 'string' && search.source.length <= 250
       && /^(digital-nudge|api:.+|publisher:.+)$/.test(search.source) ? search.source : undefined,
+    mode: search.mode === 'testing' ? 'testing' : undefined,
   }),
   component: AllHistoryPage,
 });

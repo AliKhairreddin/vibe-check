@@ -73,6 +73,18 @@ expired media; inspect the API response status as well as browser CORS errors.
 
 ## Admin history sources
 
+API settings has separate **Production** and **Testing** views. Choose **Account type**
+when creating or editing a partner. Existing accounts default to Production. Testing
+accounts stay out of the normal review source picker; use **View test review history**
+on the saved account to browse their reviews separately. Changing account type groups
+the existing account and its history without deleting reviews or rotating its keys.
+
+Testing is an organizational category, not a simulated or free sandbox. It uses the
+same API endpoints, authentication, real review processing, and configured limits.
+Create a separate Testing account and key for development to keep that activity apart
+from the production integration. Account type does not change permissions or reactivate
+a suspended account.
+
 Review history opens on **Digital Nudge**, covering internal dashboard uploads,
 Drive imports, and internal automations. The Source selector switches to each
 API partner or external publisher, with pagination scoped to that submitter.

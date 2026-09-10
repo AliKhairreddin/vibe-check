@@ -33,6 +33,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Select } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
@@ -45,6 +46,7 @@ import {
   rotateApiWebhookSecret,
   saveApiPartner,
   type ApiKeyInput,
+  type ApiAccountType,
   type ApiPartner,
   type ApiPartnerInput,
   type ApiScope,
@@ -78,8 +80,9 @@ type SecretNotice = {
   value: string;
 };
 
-function emptyPartnerDraft(internal = false): ApiPartnerInput {
+function emptyPartnerDraft(internal = false, accountType: ApiAccountType = 'production'): ApiPartnerInput {
   return {
+    account_type: accountType,
     allowed_origins: [],
     allowed_offer_ids: [],
     allow_custom_policy: internal,
@@ -101,6 +104,7 @@ function emptyPartnerDraft(internal = false): ApiPartnerInput {
 
 function partnerToDraft(partner: ApiPartner): ApiPartnerInput {
   return {
+    account_type: partner.account_type ?? 'production',
     allowed_origins: [...(partner.allowed_origins ?? [])],
     allowed_offer_ids: [...partner.allowed_offer_ids],
     allow_custom_policy: partner.allow_custom_policy,
@@ -132,6 +136,7 @@ function formatDate(value: number | null) {
 
 export function ApiAccessPanel() {
   const queryClient = useQueryClient();
+  const [accountView, setAccountView] = useState<ApiAccountType>('production');
   const [selectedPartnerId, setSelectedPartnerId] = useState('');
   const [draft, setDraft] = useState<ApiPartnerInput | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -146,29 +151,35 @@ export function ApiAccessPanel() {
   const partnersQuery = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: listApiPartners });
   const offersQuery = useQuery({ queryKey: ['offers'], queryFn: listOfferCatalog });
   const partners = partnersQuery.data?.partners ?? [];
+  const visiblePartners = useMemo(() => partners.filter(partner =>
+    (partner.account_type ?? 'production') === accountView), [partners, accountView]);
   const selectedPartner = partners.find((partner) => partner.partner_id === selectedPartnerId) ?? null;
 
   useEffect(() => {
-    if (isCreating || selectedPartnerId || !partners.length) return;
-    setSelectedPartnerId(partners[0].partner_id);
-    setDraft(partnerToDraft(partners[0]));
-  }, [isCreating, partners, selectedPartnerId]);
+    if (isCreating || selectedPartnerId || !visiblePartners.length) return;
+    setSelectedPartnerId(visiblePartners[0].partner_id);
+    setDraft(partnerToDraft(visiblePartners[0]));
+  }, [isCreating, visiblePartners, selectedPartnerId]);
 
   useEffect(() => {
     if (!selectedPartner || isCreating) return;
     setDraft(partnerToDraft(selectedPartner));
   }, [isCreating, selectedPartner]);
 
+  useEffect(() => {
+    setKeyName(selectedPartner?.account_type === 'testing' ? 'Testing' : 'Production');
+  }, [selectedPartner?.partner_id, selectedPartner?.account_type]);
+
   const activeKeyCount = useMemo(
-    () => partners.reduce(
+    () => visiblePartners.reduce(
       (count, partner) => count + partner.keys.filter((key) => key.status === 'active').length,
       0
     ),
-    [partners]
+    [visiblePartners]
   );
   const monthlyReviewCount = useMemo(
-    () => partners.reduce((count, partner) => count + partner.monthly_reviews_created, 0),
-    [partners]
+    () => visiblePartners.reduce((count, partner) => count + partner.monthly_reviews_created, 0),
+    [visiblePartners]
   );
 
   const saveMutation = useMutation({
@@ -182,6 +193,7 @@ export function ApiAccessPanel() {
         : saveApiPartner(selectedPartnerId, input);
     },
     onSuccess: async (partner) => {
+      setAccountView(partner.account_type ?? 'production');
       setSelectedPartnerId(partner.partner_id);
       setIsCreating(false);
       setNotice(`${partner.name} was saved.`);
@@ -213,7 +225,7 @@ export function ApiAccessPanel() {
       setCopied(false);
       setNotice(`${key.name} was issued. Copy it now; it will not be shown again.`);
       setError('');
-      setKeyName('Production');
+      setKeyName(selectedPartner?.account_type === 'testing' ? 'Testing' : 'Production');
       setKeyExpiration('');
       await queryClient.invalidateQueries({ queryKey: PARTNERS_QUERY_KEY });
     },
@@ -267,7 +279,7 @@ export function ApiAccessPanel() {
 
   function startPartner(internal: boolean) {
     setSelectedPartnerId('');
-    setDraft(emptyPartnerDraft(internal));
+    setDraft(emptyPartnerDraft(internal, accountView));
     setIsCreating(true);
     setSecretNotice(null);
     setNotice('');
@@ -325,19 +337,43 @@ export function ApiAccessPanel() {
 
   return (
     <div className="grid gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div role="group" aria-label="API account view" className="flex gap-1 rounded-lg border bg-muted/30 p-1">
+          {(['production', 'testing'] as const).map(type => (
+            <Button key={type} type="button" size="sm" variant={accountView === type ? 'selected' : 'ghost'}
+              aria-pressed={accountView === type}
+              onClick={() => {
+                if (accountView === type) return;
+                setAccountView(type);
+                setSelectedPartnerId('');
+                setDraft(null);
+                setIsCreating(false);
+                setSecretNotice(null);
+                setNotice('');
+                setError('');
+              }}>
+              {type === 'production' ? 'Production' : 'Testing'}
+              <span className="text-xs">({partners.filter(partner => (partner.account_type ?? 'production') === type).length})</span>
+            </Button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {accountView === 'testing' ? 'Integration tests run real reviews under each account’s limits.' : 'Accounts used by your live integrations.'}
+        </p>
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <MetricCard label="API partners" value={partners.length.toLocaleString()} />
+        <MetricCard label={accountView === 'testing' ? 'Testing accounts' : 'Production accounts'} value={visiblePartners.length.toLocaleString()} />
         <MetricCard label="Active API keys" value={activeKeyCount.toLocaleString()} />
         <MetricCard label="Reviews this month" value={monthlyReviewCount.toLocaleString()} />
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="has-data-[slot=card-action]:grid-cols-1 sm:has-data-[slot=card-action]:grid-cols-[minmax(0,1fr)_auto]">
           <CardTitle className="text-xl">Partner accounts and credentials</CardTitle>
           <CardDescription>
             Isolate every integration, control its offers and usage, and revoke credentials independently.
           </CardDescription>
-          <CardAction className="flex flex-wrap gap-2">
+          <CardAction className="col-start-1 row-span-1 row-start-auto flex flex-wrap justify-self-start gap-2 sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:justify-self-end">
             <Button type="button" size="sm" variant="outline" onClick={() => startPartner(false)}>
               <Plus /> New partner
             </Button>
@@ -346,41 +382,41 @@ export function ApiAccessPanel() {
             </Button>
           </CardAction>
         </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
-          <aside className="grid content-start gap-2 rounded-xl border bg-muted/20 p-2">
-            {partners.map((partner) => (
+        <CardContent className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+          <aside aria-label="API partners" className="grid min-w-0 content-start gap-2 rounded-xl border bg-muted/20 p-2">
+            {visiblePartners.map((partner) => (
               <button
                 key={partner.partner_id}
                 type="button"
                 aria-pressed={!isCreating && selectedPartnerId === partner.partner_id}
                 className={cn(
-                  'grid gap-1 rounded-lg border border-transparent px-3 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring',
+                  'grid min-w-0 w-full gap-1 rounded-lg border border-transparent px-3 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring',
                   !isCreating && selectedPartnerId === partner.partner_id && selectedControlClassName
                 )}
                 onClick={() => selectPartner(partner)}
               >
-                <span className="flex items-center justify-between gap-2">
-                  <span className="truncate font-medium">{partner.name}</span>
-                  <Badge variant={partner.status === 'active' ? 'secondary' : 'outline'}>
+                <span className="flex min-w-0 items-center justify-between gap-2">
+                  <span title={partner.name} className="min-w-0 flex-1 truncate font-medium">{partner.name}</span>
+                  <Badge className="shrink-0" variant={partner.status === 'active' ? 'secondary' : 'outline'}>
                     {partner.status}
                   </Badge>
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="min-w-0 break-words text-xs text-muted-foreground">
                   {partner.keys.filter((key) => key.status === 'active').length} active keys ·{' '}
                   {partner.unlimited_reviews ? 'unlimited usage' : `${partner.monthly_reviews_created}/${partner.monthly_review_limit} this month`}
                 </span>
               </button>
             ))}
-            {!partners.length ? (
+            {!visiblePartners.length ? (
               <div className="grid gap-2 px-3 py-6 text-center text-sm text-muted-foreground">
                 <KeyRound className="mx-auto size-5" />
-                No API partners yet.
+                No {accountView} API accounts yet.
               </div>
             ) : null}
           </aside>
 
           {draft ? (
-            <div className="grid gap-5">
+            <div className="grid min-w-0 gap-5">
               {secretNotice ? (
                 <Alert className="border-emerald-600/30 bg-emerald-500/5">
                   <ShieldCheck />
@@ -426,7 +462,11 @@ export function ApiAccessPanel() {
                       <h3 className="font-heading text-base font-medium">Account</h3>
                       <p className="text-xs text-muted-foreground">Identity, status, and retained evidence.</p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button type="submit" size="sm" disabled={saveMutation.isPending || !draft.name.trim()}>
+                        {saveMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Save />}
+                        {isCreating ? 'Create partner' : 'Save partner'}
+                      </Button>
                       <Label htmlFor="api-partner-active">Active</Label>
                       <Switch
                         id="api-partner-active"
@@ -457,6 +497,24 @@ export function ApiAccessPanel() {
                     </div>
                   </div>
                   <div className="grid gap-2">
+                    <Label htmlFor="api-account-type">Account type</Label>
+                    <Select id="api-account-type" value={draft.account_type}
+                      onValueChange={value => updateDraft({ account_type: value as ApiAccountType })}
+                      options={[{ value: 'production', label: 'Production' }, { value: 'testing', label: 'Testing' }]}
+                      className="sm:max-w-xs" />
+                    <p className="text-xs text-muted-foreground">
+                      {draft.account_type === 'testing'
+                        ? 'Kept out of normal review sources. Uses real processing, this account’s keys and limits, and the same API endpoints.'
+                        : 'Appears in the normal review source picker.'}
+                    </p>
+                    {!isCreating && selectedPartner ? (
+                      <a className="w-fit text-xs text-primary underline underline-offset-4"
+                        href={`/history?source=${encodeURIComponent(`api:${selectedPartner.partner_id}`)}${selectedPartner.account_type === 'testing' ? '&mode=testing' : ''}`}>
+                        {selectedPartner.account_type === 'testing' ? 'View test review history' : 'View review history'}
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-2">
                     <Label htmlFor="api-partner-description">Description</Label>
                     <Textarea
                       id="api-partner-description"
@@ -464,6 +522,37 @@ export function ApiAccessPanel() {
                       value={draft.description}
                       onChange={(event) => updateDraft({ description: event.currentTarget.value })}
                     />
+                  </div>
+                </section>
+
+                <Separator />
+
+                <section className="grid gap-3">
+                  <div>
+                    <h3 className="font-heading text-base font-medium">Allowed websites (CORS)</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Websites allowed to make browser requests with this partner’s API keys.
+                      Server-to-server integrations work without adding a website.
+                    </p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="api-allowed-origins">Website origins</Label>
+                    <Textarea
+                      id="api-allowed-origins"
+                      rows={3}
+                      placeholder={'https://lemonmaxx.com\nhttp://localhost:9002'}
+                      value={draft.allowed_origins.join('\n')}
+                      onChange={(event) => updateDraft({ allowed_origins: event.currentTarget.value.split(/\r?\n/) })}
+                      aria-describedby="api-origins-help"
+                    />
+                    <p id="api-origins-help" className="text-xs text-muted-foreground">
+                      One origin per line, including https:// and any port. HTTP is allowed for localhost development.
+                      Paths and wildcards are not accepted. Save to apply to all keys for this partner.
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Production apps should keep the secret key in their backend and proxy media to the browser.
+                      Use the API’s returned media and frame URLs; temporary server file paths are not download links.
+                    </p>
                   </div>
                 </section>
 
@@ -586,37 +675,6 @@ export function ApiAccessPanel() {
                         </label>
                       ))}
                     </div>
-                  </div>
-                </section>
-
-                <Separator />
-
-                <section className="grid gap-3">
-                  <div>
-                    <h3 className="font-heading text-base font-medium">Allowed websites (CORS)</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Websites allowed to make browser requests with this partner’s API keys.
-                      Server-to-server integrations work without adding a website.
-                    </p>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="api-allowed-origins">Website origins</Label>
-                    <Textarea
-                      id="api-allowed-origins"
-                      rows={3}
-                      placeholder={'https://lemonmaxx.com\nhttp://localhost:9002'}
-                      value={draft.allowed_origins.join('\n')}
-                      onChange={(event) => updateDraft({ allowed_origins: event.currentTarget.value.split(/\r?\n/) })}
-                      aria-describedby="api-origins-help"
-                    />
-                    <p id="api-origins-help" className="text-xs text-muted-foreground">
-                      One origin per line, including https:// and any port. HTTP is allowed for localhost development.
-                      Paths and wildcards are not accepted. Save to apply to all keys for this partner.
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Production apps should keep the secret key in their backend and proxy media to the browser.
-                      Use the API’s returned media and frame URLs; temporary server file paths are not download links.
-                    </p>
                   </div>
                 </section>
 

@@ -57,6 +57,7 @@ function publicKey(key: {
 }
 
 function publicPartner(partner: {
+  accountType?: "production" | "testing";
   allowedOrigins?: string[];
   allowedOfferIds: string[];
   allowCustomPolicy: boolean;
@@ -77,6 +78,7 @@ function publicPartner(partner: {
   webhookUrl?: string;
 }) {
   return {
+    account_type: partner.accountType ?? "production",
     allowed_origins: partner.allowedOrigins ?? [],
     allowed_offer_ids: partner.allowedOfferIds,
     allow_custom_policy: partner.allowCustomPolicy,
@@ -379,6 +381,7 @@ export const list = query({
 
 export const upsert = mutation({
   args: {
+    accountType: v.optional(v.union(v.literal("production"), v.literal("testing"))),
     allowedOrigins: v.optional(v.array(v.string())),
     allowedOfferIds: v.array(v.string()),
     allowCustomPolicy: v.boolean(),
@@ -406,6 +409,7 @@ export const upsert = mutation({
     const allowedOrigins = normalizeAllowedOrigins(args.allowedOrigins ?? existing?.allowedOrigins ?? []);
     const now = Date.now();
     const value = {
+      accountType: args.accountType ?? existing?.accountType ?? "production",
       allowedOrigins,
       allowedOfferIds: [...new Set(args.allowedOfferIds)].sort(),
       allowCustomPolicy: args.allowCustomPolicy,

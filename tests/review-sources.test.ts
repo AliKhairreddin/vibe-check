@@ -146,3 +146,22 @@ test('origin validation rejects paths, wildcards, credentials and non-loopback H
     assert.throws(() => normalizeAllowedOrigins([origin]), undefined, origin);
   }
 });
+
+test('account types preserve legacy settings and keep testing sources identifiable without renaming or deleting accounts', async () => {
+  const { ctx, tables } = fixture();
+  const settings = { partnerId: 'test-account', name: 'Integration checks', allowedOfferIds: ['acp'], allowCustomPolicy: false,
+    concurrentReviewLimit: 5, description: '', maxUploadMb: 400, monthlyReviewLimit: 500,
+    retentionDays: 30, status: 'suspended', unlimitedConcurrency: false, unlimitedReviews: false };
+  assert.equal((await invoke(upsert, ctx, settings)).account_type, 'production');
+  await ctx.db.insert('apiKeys', { partnerId: settings.partnerId, keyId: 'existing-key', status: 'revoked' });
+  await invoke(upsert, ctx, { ...settings, accountType: 'testing' });
+  const saved = await invoke(upsert, ctx, settings);
+  assert.equal(saved.account_type, 'testing');
+  assert.equal(saved.status, 'suspended');
+  assert.equal(saved.monthly_review_limit, 500);
+  assert.equal(tables.apiKeys[0].keyId, 'existing-key');
+  const source = (await invoke(listSources, ctx)).find((row: any) => row.value === 'api:test-account');
+  assert.equal(source.account_type, 'testing');
+  assert.equal(source.label, 'Integration checks API');
+  assert.equal((await invoke(upsert, ctx, { ...settings, accountType: 'production' })).account_type, 'production');
+});

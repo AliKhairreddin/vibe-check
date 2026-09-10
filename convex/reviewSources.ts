@@ -23,7 +23,8 @@ export async function resolveReviewSource(ctx: QueryCtx, jobId: string) {
 
 export const list = query({
   args: { secret: v.string() },
-  returns: v.array(v.object({ value: v.string(), label: v.string(), kind: v.string() })),
+  returns: v.array(v.object({ value: v.string(), label: v.string(), kind: v.string(),
+    account_type: v.optional(v.union(v.literal('production'), v.literal('testing'))) })),
   handler: async (ctx, args) => {
     authorize(args.secret);
     const [partners, publishers] = await Promise.all([
@@ -36,6 +37,7 @@ export const list = query({
         value: `api:${partner.partnerId}`,
         label: /\bapi\b/i.test(partner.name) ? partner.name : `${partner.name} API`,
         kind: 'api',
+        account_type: partner.accountType ?? 'production',
       })),
       ...publishers.filter(publisher => publisher.organizationId !== 'digital-nudge'
         && !publisher.publisherId.startsWith('digital-nudge-'))

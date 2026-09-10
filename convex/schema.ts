@@ -456,6 +456,7 @@ export default defineSchema({
     origin: v.string(), partnerId: v.string(), active: v.boolean(),
   }).index("by_origin_and_active", ["origin", "active"]).index("by_partner_id", ["partnerId"]),
   apiPartners: defineTable({
+    accountType: v.optional(v.union(v.literal("production"), v.literal("testing"))),
     allowedOrigins: v.optional(v.array(v.string())),
     allowedOfferIds: v.array(v.string()),
     allowCustomPolicy: v.boolean(),

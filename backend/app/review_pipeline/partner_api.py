@@ -221,6 +221,7 @@ def browser_origin_allowed(origin: str) -> bool:
 
 
 class ApiPartnerInput(BaseModel):
+    account_type: Literal['production', 'testing'] = 'production'
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default='', max_length=1_000)
     status: Literal['active', 'suspended'] = 'active'
@@ -539,6 +540,8 @@ def save_api_partner(partner_id: str, payload: ApiPartnerInput) -> dict[str, Any
         'unlimitedConcurrency': payload.unlimited_concurrency,
         'unlimitedReviews': payload.unlimited_reviews,
     }
+    if 'account_type' in payload.model_fields_set:
+        args['accountType'] = payload.account_type
     if 'allowed_origins' in payload.model_fields_set:
         args['allowedOrigins'] = payload.allowed_origins
     if payload.webhook_url is not None:
