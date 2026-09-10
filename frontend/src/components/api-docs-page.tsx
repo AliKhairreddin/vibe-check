@@ -252,6 +252,30 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
         </AlertDescription>
       </Alert>
 
+      <Card id="browser-access">
+        <CardHeader>
+          <CardTitle>Browser access and media URLs</CardTitle>
+          <CardDescription>
+            Configure each partner in Settings → API access → Allowed websites (CORS).
+            Add exact origins such as https://lemonmaxx.com and http://localhost:9002, one per line.
+            This allows browser access with that partner’s key; it does not grant access to another partner’s reviews.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm leading-6">
+          <p>
+            Resolve returned media_url and frame url fields against <code>https://api.adchecked.com</code>.
+            Media uses <code>/api/v1/reviews/&#123;review_id&#125;/media</code>; frames use
+            <code> /api/v1/reviews/&#123;review_id&#125;/frames/&#123;filename&#125;</code>.
+            Both require the Bearer key and <code>evidence:read</code>.
+          </p>
+          <p>
+            A filename or <code>/tmp/...</code> path is metadata, not a downloadable URL.
+            Adding an allowed website cannot make that path work. For production, have your backend
+            fetch the protected URL and serve it to your frontend, forwarding video Range headers.
+          </p>
+        </CardContent>
+      </Card>
+
       <section id="quick-start" className="grid gap-4">
         <div>
           <p className="text-sm font-medium text-muted-foreground">Quick start</p>

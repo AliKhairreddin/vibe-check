@@ -55,6 +55,15 @@ def main():
     else:
         raise SystemExit('Backfill paused after one million rows. Run again to continue from the saved cursor.')
     print(f'Digital Nudge workspaces ready. Scanned {count} offer results; existing publisher and API ownership preserved.')
+    source_count = 0
+    for _ in range(20000):
+        result = mutation('reviewSources:backfill', {})
+        source_count += result['processed']
+        if result['done']:
+            break
+    else:
+        raise SystemExit('History source backfill paused. Run setup again to resume.')
+    print(f'Review history sources ready. Classified {source_count} reviews by submitter.')
     if token:
         print('Publisher username: digital-nudge')
         print(f'Choose a password within 7 days: https://app.adchecked.com/invite/{token}')

@@ -219,6 +219,8 @@ export default defineSchema({
     .index("by_job_id", ["jobId"])
     .index("by_run_id", ["runId"]),
   reviews: defineTable({
+    historySource: v.optional(v.string()),
+    historySourceKind: v.optional(v.union(v.literal("internal"), v.literal("api"), v.literal("publisher"))),
     processingInstanceId: v.optional(v.string()),
     apiBatchId: v.optional(v.string()),
     automationRunId: v.optional(v.string()),
@@ -265,6 +267,8 @@ export default defineSchema({
     .index("by_status_deleted_automation_api_batch_updated", [
       "status", "deletedAt", "automationRunId", "apiBatchId", "updatedAt",
     ])
+    .index("by_history_source_and_deleted_at_and_created_at", ["historySource", "deletedAt", "createdAt"])
+    .index("by_history_source_kind_and_deleted_at_and_created_at", ["historySourceKind", "deletedAt", "createdAt"])
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewReleaseEvents: defineTable({
     jobId: v.string(), offerIds: v.array(v.string()), releasedBy: v.string(), createdAt: v.number(),
@@ -448,7 +452,11 @@ export default defineSchema({
   })
     .index("by_kind_key", ["kind", "key"])
     .index("by_job_id", ["jobId"]),
+  apiAllowedOrigins: defineTable({
+    origin: v.string(), partnerId: v.string(), active: v.boolean(),
+  }).index("by_origin_and_active", ["origin", "active"]).index("by_partner_id", ["partnerId"]),
   apiPartners: defineTable({
+    allowedOrigins: v.optional(v.array(v.string())),
     allowedOfferIds: v.array(v.string()),
     allowCustomPolicy: v.boolean(),
     concurrentReviewLimit: v.number(),

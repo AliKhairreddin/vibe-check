@@ -1,3 +1,4 @@
+import { resolveReviewSource } from "./reviewSources.ts";
 import { attributeInternalReview } from './publisherOwnership.ts';
 import { paginationOptsValidator } from "convex/server";
 import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server.js";
@@ -704,7 +705,11 @@ export const upsertStatus = mutation({
       throw new Error("Automation review generation is no longer active");
     }
 
+    const source = existing?.historySource && existing.historySourceKind
+      ? { historySource: existing.historySource, historySourceKind: existing.historySourceKind }
+      : await resolveReviewSource(ctx, args.jobId);
     const value = {
+      ...source,
       processingInstanceId: args.processingInstanceId ?? existing?.processingInstanceId,
       automationRunId: jobState?.runId ?? existing?.automationRunId,
       batchId: args.batchId ?? existing?.batchId,
@@ -997,13 +1002,17 @@ export const listRecent = query({
   args: {
     secret: v.string(),
     limit: v.number(),
+    source: v.optional(v.string()),
   },
+  returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const limit = Math.max(1, Math.min(args.limit, 100));
-    const reviews = await ctx.db
-      .query("reviews")
-      .withIndex("by_deleted_at_created_at", (q) => q.eq("deletedAt", undefined))
+    const query = args.source && args.source !== 'all'
+      ? ctx.db.query("reviews").withIndex("by_history_source_and_deleted_at_and_created_at", q =>
+        q.eq("historySource", args.source).eq("deletedAt", undefined))
+      : ctx.db.query("reviews").withIndex("by_deleted_at_created_at", q => q.eq("deletedAt", undefined));
+    const reviews = await query
       .order("desc")
       .take(limit);
     return Promise.all(reviews.map(async (review) =>
@@ -1174,20 +1183,29 @@ export const failInterrupted = mutation({
 export const listPage = query({
   args: {
     secret: v.string(),
+    source: v.optional(v.string()),
     paginationOpts: paginationOptsValidator,
   },
+  returns: v.any(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const result = await ctx.db
-      .query("reviews")
-      .withIndex("by_deleted_at_created_at", (q) => q.eq("deletedAt", undefined))
-      .order("desc")
-      .paginate(args.paginationOpts);
+    // Preserve the legacy unfiltered endpoint for older deployed clients. The
+    // history UI always passes its selected source (Digital Nudge by default).
+    const source = args.source ?? 'all';
+    const reviews = source === 'all'
+      ? ctx.db.query("reviews").withIndex("by_deleted_at_created_at", q => q.eq("deletedAt", undefined))
+      : source === 'publishers'
+        ? ctx.db.query("reviews").withIndex("by_history_source_kind_and_deleted_at_and_created_at", q =>
+          q.eq("historySourceKind", "publisher").eq("deletedAt", undefined))
+        : ctx.db.query("reviews").withIndex("by_history_source_and_deleted_at_and_created_at", q =>
+          q.eq("historySource", source).eq("deletedAt", undefined));
+    const result = await reviews.order("desc").paginate(args.paginationOpts);
     return {
       ...result,
-      page: await Promise.all(result.page.map(async (review) =>
-        publicReview(review, await clientDecisionsForJob(ctx, review.jobId))
-      )),
+      page: await Promise.all(result.page.map(async (review) => ({
+        ...publicReview(review, await clientDecisionsForJob(ctx, review.jobId)),
+        history_source: review.historySource ?? null,
+      }))),
     };
   },
 });

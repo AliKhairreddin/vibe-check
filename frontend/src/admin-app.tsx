@@ -162,6 +162,7 @@ import {
   getStatus,
   listOfferCatalog,
   listReviewHistoryPage,
+  listReviewHistorySources,
   resolveDriveSelection,
   reportBatchUploadFailure,
   retryDriveBatchItem,
@@ -1337,6 +1338,8 @@ type HistoryEntry =
 
 function HistoryCard({
   allHistory = false,
+  sourceLabel = 'Digital Nudge',
+  sourceSelector,
   error,
   hasMore = false,
   isFetchingMore = false,
@@ -1346,6 +1349,8 @@ function HistoryCard({
   reviews,
 }: {
   allHistory?: boolean;
+  sourceLabel?: string;
+  sourceSelector?: React.ReactNode;
   error: Error | null;
   hasMore?: boolean;
   isFetchingMore?: boolean;
@@ -1522,11 +1527,11 @@ function HistoryCard({
             as={allHistory ? 'h1' : 'h2'}
             className={cn('text-xl', allHistory && 'group-data-[size=sm]/card:text-lg')}
           >
-            {allHistory ? 'All review history' : 'Review history'}
+            {allHistory ? `${sourceLabel} review history` : 'Review history'}
           </CardTitle>
           <CardDescription>
             {allHistory
-              ? 'New uploads stay private until you release them to selected advertisers. Multi-creative uploads appear as one batch.'
+              ? 'Showing submissions from the selected source. Choose another API partner or publisher to view their history.'
               : 'Recent uploads, with multi-creative batches grouped into one row.'}
           </CardDescription>
           <CardAction>
@@ -1550,6 +1555,7 @@ function HistoryCard({
           </CardAction>
         </CardHeader>
         <CardContent>
+          {sourceSelector}
           {deleteError ? (
             <Alert variant="destructive" className="mb-3">
               <AlertCircle />
@@ -2325,9 +2331,19 @@ async function deleteReviewSelection(ids: string[]) {
 }
 
 function AllHistoryPage() {
+  const search = historyRoute.useSearch();
+  const source = search.source ?? 'digital-nudge';
+  const navigate = historyRoute.useNavigate();
+  const setSource = (value: string) => void navigate({ search: { source: value === 'digital-nudge' ? undefined : value } });
+  const sourcesQuery = useQuery({
+    queryKey: ['review-history-sources'],
+    queryFn: listReviewHistorySources,
+  });
+  const sources = sourcesQuery.data ?? [{ value: 'digital-nudge', label: 'Digital Nudge', kind: 'internal' }];
+  const sourceLabel = sources.find((option) => option.value === source)?.label ?? 'Selected source';
   const query = useInfiniteQuery({
-    queryKey: ['reviews', 'all-history'],
-    queryFn: ({ pageParam }) => listReviewHistoryPage(pageParam),
+    queryKey: ['reviews', 'all-history', source],
+    queryFn: ({ pageParam }) => listReviewHistoryPage(pageParam, 50, source),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
   });
@@ -2335,7 +2351,33 @@ function AllHistoryPage() {
 
   return (
     <HistoryCard
+      key={source}
       allHistory
+      sourceLabel={sourceLabel}
+      sourceSelector={
+        <div className="mb-4 grid gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <Label htmlFor="history-source">Source</Label>
+            <Select
+              id="history-source"
+              aria-label="Review source"
+              value={source}
+              onValueChange={setSource}
+              options={sources}
+              className="w-full sm:w-72"
+            />
+            <span className="text-xs text-muted-foreground">Digital Nudge opens by default.</span>
+          </div>
+          {sourcesQuery.error ? (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>
+                Sources could not load. <button className="underline" onClick={() => void sourcesQuery.refetch()}>Try again</button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
+      }
       error={query.error}
       hasMore={query.hasNextPage}
       isFetchingMore={query.isFetchingNextPage}
@@ -4046,6 +4088,10 @@ const progressRoute = createRoute({
 const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/history',
+  validateSearch: (search: Record<string, unknown>): { source?: string } => ({
+    source: typeof search.source === 'string' && search.source.length <= 250
+      && /^(digital-nudge|api:.+|publisher:.+)$/.test(search.source) ? search.source : undefined,
+  }),
   component: AllHistoryPage,
 });
 const liveScansRoute = createRoute({

@@ -284,6 +284,7 @@ class ReviewSources(BaseModel):
     sources: list[ReviewSource] = Field(default_factory=list)
 
 class ReviewHistoryItem(JobRecord):
+    history_source: str | None = None
     overall_status: ResultStatus | None = None
     creative_result: ResultStatus | None = None
     ad_copy_result: ResultStatus | None = None

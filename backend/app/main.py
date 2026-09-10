@@ -7,7 +7,7 @@ from urllib.parse import quote
 import httpx
 from pypdf.errors import PdfReadError
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
+from .partner_cors import PartnerCORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -170,6 +170,7 @@ from .review_pipeline.partner_api import (
     list_api_scan_observations,
     mark_api_review_deleted,
     prune_expired_api_evidence,
+    public_api_evidence,
     reconcile_terminal_api_reviews,
     revoke_api_key,
     rotate_webhook_secret,
@@ -458,10 +459,11 @@ cors_origins=[
     if origin.strip()
 ]
 app.add_middleware(
-    CORSMiddleware,
+    PartnerCORSMiddleware,
     allow_origins=cors_origins,
-    allow_methods=['DELETE','GET','OPTIONS','POST','PUT'],
+    allow_methods=['DELETE','GET','HEAD','OPTIONS','POST','PUT'],
     allow_headers=[
+        'range',
         'authorization',
         'content-type',
         'idempotency-key',
@@ -472,7 +474,7 @@ app.add_middleware(
         'x-vibe-ad-id',
         'x-vibe-backend-shard',
     ],
-    expose_headers=['content-disposition','x-request-id'],
+    expose_headers=['content-disposition','x-request-id','content-range','accept-ranges','content-length','retry-after'],
 )
 
 @app.middleware('http')
@@ -638,6 +640,9 @@ async def require_api_principal(request:Request, scope:str)->ApiPrincipal:
             'The API key is invalid, expired, revoked, or suspended.',
             headers={'WWW-Authenticate':'Bearer'},
         )
+    origin=request.headers.get('origin')
+    if origin and origin not in cors_origins and origin not in principal.allowed_origins:
+        raise HTTPException(403, 'This website origin is not allowed for this API partner.')
     try:
         principal.require_scope(scope)
     except PermissionError as exc:
@@ -2623,8 +2628,7 @@ async def partner_asset_details(principal:ApiPrincipal,asset_id:str,offer_name:s
         raise HTTPException(409,'The saved report does not match the requested offer.')
     bundle=evidence.get('bundle') if evidence else None
     if bundle:
-        bundle={**bundle,'frames':[{**frame,'url':f'/api/v1/reviews/{job_id}/frames/{frame.get("filename")}'}
-                                 for frame in bundle.get('visual_frame_references',[]) if frame.get('filename')]}
+        bundle=public_api_evidence(job_id,bundle)
     return {**card,'result':report,'transcript':bundle.get('audio_transcript') if bundle else None,
             'evidence':bundle,'evidence_status':'available' if bundle else 'expired' if evidence and evidence.get('expired') else 'unavailable',
             'evidence_expires_at':evidence.get('expires_at') if evidence else None}
@@ -2728,7 +2732,7 @@ async def partner_review_evidence(job_id:str,request:Request):
         'timestamp':frame.get('timestamp'),
         'url':f'/api/v1/reviews/{job_id}/frames/{frame.get("filename")}',
     } for frame in list_review_evidence_frames(job_id) if frame.get('filename')]
-    return {**evidence,'bundle':bundle,'evidence_frames':frames}
+    return {**evidence,'bundle':public_api_evidence(job_id,bundle),'evidence_frames':frames}
 
 
 @app.get('/api/v1/reviews/{job_id}/report.json')
@@ -3858,12 +3862,20 @@ def disable_offer(offer_id:str, request:Request):
 
 
 @app.get('/api/reviews', response_model=list[ReviewHistoryItem])
-def review_history(limit:int=50):
-    return list_reviews(limit)
+def review_history(limit:int=50, source:str|None=None):
+    return list_reviews(limit, source) if source else list_reviews(limit)
 
 @app.get('/api/reviews/history', response_model=ReviewHistoryPage)
-def full_review_history(limit:int=50, cursor:str|None=None):
-    return list_reviews_page(limit, cursor)
+def full_review_history(limit:int=50, cursor:str|None=None, source:str='digital-nudge'):
+    if len(source) > 250 or not (source in {'digital-nudge', 'all', 'publishers'} or source.startswith(('api:', 'publisher:'))):
+        raise HTTPException(400, 'Choose a valid review source.')
+    return list_reviews_page(limit, cursor, source)
+
+
+@app.get('/api/reviews/sources')
+def review_history_sources():
+    result=workspaces.storage._convex_call('query', 'reviewSources:list', {})
+    return result if result is not None else [{'value':'digital-nudge','label':'Digital Nudge','kind':'internal'}]
 
 
 @app.get('/api/reviews/stats', response_model=ReviewStats)

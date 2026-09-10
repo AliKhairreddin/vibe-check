@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -192,10 +192,39 @@ class ApiAssetResult(ApiAssetCard):
     evidence_expires_at: int | None
 
 
+def normalize_allowed_origins(values: list[str]) -> list[str]:
+    normalized = set()
+    for value in values:
+        origin = value.strip()
+        if not origin or len(origin) > 300 or re.search(r'[\s\\*?#]', origin):
+            raise ValueError('Enter exact website origins without wildcards, paths, or query strings.')
+        try:
+            parsed = urlsplit(origin)
+            host = (parsed.hostname or '').encode('idna').decode('ascii').lower()
+            port = parsed.port
+        except (ValueError, UnicodeError):
+            raise ValueError('Invalid website origin.') from None
+        if (not host or parsed.username is not None or parsed.password is not None
+            or parsed.path not in ('', '/') or port == 0
+            or (parsed.scheme != 'https' and not (parsed.scheme == 'http' and host in {'localhost', '127.0.0.1', '::1'}))):
+            raise ValueError('Use HTTPS (or HTTP on localhost), without a path, credentials, or wildcard.')
+        host = f'[{host}]' if ':' in host else host
+        suffix = f':{port}' if port and port != (443 if parsed.scheme == 'https' else 80) else ''
+        normalized.add(f'{parsed.scheme}://{host}{suffix}')
+    return sorted(normalized)
+
+
+def browser_origin_allowed(origin: str) -> bool:
+    if not storage.convex_enabled():
+        return False
+    return _convex_call('query', 'apiPartners:allowsOrigin', {'origin': origin}) is True
+
+
 class ApiPartnerInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default='', max_length=1_000)
     status: Literal['active', 'suspended'] = 'active'
+    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
     allowed_offer_ids: list[str] = Field(default_factory=list, max_length=10)
     allow_custom_policy: bool = False
     monthly_review_limit: int = Field(default=500, ge=1, le=100_000)
@@ -223,6 +252,11 @@ class ApiPartnerInput(BaseModel):
             if offer_id not in normalized:
                 normalized.append(offer_id)
         return normalized
+
+    @field_validator('allowed_origins')
+    @classmethod
+    def validate_origins(cls, values: list[str]) -> list[str]:
+        return normalize_allowed_origins(values)
 
     @field_validator('webhook_url')
     @classmethod
@@ -271,6 +305,7 @@ class ApiPrincipal:
     unlimited_reviews: bool
     unlimited_concurrency: bool
     webhook_configured: bool
+    allowed_origins: tuple[str, ...] = ()
 
     def require_scope(self, scope: str) -> None:
         if scope not in self.scopes:
@@ -504,6 +539,8 @@ def save_api_partner(partner_id: str, payload: ApiPartnerInput) -> dict[str, Any
         'unlimitedConcurrency': payload.unlimited_concurrency,
         'unlimitedReviews': payload.unlimited_reviews,
     }
+    if 'allowed_origins' in payload.model_fields_set:
+        args['allowedOrigins'] = payload.allowed_origins
     if payload.webhook_url is not None:
         args['webhookUrl'] = payload.webhook_url
     value = _convex_call('mutation', 'apiPartners:upsert', args)
@@ -569,6 +606,7 @@ def authenticate_api_token(token: str) -> ApiPrincipal | None:
     if not isinstance(value, dict):
         return None
     return ApiPrincipal(
+        allowed_origins=tuple(value.get('allowed_origins', [])),
         partner_id=str(value['partner_id']),
         partner_name=str(value['name']),
         api_key_id=str(value['api_key_id']),
@@ -776,6 +814,22 @@ def get_shared_api_offer_report(
         'partnerId': principal.partner_id,
     })
     return value if isinstance(value, dict) else None
+
+
+def public_api_evidence(job_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+    """Give both evidence routes supported URLs, including for older stored bundles."""
+    frames = [
+        {**frame, 'url': f'/api/v1/reviews/{job_id}/frames/{quote(frame["filename"], safe="")}' }
+        for frame in bundle.get('visual_frame_references', [])
+        if isinstance(frame, dict) and isinstance(frame.get('filename'), str)
+        and frame['filename'] and Path(frame['filename']).name == frame['filename']
+    ]
+    metadata = dict(bundle.get('media_metadata') or {})
+    media_format = metadata.get('format')
+    if isinstance(media_format, dict) and isinstance(media_format.get('filename'), str):
+        metadata['format'] = {**media_format, 'filename': Path(media_format['filename']).name}
+    return {**bundle, 'media_metadata': metadata, 'visual_frame_references': frames,
+            'frames': frames, 'media_url': f'/api/v1/reviews/{job_id}/media'}
 
 
 def persist_api_evidence(

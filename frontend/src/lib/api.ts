@@ -303,6 +303,7 @@ export type ClientReviewDetail = {
 };
 
 export type ReviewHistoryItem = Status & {
+  history_source?: string | null;
   overall_status?: Report['overall_status'] | null;
   creative_result?: Report['overall_status'] | null;
   ad_copy_result?: Report['overall_status'] | null;
@@ -407,6 +408,7 @@ export type ApiKeyRecord = {
 };
 
 export type ApiPartner = {
+  allowed_origins: string[];
   active_reviews: number;
   allowed_offer_ids: string[];
   allow_custom_policy: boolean;
@@ -432,6 +434,7 @@ export type ApiPartner = {
 
 export type ApiPartnerInput = Pick<
   ApiPartner,
+  | 'allowed_origins'
   | 'allowed_offer_ids'
   | 'allow_custom_policy'
   | 'concurrent_review_limit'
@@ -823,7 +826,7 @@ export async function getStatus(id: string): Promise<Status> {
 }
 
 export async function listReviews(limit = 50): Promise<ReviewHistoryItem[]> {
-  return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}`);
+  return requestJson<ReviewHistoryItem[]>(`/api/reviews?limit=${limit}&source=digital-nudge`);
 }
 
 export async function getReviewStats(
@@ -991,11 +994,17 @@ export async function getLiveScans(date: string): Promise<LiveScanDay> {
 
 export async function listReviewHistoryPage(
   cursor: string | null = null,
-  limit = 50
+  limit = 50,
+  source = 'digital-nudge'
 ): Promise<ReviewHistoryPage> {
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = new URLSearchParams({ limit: String(limit), source });
   if (cursor) params.set('cursor', cursor);
   return requestJson<ReviewHistoryPage>(`/api/reviews/history?${params}`);
+}
+
+export type ReviewHistorySource = { value: string; label: string; kind: 'internal' | 'api' | 'publisher' };
+export async function listReviewHistorySources(): Promise<ReviewHistorySource[]> {
+  return requestJson<ReviewHistorySource[]>('/api/reviews/sources');
 }
 
 export async function createReviewBatch(input: CreateReviewBatchInput): Promise<ReviewBatch> {

@@ -10,6 +10,7 @@
 
 import type * as apiJobState from "../apiJobState.js";
 import type * as apiJobs from "../apiJobs.js";
+import type * as apiOrigins from "../apiOrigins.js";
 import type * as apiPartners from "../apiPartners.js";
 import type * as automations from "../automations.js";
 import type * as batches from "../batches.js";
@@ -24,6 +25,7 @@ import type * as reviewPayloads from "../reviewPayloads.js";
 import type * as reviewProcessingMetrics from "../reviewProcessingMetrics.js";
 import type * as reviewReleaseState from "../reviewReleaseState.js";
 import type * as reviewReleases from "../reviewReleases.js";
+import type * as reviewSources from "../reviewSources.js";
 import type * as reviewVerticals from "../reviewVerticals.js";
 import type * as reviews from "../reviews.js";
 import type * as telegramNotifications from "../telegramNotifications.js";
@@ -38,6 +40,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   apiJobState: typeof apiJobState;
   apiJobs: typeof apiJobs;
+  apiOrigins: typeof apiOrigins;
   apiPartners: typeof apiPartners;
   automations: typeof automations;
   batches: typeof batches;
@@ -52,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   reviewProcessingMetrics: typeof reviewProcessingMetrics;
   reviewReleaseState: typeof reviewReleaseState;
   reviewReleases: typeof reviewReleases;
+  reviewSources: typeof reviewSources;
   reviewVerticals: typeof reviewVerticals;
   reviews: typeof reviews;
   telegramNotifications: typeof telegramNotifications;

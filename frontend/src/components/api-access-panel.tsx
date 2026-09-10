@@ -80,6 +80,7 @@ type SecretNotice = {
 
 function emptyPartnerDraft(internal = false): ApiPartnerInput {
   return {
+    allowed_origins: [],
     allowed_offer_ids: [],
     allow_custom_policy: internal,
     concurrent_review_limit: 5,
@@ -100,6 +101,7 @@ function emptyPartnerDraft(internal = false): ApiPartnerInput {
 
 function partnerToDraft(partner: ApiPartner): ApiPartnerInput {
   return {
+    allowed_origins: [...(partner.allowed_origins ?? [])],
     allowed_offer_ids: [...partner.allowed_offer_ids],
     allow_custom_policy: partner.allow_custom_policy,
     concurrent_review_limit: partner.concurrent_review_limit,
@@ -173,7 +175,8 @@ export function ApiAccessPanel() {
     mutationFn: async () => {
       if (!draft) throw new Error('Partner settings are unavailable.');
       if (!draft.name.trim()) throw new Error('Partner name is required.');
-      const input = { ...draft, name: draft.name.trim(), description: draft.description.trim() };
+      const input = { ...draft, name: draft.name.trim(), description: draft.description.trim(),
+        allowed_origins: draft.allowed_origins.map(origin => origin.trim()).filter(Boolean) };
       return isCreating
         ? createApiPartner(input)
         : saveApiPartner(selectedPartnerId, input);
@@ -184,6 +187,7 @@ export function ApiAccessPanel() {
       setNotice(`${partner.name} was saved.`);
       setError('');
       await queryClient.invalidateQueries({ queryKey: PARTNERS_QUERY_KEY });
+      await queryClient.invalidateQueries({ queryKey: ['review-history-sources'] });
     },
     onError: (reason) => {
       setNotice('');
@@ -582,6 +586,37 @@ export function ApiAccessPanel() {
                         </label>
                       ))}
                     </div>
+                  </div>
+                </section>
+
+                <Separator />
+
+                <section className="grid gap-3">
+                  <div>
+                    <h3 className="font-heading text-base font-medium">Allowed websites (CORS)</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Websites allowed to make browser requests with this partner’s API keys.
+                      Server-to-server integrations work without adding a website.
+                    </p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="api-allowed-origins">Website origins</Label>
+                    <Textarea
+                      id="api-allowed-origins"
+                      rows={3}
+                      placeholder={'https://lemonmaxx.com\nhttp://localhost:9002'}
+                      value={draft.allowed_origins.join('\n')}
+                      onChange={(event) => updateDraft({ allowed_origins: event.currentTarget.value.split(/\r?\n/) })}
+                      aria-describedby="api-origins-help"
+                    />
+                    <p id="api-origins-help" className="text-xs text-muted-foreground">
+                      One origin per line, including https:// and any port. HTTP is allowed for localhost development.
+                      Paths and wildcards are not accepted. Save to apply to all keys for this partner.
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Production apps should keep the secret key in their backend and proxy media to the browser.
+                      Use the API’s returned media and frame URLs; temporary server file paths are not download links.
+                    </p>
                   </div>
                 </section>
 

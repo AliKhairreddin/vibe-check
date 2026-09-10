@@ -1,3 +1,4 @@
+import { normalizeAllowedOrigins } from "./apiOrigins.ts";
 import { paginationOptsValidator } from "convex/server";
 import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel";
@@ -56,6 +57,7 @@ function publicKey(key: {
 }
 
 function publicPartner(partner: {
+  allowedOrigins?: string[];
   allowedOfferIds: string[];
   allowCustomPolicy: boolean;
   concurrentReviewLimit: number;
@@ -75,6 +77,7 @@ function publicPartner(partner: {
   webhookUrl?: string;
 }) {
   return {
+    allowed_origins: partner.allowedOrigins ?? [],
     allowed_offer_ids: partner.allowedOfferIds,
     allow_custom_policy: partner.allowCustomPolicy,
     concurrent_review_limit: partner.concurrentReviewLimit,
@@ -376,6 +379,7 @@ export const list = query({
 
 export const upsert = mutation({
   args: {
+    allowedOrigins: v.optional(v.array(v.string())),
     allowedOfferIds: v.array(v.string()),
     allowCustomPolicy: v.boolean(),
     concurrentReviewLimit: v.number(),
@@ -399,8 +403,10 @@ export const upsert = mutation({
       .query("apiPartners")
       .withIndex("by_partner_id", (q) => q.eq("partnerId", args.partnerId))
       .unique();
+    const allowedOrigins = normalizeAllowedOrigins(args.allowedOrigins ?? existing?.allowedOrigins ?? []);
     const now = Date.now();
     const value = {
+      allowedOrigins,
       allowedOfferIds: [...new Set(args.allowedOfferIds)].sort(),
       allowCustomPolicy: args.allowCustomPolicy,
       concurrentReviewLimit: args.concurrentReviewLimit,
@@ -424,6 +430,12 @@ export const upsert = mutation({
     };
     if (existing) await ctx.db.patch(existing._id, value);
     else await ctx.db.insert("apiPartners", { ...value, createdAt: now });
+    const oldOrigins = await ctx.db.query("apiAllowedOrigins")
+      .withIndex("by_partner_id", q => q.eq("partnerId", args.partnerId)).take(21);
+    for (const row of oldOrigins) await ctx.db.delete(row._id);
+    for (const origin of allowedOrigins) {
+      await ctx.db.insert("apiAllowedOrigins", { origin, partnerId: args.partnerId, active: args.status === 'active' });
+    }
     return publicPartner({ ...existing, ...value, createdAt: existing?.createdAt ?? now });
   },
 });
@@ -1462,5 +1474,16 @@ export const pruneExpiredEvidence = mutation({
       : [];
     for (const observation of expiredScanObservations) await ctx.db.delete(observation._id);
     return { removed: expired.length + expiredScanObservations.length };
+  },
+});
+
+export const allowsOrigin = query({
+  args: { secret: v.string(), origin: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const allowed = await ctx.db.query("apiAllowedOrigins")
+      .withIndex("by_origin_and_active", q => q.eq("origin", args.origin).eq("active", true)).first();
+    return allowed !== null;
   },
 });

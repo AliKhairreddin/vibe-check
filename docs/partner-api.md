@@ -39,6 +39,46 @@ Keys are hashed before storage and can be independently scoped, expired, and rev
 
 The admin account can use **Unlimited monthly reviews** and **Unlimited queued submissions**. These remove per-account admission quotas; they do not remove file-size limits or the platform's bounded worker concurrency.
 
+## Browser origins and media downloads
+
+Configure **Settings → API access → select/create partner → Allowed websites (CORS)**.
+Enter one exact origin per line, for example `https://lemonmaxx.com` and
+`http://localhost:9002`. A trailing slash is normalized; paths, query strings,
+credentials, and wildcards are rejected. HTTPS is required except for HTTP on
+`localhost`, `127.0.0.1`, or `[::1]`. Scheme and port matter; `https://www.lemonmaxx.com`
+is a different origin and must be added separately if used.
+
+Saving applies immediately to all keys for that partner. Removing an origin or
+suspending the partner removes browser access. Preflight requests carry no API
+key; the subsequent authenticated request checks that its origin belongs to the
+key's partner. An origin allowed for another partner does not grant access.
+The built-in AdChecked documentation console remains allowed. This setting only
+applies to `/api/v1`; it does not expose the admin or advertiser APIs.
+
+Keep production keys in your backend and proxy resources to the browser.
+Server-to-server requests without an Origin header do not need an entry here.
+CORS is browser policy, not a replacement for authentication or tenant permissions.
+
+Use returned `media_url`, `evidence.frames[].url`, or `evidence_frames[].url`,
+resolved against `https://api.adchecked.com`. Supported paths are:
+
+- `/api/v1/reviews/{review_id}/media` for the original creative (when retained).
+- `/api/v1/reviews/{review_id}/frames/{filename}` for evidence frames.
+
+Both need `Authorization: Bearer ...`, `evidence:read`, and access to the review.
+Never prepend the API hostname to `/tmp/vibe-check/...` or a metadata filename:
+those are server file references, not HTTP routes. Allowlisting a website cannot
+fix an invalid resource path. A completed review can still have unavailable or
+expired media; inspect the API response status as well as browser CORS errors.
+
+## Admin history sources
+
+Review history opens on **Digital Nudge**, covering internal dashboard uploads,
+Drive imports, and internal automations. The Source selector switches to each
+API partner or external publisher, with pagination scoped to that submitter.
+Which offer is evaluated and who later reads a shared report do not change its
+source. Partner and publisher access permissions remain independent of this admin view.
+
 ## ACP shared-review dashboard
 
 Use the shared-history endpoint to populate ACP's creative list. The filename is display metadata, not a media identifier; always use `review_id` and the protected URLs returned by the API.

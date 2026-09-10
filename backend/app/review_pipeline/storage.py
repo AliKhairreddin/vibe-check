@@ -797,6 +797,12 @@ def _local_reviews()->list[ReviewHistoryItem]:
         report_path=status_path.parent/'report.json'
         report=read_json(report_path) if report_path.exists() else None
         data=rec.model_dump(mode='json')
+        request_path=status_path.parent/'request.json'
+        metadata=read_json(request_path) if request_path.exists() else {}
+        partner_id=metadata.get('api_partner_id')
+        publisher_id=metadata.get('publisher_id')
+        data['history_source']=(f'api:{partner_id}' if partner_id else
+            f'publisher:{publisher_id}' if publisher_id and not publisher_id.startswith('digital-nudge-') else 'digital-nudge')
         data['created_at']=rec.created_at or int(stat.st_ctime * 1000)
         data['updated_at']=rec.updated_at or int(stat.st_mtime * 1000)
         data['overall_status']=_overall_status(report)
@@ -833,17 +839,18 @@ def _local_reviews()->list[ReviewHistoryItem]:
     items.sort(key=lambda item: item.created_at or 0, reverse=True)
     return items
 
-def list_reviews(limit:int=50)->list[ReviewHistoryItem]:
+def list_reviews(limit:int=50, source:str|None=None)->list[ReviewHistoryItem]:
     limit=max(1, min(limit, 100))
-    remote=_convex_call('query', 'reviews:listRecent', {'limit': limit})
+    remote=_convex_call('query', 'reviews:listRecent', {'limit': limit, **({'source': source} if source else {})})
     if remote is not None:
         return [ReviewHistoryItem.model_validate(item) for item in remote]
-    return _local_reviews()[:limit]
+    return [item for item in _local_reviews() if not source or source == 'all' or item.history_source == source][:limit]
 
-def list_reviews_page(limit:int=50, cursor:str|None=None)->ReviewHistoryPage:
+def list_reviews_page(limit:int=50, cursor:str|None=None, source:str|None=None)->ReviewHistoryPage:
     limit=max(1, min(limit, 100))
     remote=_convex_call('query', 'reviews:listPage', {
         'paginationOpts': {'numItems':limit, 'cursor':cursor},
+        **({'source': source} if source else {}),
     })
     if remote is not None:
         return ReviewHistoryPage(
@@ -853,6 +860,9 @@ def list_reviews_page(limit:int=50, cursor:str|None=None)->ReviewHistoryPage:
         )
 
     items=_local_reviews()
+    if source and source != 'all':
+        items=[item for item in items if item.history_source == source or
+               (source == 'publishers' and (item.history_source or '').startswith('publisher:'))]
 
     try:
         offset=max(0, int(cursor or '0'))
