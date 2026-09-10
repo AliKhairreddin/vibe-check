@@ -4,8 +4,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgl1 l
 WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
-COPY backend /app/backend
+COPY backend/app/review_pipeline/ocr_models.py backend/app/review_pipeline/ocr-models.json /app/backend/app/review_pipeline/
 COPY scripts/prepare-ocr-models.py /app/scripts/prepare-ocr-models.py
 RUN python /app/scripts/prepare-ocr-models.py
+COPY backend /app/backend
 EXPOSE 8000
 CMD ["uvicorn","backend.app.main:app","--host","0.0.0.0","--port","8000"]
