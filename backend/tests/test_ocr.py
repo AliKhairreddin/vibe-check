@@ -149,14 +149,15 @@ def test_startup_failure_never_marks_engine_ready(monkeypatch):
     assert not ocr.ocr_state()['ready']
 
 
-def test_onnx_threads_and_cpu_provider_are_explicit(monkeypatch):
+@pytest.mark.parametrize('threads', [1, 2])
+def test_onnx_threads_and_cpu_provider_are_explicit(monkeypatch, threads):
     constructor = Mock()
     monkeypatch.setitem(sys.modules, 'paddleocr', SimpleNamespace(PaddleOCR=constructor))
     monkeypatch.setitem(sys.modules, 'cv2', SimpleNamespace(setNumThreads=Mock()))
-    ocr._create_engine(1)
+    ocr._create_engine(threads)
     config = constructor.call_args.kwargs
     assert config['engine_config'] == {
-        'intra_op_num_threads': 1, 'inter_op_num_threads': 1,
+        'intra_op_num_threads': threads, 'inter_op_num_threads': 1,
         'execution_mode': 'sequential', 'providers': ['CPUExecutionProvider'],
     }
     assert config['text_detection_model_name'] == 'PP-OCRv6_small_det'

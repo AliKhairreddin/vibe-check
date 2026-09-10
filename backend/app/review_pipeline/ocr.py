@@ -98,7 +98,7 @@ def initialize_ocr() -> OcrPool:
     global _pool
     with _pool_lock:
         if _pool is None:
-            _pool = OcrPool(_setting('OCR_WORKER_CONCURRENCY', 2), _setting('OCR_CPU_THREADS', 1))
+            _pool = OcrPool(_setting('OCR_WORKER_CONCURRENCY', 2), _setting('OCR_CPU_THREADS', 2))
         return _pool
 
 
@@ -115,7 +115,7 @@ def ocr_state() -> dict:
         'engine': ENGINE_NAME,
         'ready': _pool is not None,
         'workers': _pool.workers if _pool else _setting('OCR_WORKER_CONCURRENCY', 2),
-        'cpu_threads': _pool.threads if _pool else _setting('OCR_CPU_THREADS', 1),
+        'cpu_threads': _pool.threads if _pool else _setting('OCR_CPU_THREADS', 2),
     }
 
 

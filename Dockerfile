@@ -1,5 +1,5 @@
 FROM --platform=linux/amd64 python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 JOB_DATA_DIR=/tmp/vibe-check/jobs OMP_THREAD_LIMIT=1 OPENBLAS_NUM_THREADS=1 OCR_MODEL_DIR=/opt/adchecked/ocr-models OCR_WORKER_CONCURRENCY=2 OCR_CPU_THREADS=1 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True HF_HUB_OFFLINE=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 JOB_DATA_DIR=/tmp/vibe-check/jobs OMP_THREAD_LIMIT=1 OPENBLAS_NUM_THREADS=1 OCR_MODEL_DIR=/opt/adchecked/ocr-models OCR_WORKER_CONCURRENCY=2 OCR_CPU_THREADS=2 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True HF_HUB_OFFLINE=1
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt

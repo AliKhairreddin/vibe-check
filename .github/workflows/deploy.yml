@@ -202,7 +202,7 @@ jobs:
                   state = response.json()
                   assert state['workers'] > 0, 'No live job workers'
                   assert state['configured_shards'] == int(os.environ['CONFIGURED_BACKEND_SHARDS']), 'Wrong shard configuration'
-                  assert state['ocr'] == {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 1}, 'Wrong OCR engine or readiness'
+                  assert state['ocr'] == {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2}, 'Wrong OCR engine or readiness'
                   print('Activated backend is healthy; shard and OCR configuration verified.')
                   break
               except Exception:
