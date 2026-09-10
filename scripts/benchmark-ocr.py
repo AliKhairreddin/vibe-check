@@ -8,6 +8,9 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import os
+import multiprocessing
+import queue
+import signal
 from pathlib import Path
 import statistics
 import sys
@@ -44,6 +47,48 @@ def synthetic_frames(directory):
             image.save(directory / f'{index * 2 + repeat:03}.jpg', quality=95)
 
 
+def run_case(result_queue, directory, records, cores, threads, jobs, reuse, repeats):
+    # Isolate native OCR processes: a stuck OpenMP stress case must not leave
+    # children behind or prevent the safe production configuration being tested.
+    os.setsid()
+    os.sched_setaffinity(0, cores)
+    os.environ['OMP_THREAD_LIMIT'] = str(threads)
+    durations, expected = [], None
+    try:
+        for _ in range(repeats):
+            started = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
+                outputs = list(pool.map(lambda _: (run_ocr if reuse else baseline)(directory, records), range(jobs)))
+            durations.append(time.perf_counter() - started)
+            if expected is None:
+                expected = outputs[0]
+            if not expected or any(output != expected for output in outputs):
+                raise RuntimeError('OCR output is empty or differs between identical creatives')
+        result_queue.put({'seconds': statistics.median(durations), 'output': expected})
+    except Exception as error:
+        result_queue.put({'error': str(error)})
+
+
+def measured_case(*args):
+    context = multiprocessing.get_context('spawn')
+    result_queue = context.Queue()
+    process = context.Process(target=run_case, args=(result_queue, *args))
+    process.start()
+    try:
+        return result_queue.get(timeout=60)
+    except queue.Empty:
+        return {'error': 'exceeded 60s case deadline'}
+    finally:
+        process.join(timeout=1)
+        if process.is_alive():
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                process.kill()
+            process.join(timeout=5)
+        result_queue.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--frames-dir', type=Path)
@@ -55,7 +100,6 @@ def main():
         parser.error('Run on Linux to compare CPU allocations with process affinity')
     original_affinity = os.sched_getaffinity(0)
     cores = sorted(original_affinity)
-    original_threads = os.environ.get('OMP_THREAD_LIMIT')
     with tempfile.TemporaryDirectory(prefix='vibe-ocr-benchmark-') as temp:
         directory = args.frames_dir or Path(temp)
         if not args.frames_dir:
@@ -69,35 +113,29 @@ def main():
         print('| Concurrent creatives | CPUs | OCR threads | Reuse identical frames | Median seconds |')
         print('|---|---|---|---|---|')
         expected = None
-        try:
-            for jobs in (1, 5):
-                cases = [(min(2, len(cores)), 4, False)]
-                if len(cores) >= 4:
-                    cases.append((4, 4, False))
-                cases += [(min(4, len(cores)), 1, False), (min(4, len(cores)), 1, True)]
-                for cpu_count, threads, reuse in cases:
-                    os.sched_setaffinity(0, cores[:cpu_count])
-                    os.environ['OMP_THREAD_LIMIT'] = str(threads)
-                    durations = []
-                    for _ in range(args.repeats):
-                        started = time.perf_counter()
-                        with ThreadPoolExecutor(max_workers=jobs) as pool:
-                            outputs = list(pool.map(lambda _: (run_ocr if reuse else baseline)(directory, records), range(jobs)))
-                        durations.append(time.perf_counter() - started)
-                        if expected is None:
-                            expected = outputs[0]
-                            if not expected:
-                                raise RuntimeError('OCR produced no text; cannot validate equivalence')
-                        if any(output != expected for output in outputs):
-                            raise RuntimeError('OCR output changed across settings')
-                    print(f'| {jobs} | {cpu_count} | {threads} | {"yes" if reuse else "no"} | {statistics.median(durations):.3f} |', flush=True)
-        finally:
-            os.sched_setaffinity(0, original_affinity)
-            if original_threads is None:
-                os.environ.pop('OMP_THREAD_LIMIT', None)
-            else:
-                os.environ['OMP_THREAD_LIMIT'] = original_threads
-        print('\nRecognized text and first-occurrence timestamps match across all runs.')
+        incomplete = 0
+        for jobs in (1, 5):
+            cases = [(min(2, len(cores)), 4, False)]
+            if len(cores) >= 4:
+                cases.append((4, 4, False))
+            cases += [(min(4, len(cores)), 1, False), (min(4, len(cores)), 1, True)]
+            for cpu_count, threads, reuse in cases:
+                result = measured_case(directory, records, cores[:cpu_count], threads, jobs, reuse, args.repeats)
+                if 'error' in result:
+                    if threads == 1:
+                        raise RuntimeError('Production OCR settings failed: ' + result['error'])
+                    incomplete += 1
+                    elapsed = 'incomplete: ' + result['error']
+                else:
+                    if expected is None:
+                        expected = result['output']
+                    if result['output'] != expected:
+                        raise RuntimeError('OCR output changed across settings')
+                    elapsed = f"{result['seconds']:.3f}"
+                print(f'| {jobs} | {cpu_count} | {threads} | {"yes" if reuse else "no"} | {elapsed} |', flush=True)
+        print('\nRecognized text and first-occurrence timestamps match across completed runs.')
+        if incomplete:
+            print(f'\n{incomplete} multithreaded stress case(s) did not complete. These are not speed measurements.')
         if len(cores) < 4:
             print('\nFour-CPU comparison unavailable on this runner.')
 
