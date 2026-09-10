@@ -372,7 +372,7 @@ export async function syncReviewOfferStats(
   const activeOfferIds = new Set(offerIdsForReview(projectedReview));
 
   for (const offerId of activeOfferIds) {
-    await attributeInternalReview(ctx, offerId, review.jobId, review.createdAt);
+    const publisherId = await attributeInternalReview(ctx, offerId, review.jobId, review.createdAt);
     const resultStatus = resultStatusForReview(projectedReview, offerId) ?? undefined;
     const internalDisposition = internalDispositionForReview(projectedReview, offerId) ?? undefined;
     const preview = previewForReport(reportForOffer(projectedReview, offerId), resultStatus ?? null);
@@ -386,6 +386,7 @@ export async function syncReviewOfferStats(
       internalDisposition,
       jobId: review.jobId,
       offerId,
+      publisherId,
       ...preview,
       resultStatus,
       sourceKind: review.sourceKind,

@@ -2,28 +2,43 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { acceptInvite, claimSubmission, createShare, getShare, invitePublisher, revokeShare, setupDigitalNudge, digitalNudgeMemberships, setPlan, releaseUnstartedSubmission } from '../convex/workspaces.ts';
 import { attributeInternalReview } from '../convex/publisherOwnership.ts';
-import { recordHeartbeat } from '../convex/platform.ts';
+import { recordHeartbeat, overview, backfillPublisherStats } from '../convex/platform.ts';
+import { syncReviewOfferStats } from '../convex/reviews.ts';
 import { apiRequestAllowed, isClientPagePath, isAdminPagePath } from '../worker/routing.ts';
 
 process.env.CONVEX_HTTP_SECRET = 'workspace-test-secret';
 const invoke = (fn: any, ctx: any, args: any = {}) => fn._handler(ctx, { secret: 'workspace-test-secret', ...args });
 function fixture() {
   const tables: Record<string, any[]> = {};
+  const queryCounts: Record<string, number> = {};
   let serial = 0;
   const db = {
     query(table: string) {
+      queryCounts[table] = (queryCounts[table] ?? 0) + 1;
       const predicates: ((row: any) => boolean)[] = [];
       let descending = false;
       const index = { eq(key: string, value: unknown) { predicates.push(r => r[key] === value); return index; }, gte(key: string, value: number) { predicates.push(r => r[key] >= value); return index; }, lt(key: string, value: number) { predicates.push(r => r[key] < value); return index; } };
       const rows = () => (tables[table] ?? []).filter(row => predicates.every(test => test(row))).sort((a, b) => (a._creationTime - b._creationTime) * (descending ? -1 : 1));
-      const query = { withIndex(_name: string, configure: (index: any) => void) { configure(index); return query; }, order(order: string) { descending = order === 'desc'; return query; }, async take(n: number) { return rows().slice(0, n); }, async unique() { const result = rows(); assert.ok(result.length < 2); return result[0] ?? null; }, async first() { return rows()[0] ?? null; } };
+      const query = {
+        withIndex(_name: string, configure?: (index: any) => void) { configure?.(index); return query; },
+        order(order: string) { descending = order === 'desc'; return query; },
+        async take(n: number) { return rows().slice(0, n); },
+        async collect() { return rows(); },
+        async paginate(opts: any) {
+          const start = Number(opts.cursor ?? 0);
+          const page = rows().slice(start, start + opts.numItems);
+          return { page, isDone: start + page.length >= rows().length, continueCursor: String(start + page.length) };
+        },
+        async unique() { const result = rows(); assert.ok(result.length < 2); return result[0] ?? null; },
+        async first() { return rows()[0] ?? null; },
+      };
       return query;
     },
     async insert(table: string, value: any) { const row = { ...value, _id: `${table}:${++serial}`, _creationTime: serial }; (tables[table] ??= []).push(row); return row._id; },
     async patch(id: string, value: any) { const row = Object.values(tables).flat().find(row => row._id === id); assert.ok(row); Object.assign(row, value); },
     async delete(id: string) { for (const rows of Object.values(tables)) { const i = rows.findIndex(row => row._id === id); if (i >= 0) rows.splice(i, 1); } },
   };
-  return { ctx: { db }, tables };
+  return { ctx: { db }, tables, queryCounts };
 }
 async function seedPublisher(ctx: any, clientId = 'kissterra', publisherId = 'banana') {
   await ctx.db.insert('publishers', { clientId, publisherId, username: publisherId, name: 'Banana', status: 'active', authVersion: 1, createdAt: Date.now() });
@@ -131,4 +146,60 @@ test('public shares and publisher pages route only through allowed application s
   assert.ok(isClientPagePath('/invite/token'));
   assert.ok(isAdminPagePath('/publisher'));
   assert.ok(isAdminPagePath('/shares'));
+});
+
+test('publisher projection preserves overview counts and removes per-result ownership reads', async () => {
+  const { ctx, tables, queryCounts } = fixture();
+  await seedPublisher(ctx);
+  for (let i = 0; i < 125; i++) {
+    const jobId = `job-${i}`;
+    await ctx.db.insert('reviewOfferStats', {
+      jobId, offerId: 'kissterra', createdAt: i, status: 'complete', resultStatus: 'yellow',
+      ...(i === 0 ? { deletedAt: 1 } : {}),
+    });
+    if (i % 2 === 0) await ctx.db.insert('publisherSubmissions', { jobId, clientId: 'kissterra', publisherId: 'banana' });
+  }
+  const before = await invoke(overview, ctx);
+  assert.equal(before.advertisers[0].reviews, 124);
+  assert.equal(before.advertisers[0].publishers[0].reviews, 62);
+  assert.deepEqual(await invoke(backfillPublisherStats, ctx), { processed: 100, done: false });
+  assert.deepEqual((await invoke(overview, ctx)).advertisers, before.advertisers);
+  assert.deepEqual(await invoke(backfillPublisherStats, ctx), { processed: 25, done: true });
+  assert.deepEqual(await invoke(backfillPublisherStats, ctx), { processed: 0, done: true });
+  assert.ok(tables.reviewOfferStats.every(row => row.publisherId === 'banana' || row.publisherId === null));
+  queryCounts.publisherSubmissions = 0;
+  const after = await invoke(overview, ctx);
+  assert.deepEqual(after.advertisers, before.advertisers);
+  assert.deepEqual(after.reviews, before.reviews);
+  assert.equal(queryCounts.publisherSubmissions, 0);
+  await assert.rejects(invoke(backfillPublisherStats, ctx, { secret: 'wrong' }), /Unauthorized/);
+});
+
+test('new projections preserve publisher ownership and keep API jobs unowned', async () => {
+  const { ctx, tables } = fixture();
+  await invoke(setupDigitalNudge, ctx);
+  await seedPublisher(ctx, 'custom-advertiser', 'custom-publisher');
+  await invoke(claimSubmission, ctx, { clientId: 'custom-advertiser', publisherId: 'custom-publisher', jobId: 'publisher-job' });
+  await ctx.db.insert('apiReviewLinks', { jobId: 'api-job', partnerId: 'partner' });
+  for (const [jobId, offerId, owner] of [
+    ['internal-job', 'kissterra', 'digital-nudge-kissterra'],
+    ['publisher-job', 'custom-advertiser', 'custom-publisher'],
+    ['api-job', 'kissterra', null],
+  ]) {
+    const review = { jobId, offerIds: [offerId], createdAt: 1, status: 'queued', report: {} };
+    await syncReviewOfferStats(ctx as any, review as any, 1);
+    await syncReviewOfferStats(ctx as any, { ...review, status: 'complete' } as any, 2);
+    assert.equal(tables.reviewOfferStats.find(row => row.jobId === jobId).publisherId, owner);
+  }
+});
+
+test('late publisher reservation and release keep the compact projection current', async () => {
+  const { ctx, tables } = fixture();
+  await seedPublisher(ctx);
+  await ctx.db.insert('reviewOfferStats', { jobId: 'job', offerId: 'kissterra', publisherId: null });
+  const args = { clientId: 'kissterra', publisherId: 'banana', jobId: 'job' };
+  await invoke(claimSubmission, ctx, args);
+  assert.equal(tables.reviewOfferStats[0].publisherId, 'banana');
+  await invoke(releaseUnstartedSubmission, ctx, args);
+  assert.equal(tables.reviewOfferStats[0].publisherId, null);
 });

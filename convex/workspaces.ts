@@ -1,10 +1,14 @@
 import { v } from 'convex/values';
-import { mutation, query, type QueryCtx } from './_generated/server.js';
+import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server.js';
 
 function authorize(secret: string) {
   if (!process.env.CONVEX_HTTP_SECRET || secret !== process.env.CONVEX_HTTP_SECRET) throw new Error('Unauthorized');
 }
 const secret = { secret: v.string() };
+async function projectSubmissionOwner(ctx: MutationCtx, clientId: string, jobId: string, publisherId: string | null) {
+  const stat = await ctx.db.query('reviewOfferStats').withIndex('by_job_id_and_offer_id', q => q.eq('jobId', jobId).eq('offerId', clientId)).unique();
+  if (stat && stat.publisherId !== publisherId) await ctx.db.patch(stat._id, { publisherId });
+}
 async function publisher(ctx: QueryCtx, id: string) {
   return ctx.db.query('publishers').withIndex('by_publisher_id', q => q.eq('publisherId', id)).unique();
 }
@@ -104,6 +108,7 @@ export const claimSubmission = mutation({
     const existing = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', args.clientId).eq('jobId', args.jobId)).unique();
     if (existing) {
       if (existing.publisherId !== args.publisherId || existing.clientId !== args.clientId) throw new Error('Submission unavailable');
+      await projectSubmissionOwner(ctx, args.clientId, args.jobId, args.publisherId);
       return null;
     }
     const limits = await plan(ctx, args.clientId);
@@ -112,6 +117,7 @@ export const claimSubmission = mutation({
     const count = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_counts_toward_usage_and_created_at', q => q.eq('clientId', args.clientId).eq('countsTowardUsage', true).gte('createdAt', monthStart)).take(limits.monthlyReviewLimit);
     if (count.length >= limits.monthlyReviewLimit) throw new Error('Monthly review allowance reached. Contact your advertiser to upgrade.');
     await ctx.db.insert('publisherSubmissions', { clientId: args.clientId, publisherId: args.publisherId, jobId: args.jobId, createdAt: Date.now(), countsTowardUsage: true });
+    await projectSubmissionOwner(ctx, args.clientId, args.jobId, args.publisherId);
     return null;
   },
 });
@@ -127,7 +133,10 @@ export const releaseUnstartedSubmission = mutation({
     const review = await ctx.db.query('reviews').withIndex('by_job_id', q => q.eq('jobId', args.jobId)).unique();
     if (review) return null; // An accepted/recoverable job keeps its reservation.
     const row = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', args.clientId).eq('jobId', args.jobId)).unique();
-    if (row?.publisherId === args.publisherId && row.countsTowardUsage) await ctx.db.delete(row._id);
+    if (row?.publisherId === args.publisherId && row.countsTowardUsage) {
+      await ctx.db.delete(row._id);
+      await projectSubmissionOwner(ctx, args.clientId, args.jobId, null);
+    }
     return null;
   },
 });

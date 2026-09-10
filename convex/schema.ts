@@ -274,6 +274,8 @@ export default defineSchema({
     jobId: v.string(), offerIds: v.array(v.string()), releasedBy: v.string(), createdAt: v.number(),
   }).index("by_job_id", ["jobId"]),
   reviewOfferStats: defineTable({
+    // undefined means legacy/unprojected; null means no publisher ownership.
+    publisherId: v.optional(v.union(v.string(), v.null())),
     withheld: v.optional(v.literal(true)),
     progress: v.optional(v.number()),
     message: v.optional(v.string()),

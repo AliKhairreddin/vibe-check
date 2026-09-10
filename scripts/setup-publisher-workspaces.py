@@ -55,6 +55,15 @@ def main():
     else:
         raise SystemExit('Backfill paused after one million rows. Run again to continue from the saved cursor.')
     print(f'Digital Nudge workspaces ready. Scanned {count} offer results; existing publisher and API ownership preserved.')
+    projected_count = 0
+    for _ in range(10000):
+        result = mutation('platform:backfillPublisherStats', {})
+        projected_count += result['processed']
+        if result['done']:
+            break
+    else:
+        raise SystemExit('Publisher statistics backfill paused. Run setup again to resume.')
+    print(f'Publisher statistics ready. Projected ownership for {projected_count} offer results.')
     source_count = 0
     for _ in range(20000):
         result = mutation('reviewSources:backfill', {})

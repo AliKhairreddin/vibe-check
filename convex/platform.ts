@@ -38,8 +38,13 @@ export const overview = query({
       ctx.db.query('reviewOfferStats').withIndex('by_created_at').order('desc').take(1000),
       ctx.db.query('reviewProcessingMetrics').withIndex('by_started_at').order('desc').take(200),
     ]);
-    const scopes = await Promise.all(stats.map(stat => ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', stat.offerId).eq('jobId', stat.jobId)).unique()));
-    const visible = stats.flatMap((stat, i) => stat.deletedAt !== undefined ? [] : [{ ...stat, publisherId: scopes[i]?.publisherId }]);
+    // Old rows remain readable during the resumable migration. Once projected,
+    // ownership needs no per-result database lookup on every dashboard refresh.
+    const visible = await Promise.all(stats.filter(stat => stat.deletedAt === undefined).map(async stat => {
+      if (stat.publisherId !== undefined) return stat;
+      const owner = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', stat.offerId).eq('jobId', stat.jobId)).unique();
+      return { ...stat, publisherId: owner?.publisherId ?? null };
+    }));
     const recentReviews = [...new Map(visible.map(stat => [stat.jobId, stat])).values()];
     const summary = (rows: typeof visible) => ({ reviews: rows.length, completed: rows.filter(row => row.status === 'complete').length, failed: rows.filter(row => row.status === 'failed').length, pending: rows.filter(row => !['complete', 'failed'].includes(row.status)).length, flagged: rows.filter(row => row.resultStatus === 'red' || row.resultStatus === 'yellow').length });
     const advertisers = DIGITAL_NUDGE_CLIENTS.map(clientId => ({ clientId, ...summary(visible.filter(row => row.offerId === clientId)), publishers: publishers.filter(p => p.clientId === clientId).map(p => ({ publisherId: p.publisherId, name: p.name, status: p.status, ...summary(visible.filter(row => row.publisherId === p.publisherId)) })) }));
@@ -62,7 +67,32 @@ export const backfillDigitalNudge = mutation({
     const previous = await ctx.db.query('maintenanceState').withIndex('by_key', q => q.eq('key', key)).unique();
     if (previous?.complete) return { processed: 0, done: true };
     const page = await ctx.db.query('reviewOfferStats').paginate({ cursor: previous?.cursor ?? null, numItems: 100 });
-    for (const row of page.page) await attributeInternalReview(ctx, row.offerId, row.jobId, row.createdAt);
+    for (const row of page.page) {
+      const publisherId = await attributeInternalReview(ctx, row.offerId, row.jobId, row.createdAt);
+      await ctx.db.patch(row._id, { publisherId });
+    }
+    const value = { key, complete: page.isDone, cursor: page.continueCursor, updatedAt: Date.now() };
+    if (previous) await ctx.db.patch(previous._id, value);
+    else await ctx.db.insert('maintenanceState', value);
+    return { processed: page.page.length, done: page.isDone };
+  },
+});
+
+export const backfillPublisherStats = mutation({
+  args: { secret: v.string() },
+  returns: v.object({ processed: v.number(), done: v.boolean() }),
+  handler: async (ctx, args) => {
+    authorize(args.secret);
+    const key = 'review-offer-publisher-stats-v1';
+    const previous = await ctx.db.query('maintenanceState').withIndex('by_key', q => q.eq('key', key)).unique();
+    if (previous?.complete) return { processed: 0, done: true };
+    const page = await ctx.db.query('reviewOfferStats').paginate({
+      cursor: previous?.cursor ?? null, numItems: 100, maximumBytesRead: 4_000_000,
+    });
+    for (const row of page.page) {
+      const owner = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', row.offerId).eq('jobId', row.jobId)).unique();
+      await ctx.db.patch(row._id, { publisherId: owner?.publisherId ?? null });
+    }
     const value = { key, complete: page.isDone, cursor: page.continueCursor, updatedAt: Date.now() };
     if (previous) await ctx.db.patch(previous._id, value);
     else await ctx.db.insert('maintenanceState', value);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, contextlib, logging, shutil, anyio
+from functools import partial
 from pathlib import Path
 from .media import MediaKind, image_metadata, prepare_image_frame
 from .models import ComplianceReport, Finding, JobStatus, OfferComplianceResult, OfferOutcome, OfferProfile, ReviewRequestMeta
@@ -38,6 +39,11 @@ from .timing import ProcessingTimer
 from .partner_api import persist_api_evidence
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
+
+
+async def _set_status(*args, **kwargs):
+    # Convex writes and local fsync must not pause every review on this event loop.
+    return await anyio.to_thread.run_sync(partial(set_status, *args, **kwargs))
 
 
 async def _timed_thread_call(timer:ProcessingTimer, stage:str, function, *args):
@@ -231,7 +237,7 @@ async def _review_offer(
     evidence_note:str,
 )->OfferComplianceResult:
     policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
-    partner_feedback_precedents=list_client_feedback_examples(profile.offer_id)
+    partner_feedback_precedents=await anyio.to_thread.run_sync(list_client_feedback_examples, profile.offer_id)
     evidence=build_review_evidence(
         media_kind,
         meta,
@@ -373,20 +379,20 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 write_json(jd/'ocr.json', ocr)
                 write_json(jd/'visual_observations.json', visual_observations)
                 write_json(jd/'transcript.json', transcript)
-            set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing ad copy with LLM', has_ad_copy=meta.has_ad_copy, has_creative=False)
+            await _set_status(job_id, JobStatus.reviewing_with_llm, 88, 'Reviewing ad copy with LLM', has_ad_copy=meta.has_ad_copy, has_creative=False)
         else:
             if media_path is None:
                 raise ValueError('Creative file path is required for media review jobs.')
             if media_kind == 'video':
-                set_status(job_id, JobStatus.processing_video, 10, 'Reading video metadata')
+                await _set_status(job_id, JobStatus.processing_video, 10, 'Reading video metadata')
                 media_metadata=await _timed_thread_call(timer, 'read_metadata', metadata, media_path)
                 write_json(jd/'metadata.json', media_metadata)
-                set_status(job_id, JobStatus.extracting_audio, 25, 'Extracting audio track')
+                await _set_status(job_id, JobStatus.extracting_audio, 25, 'Extracting audio track')
                 await _timed_thread_call(timer, 'extract_audio', extract_audio, media_path, audio_path)
                 transcript_task=asyncio.create_task(
                     _timed_transcription(timer, audio_path, meta.manual_transcript)
                 )
-                set_status(job_id, JobStatus.extracting_frames, 40, 'Sampling frames')
+                await _set_status(job_id, JobStatus.extracting_frames, 40, 'Sampling frames')
                 frames=await _timed_thread_call(
                     timer,
                     'extract_frames',
@@ -398,10 +404,10 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 )
                 evidence_note='Selected sampled video frames may be sent to a vision model; the final LLM receives OCR, transcript chunks, frame references, and compact visual observations.'
             else:
-                set_status(job_id, JobStatus.processing_image, 10, 'Reading image metadata')
+                await _set_status(job_id, JobStatus.processing_image, 10, 'Reading image metadata')
                 media_metadata=await _timed_thread_call(timer, 'read_metadata', image_metadata, media_path)
                 write_json(jd/'metadata.json', media_metadata)
-                set_status(job_id, JobStatus.extracting_frames, 40, 'Preparing image for OCR')
+                await _set_status(job_id, JobStatus.extracting_frames, 40, 'Preparing image for OCR')
                 frames=await _timed_thread_call(
                     timer,
                     'extract_frames',
@@ -411,20 +417,20 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 )
                 evidence_note='The prepared still image frame may be sent to a vision model; the final LLM receives OCR, supplied copy, notes, image metadata, and compact visual observations.'
             write_json(jd/'frames.json', frames)
-            set_status(job_id, JobStatus.running_ocr, 60, 'Running OCR')
+            await _set_status(job_id, JobStatus.running_ocr, 60, 'Running OCR')
             ocr=await _timed_thread_call(timer, 'ocr', run_ocr, jd/'frames', frames)
             write_json(jd/'ocr.json', ocr)
-            set_status(job_id, JobStatus.analyzing_visuals, 70, 'Analyzing sampled frames with vision model')
+            await _set_status(job_id, JobStatus.analyzing_visuals, 70, 'Analyzing sampled frames with vision model')
             with timer.stage('vision_analysis'):
                 visual_observations=await observe_frames_with_openrouter(jd/'frames', frames, ocr)
             write_json(jd/'visual_observations.json', visual_observations)
-            set_status(job_id, JobStatus.preparing_transcript, 80, 'Finishing timestamped transcript')
+            await _set_status(job_id, JobStatus.preparing_transcript, 80, 'Finishing timestamped transcript')
             if transcript_task is not None:
                 transcript=await transcript_task
             else:
                 transcript=await _timed_transcription(timer, audio_path, meta.manual_transcript)
             write_json(jd/'transcript.json', transcript)
-            set_status(job_id, JobStatus.reviewing_with_llm, 90, 'Reviewing with LLM')
+            await _set_status(job_id, JobStatus.reviewing_with_llm, 90, 'Reviewing with LLM')
         profiles=meta.offer_profiles or [built_in_acp_profile()]
         with timer.stage('offer_reviews'):
             offer_results=await asyncio.gather(*[
@@ -451,7 +457,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
         )
         report_json=report.model_dump(mode='json')
         with timer.stage('persist_report'):
-            set_report(job_id, report_json, meta.automation_run_id)
+            await anyio.to_thread.run_sync(set_report, job_id, report_json, meta.automation_run_id)
         if meta.api_partner_id:
             api_evidence={
                 'schema_version':1,
@@ -506,10 +512,10 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 job_id,
                 type(artifact_results[1]).__name__,
             )
-        rec=set_status(job_id, JobStatus.complete, 100, 'Complete')
+        rec=await _set_status(job_id, JobStatus.complete, 100, 'Complete')
         with timer.stage('completion_notifications'):
             try:
-                record_review_automation_job_result(meta, job_id)
+                await anyio.to_thread.run_sync(record_review_automation_job_result, meta, job_id)
             except Exception:
                 logger.exception('Could not finalize automation run for job %s', job_id)
             if meta.live_scan_kind and meta.live_scan_key:
@@ -557,7 +563,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
     except Exception as e:
         error_type=type(e).__name__
         failure_message=_failure_message(e)
-        failed_record = set_status(job_id, JobStatus.failed, 100, failure_message)
+        failed_record = await _set_status(job_id, JobStatus.failed, 100, failure_message)
         if meta.live_scan_kind and meta.live_scan_key:
             try:
                 await asyncio.to_thread(
@@ -570,11 +576,11 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             except Exception:
                 logger.exception('Could not fail live scan review %s',job_id)
         try:
-            release_review_automation_claim(meta)
+            await anyio.to_thread.run_sync(release_review_automation_claim, meta)
         except Exception:
             logger.exception('Could not release automation claim for failed job %s', job_id)
         try:
-            record_review_automation_job_result(meta, job_id)
+            await anyio.to_thread.run_sync(record_review_automation_job_result, meta, job_id)
         except Exception:
             logger.exception('Could not finalize failed automation run for job %s', job_id)
         if meta.has_batch:

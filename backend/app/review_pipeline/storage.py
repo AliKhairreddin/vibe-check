@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import urllib.error
-import urllib.request
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 # Propagates through asyncio tasks and anyio/asyncio thread workers. Durable API
 # attempts carry a fencing token so an expired worker cannot publish a result.
@@ -54,6 +57,35 @@ RESULT_STATUSES = {'green','yellow','red'}
 TRANSIENT_CONVEX_HTTP_CODES = {408, 409, 425, 429}
 CONVEX_CALL_ATTEMPTS = 4
 CONVEX_RETRY_BASE_SECONDS = 0.2
+_convex_client: httpx.Client | None = None
+_convex_client_lock = threading.Lock()
+
+
+def _get_convex_client() -> httpx.Client:
+    # One thread-safe pool per backend process, shared by API and review workers.
+    global _convex_client
+    with _convex_client_lock:
+        if _convex_client is None:
+            _convex_client = httpx.Client(
+                timeout=30,
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=60,
+                ),
+            )
+        return _convex_client
+
+
+@atexit.register
+def close_convex_client() -> None:
+    global _convex_client
+    with _convex_client_lock:
+        client, _convex_client = _convex_client, None
+    if client is not None:
+        client.close()
+
+
 LEGACY_RESULT_STATUSES = {
     'pass': 'green',
     'amber': 'yellow',
@@ -164,14 +196,19 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         'args': {**args, 'secret': CONVEX_HTTP_SECRET},
         'format': 'json',
     }
-    req=urllib.request.Request(
-        f'{CONVEX_URL}/api/{kind}',
-        data=json.dumps(payload).encode('utf-8'),
-        headers={'content-type':'application/json','accept':'application/json'},
-        method='POST',
-    )
-    with urllib.request.urlopen(req, timeout=30) as response:
-        data=json.loads(response.read().decode('utf-8'))
+    url=f'{CONVEX_URL}/api/{kind}'
+    try:
+        response=_get_convex_client().post(url, json=payload, headers={'accept':'application/json'})
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # Preserve the existing caller/retry contract when changing transport.
+        raise urllib.error.HTTPError(
+            url, exc.response.status_code, exc.response.reason_phrase,
+            exc.response.headers, None,
+        ) from None
+    except httpx.RequestError as exc:
+        raise urllib.error.URLError(type(exc).__name__) from None
+    data=response.json()
     if data.get('status') != 'success':
         raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
     return data.get('value')
