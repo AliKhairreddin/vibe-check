@@ -7,9 +7,12 @@ pydantic-settings==2.15.0
 httpx==0.28.1
 google-auth==2.55.2
 requests==2.34.2
-opencv-python-headless==4.10.0.84
+opencv-contrib-python==4.10.0.84
+numpy==2.3.5
 Pillow==12.3.0
-pytesseract==0.3.13
+paddleocr==3.7.0
+paddlex==3.7.2
+onnxruntime==1.30.0
 pypdf==6.16.0
 pytest==8.3.4
 reportlab==5.0.0

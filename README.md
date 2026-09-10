@@ -23,7 +23,7 @@ The system is intentionally hybrid:
 
 - Accepts MP4, JPG, PNG, WebP, or one copy-only review per non-empty input line.
 - Extracts media metadata with `ffprobe`, audio and frames with `ffmpeg`, and OCR-ready imagery with Pillow/OpenCV.
-- Runs Tesseract OCR, timestamped speech-to-text, and a capped sampled-frame vision pass.
+- Runs PaddleOCR PP-OCRv6 small, timestamped speech-to-text, and a capped sampled-frame vision pass.
 - Produces strict JSON reports with separate creative and ad-copy results.
 - Evaluates one evidence bundle against every active offer with saved guidelines; inactive or unconfigured offers remain visible as N/A.
 - Applies offer-scoped current internal rules above source guidelines on exact conflicts, while recording every permitted exception that changes a run decision.
@@ -73,7 +73,9 @@ R2 is intentionally not required. Uploaded creatives, extracted audio, frames, O
 
 Heavy jobs may run ffmpeg, OCR, vision, transcription, and final analysis. The queue therefore uses a configurable semaphore rather than launching an unbounded task for every upload. Browser admission and backend processing are both parallelized without overwhelming a single container. Video transcription starts as soon as audio extraction completes and overlaps frame extraction, OCR, and vision analysis. Short audio is transcribed in one timestamped request; longer audio retains bounded chunking with concurrent requests.
 
-The Worker consistently shards new review submissions across named container instances with `REVIEW_BACKEND_SHARDS`. Upload requests carry a per-review shard key so every chunk and completion request reaches the same container. Production uses ten `standard-3` shards with five review workers each, providing a configured ceiling of 50 concurrently processing creatives; the browser admits up to ten uploads at once so large files do not create 50 simultaneous client uploads. Convex remains the durable source of job, report, batch, artifact, and processing-timing state across shards.
+The Worker consistently shards new review submissions across named container instances with `REVIEW_BACKEND_SHARDS`. Upload requests carry a per-review shard key so every chunk and completion request reaches the same container. Production configures 40 `standard-4` shards with five review workers each, providing up to 200 job slots as demand wakes containers. The browser admits up to ten uploads at once. Convex remains the durable source of job, report, batch, artifact, and processing-timing state across shards.
+
+OCR uses two persistent PP-OCRv6 small predictors per container, with one ONNX Runtime CPU thread per predictor. Each predictor handles one frame at a time; concurrent creative jobs share the bounded pool. The image bundles checksum-verified detection and recognition models at pinned revisions, so cold starts need no model downloads. Startup fails if these models cannot load, and OCR failures fail the review rather than silently omitting text. Pixel-identical frames within one creative reuse their OCR result. Configure `OCR_WORKER_CONCURRENCY` and `OCR_CPU_THREADS` only after measuring container throughput; each defaults to two and one respectively.
 
 ### Evidence and Cost Control
 
@@ -97,7 +99,7 @@ The repository includes more than 200 backend and routing tests covering pipelin
 | --- | --- |
 | Frontend | React, TypeScript, Vite, TanStack Router/Query, Tailwind CSS |
 | API | FastAPI, Pydantic, Python |
-| Media | ffmpeg, ffprobe, OpenCV, Pillow, Tesseract |
+| Media | ffmpeg, ffprobe, OpenCV, Pillow, PaddleOCR / ONNX Runtime |
 | AI | OpenRouter chat, vision, and speech-to-text models |
 | Runtime | Cloudflare Workers, Static Assets, Containers |
 | State | Convex |
@@ -124,7 +126,6 @@ wrangler.jsonc               Worker, assets, container, and route config
 - Python 3.12
 - Node.js and pnpm
 - ffmpeg/ffprobe
-- Tesseract
 - Docker, when testing the production container shape
 
 ```bash
@@ -132,6 +133,7 @@ cp .env.example .env
 python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -r backend/requirements.txt
+python scripts/prepare-ocr-models.py
 pnpm install
 uvicorn backend.app.main:app --reload --port 8000
 pnpm --dir frontend dev

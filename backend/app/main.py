@@ -92,6 +92,7 @@ from .review_pipeline.queue import (
     stop_job_workers,
 )
 from .review_pipeline.media import detect_media_kind
+from .review_pipeline.ocr import initialize_ocr, shutdown_ocr, ocr_state
 from .review_pipeline.verticals import classify_review_vertical
 from .review_pipeline.drive import (
     FOLDER_MIME_TYPE,
@@ -415,6 +416,9 @@ def clean_live_source_url(value:str|None)->str|None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail startup if the bundled OCR models cannot load; never process a
+    # creative with an unavailable text-recognition engine.
+    await asyncio.to_thread(initialize_ocr)
     try:
         migration=await asyncio.to_thread(backfill_review_offer_stats)
         if migration['processed']:
@@ -440,6 +444,7 @@ async def lifespan(app: FastAPI):
     monitor.cancel()
     await asyncio.gather(monitor, return_exceptions=True)
     await stop_job_workers()
+    await asyncio.to_thread(shutdown_ocr)
 
 app=FastAPI(
     title='AdChecked',
@@ -2856,7 +2861,7 @@ def internal_queue_state(request:Request):
     return {
         **queue_state(), 'background': len(background_tasks),
         'configured_shards': int(os.getenv('REVIEW_BACKEND_SHARDS', '1')),
-        'ocr_thread_limit': os.getenv('OMP_THREAD_LIMIT'),
+        'ocr': ocr_state(),
     }
 
 

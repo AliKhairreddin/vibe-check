@@ -12,6 +12,7 @@ output/playwright/
 !.env.example
 data/jobs/*
 !data/jobs/.gitkeep
+data/ocr-models/
 
 # Cloudflare Tunnel credentials
 cloudflare/

@@ -1,0 +1,11 @@
+PP-OCRv6 small detection and recognition models
+Copyright PaddlePaddle Authors. Licensed under Apache License 2.0.
+
+The unmodified ONNX models and inference configuration are downloaded at image
+build time from the official PaddlePaddle model repositories. Exact revisions
+and SHA-256 checksums are recorded in ocr-models.json in this directory.
+
+Sources:
+https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx
+https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx
+https://github.com/PaddlePaddle/PaddleOCR

@@ -52,10 +52,10 @@ jobs:
       - name: Verify
         run: pnpm run verify
 
-      - name: Benchmark OCR CPU and thread settings
+      - name: Verify bundled PaddleOCR and concurrent processing
         run: |
           docker build --tag vibe-check-ocr-benchmark .
-          docker run --rm --entrypoint python \
+          timeout 300s docker run --rm --network none --cpus 4 --entrypoint python \
             --volume "$PWD/scripts/benchmark-ocr.py:/app/scripts/benchmark-ocr.py:ro" \
             vibe-check-ocr-benchmark /app/scripts/benchmark-ocr.py | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -202,7 +202,7 @@ jobs:
                   state = response.json()
                   assert state['workers'] > 0, 'No live job workers'
                   assert state['configured_shards'] == int(os.environ['CONFIGURED_BACKEND_SHARDS']), 'Wrong shard configuration'
-                  assert state['ocr_thread_limit'] == '1', 'Wrong OCR thread configuration'
+                  assert state['ocr'] == {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 1}, 'Wrong OCR engine or readiness'
                   print('Activated backend is healthy; shard and OCR configuration verified.')
                   break
               except Exception:
