@@ -51,6 +51,35 @@ def client():
 
 
 @pytest.mark.anyio
+async def test_internal_dispatch_wakes_workers_without_holding_a_request_open(monkeypatch):
+    monkeypatch.setenv('CONVEX_HTTP_SECRET', 'internal-test-secret')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr(partner_jobs, '_work_available', False)
+    drain = AsyncMock(side_effect=AssertionError('Dispatch should return immediately'))
+    monkeypatch.setattr(partner_jobs, 'drain_partner_jobs', drain)
+    async with client() as http:
+        denied = await http.post('/api/internal/partner-jobs')
+        assert denied.status_code == 401
+        assert not partner_jobs._work_available
+        response = await http.post('/api/internal/partner-jobs', headers={'x-automation-secret': 'internal-test-secret'})
+    assert response.status_code == 200
+    assert partner_jobs._work_available
+    assert 'workers' in response.json()
+    drain.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_idle_state_includes_background_maintenance(monkeypatch):
+    monkeypatch.setenv('CONVEX_HTTP_SECRET', 'internal-test-secret')
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.background_tasks', {object()})
+    async with client() as http:
+        response = await http.get('/api/internal/queue-state', headers={'x-automation-secret': 'internal-test-secret'})
+    assert response.status_code == 200
+    assert response.json()['background'] == 1
+
+
+@pytest.mark.anyio
 async def test_batch_freezes_only_requested_offer_and_returns_without_download(setup_api, monkeypatch):
     captured = {}
     download = AsyncMock(side_effect=AssertionError('Batch request must not download'))

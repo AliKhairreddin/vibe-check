@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { submit, getBatch, statusColors, getAsset, claim, heartbeat, finish, pending } from '../convex/apiJobs.ts';
+import { submit, getBatch, statusColors, getAsset, claim, heartbeat, finish, pending, dispatchState } from '../convex/apiJobs.ts';
 import { assertApiLease, syncApiJobState } from '../convex/apiJobState.ts';
 import { setReport, upsertStatus, listInterrupted, failInterrupted } from '../convex/reviews.ts';
 
@@ -21,6 +21,7 @@ function fixture() {
       const index = {
         eq(key: string, value: unknown) { predicates.push(row => row[key] === value); return index; },
         lte(key: string, value: number) { predicates.push(row => row[key] <= value); return index; },
+        gte(key: string, value: number) { predicates.push(row => row[key] >= value); return index; },
       };
       const matches = () => [...(tables[table] ?? [])].filter(row => predicates.every(p => p(row)))
         .sort((a, b) => {
@@ -80,6 +81,25 @@ test('100 creatives are reserved once, ordered, and batch idempotency rejects ch
   assert.equal(tables.apiJobBatches.length, 1);
   assert.equal(tables.apiMonthlyUsage[0].reviewsCreated, 100);
   await assert.rejects(invoke(submit, ctx, { ...args(100), requestHash: 'changed' }), /different batch/);
+});
+
+test('dispatch counts only available durable jobs and avoids heartbeat reads when idle', async () => {
+  const { ctx, tables, reads, args } = fixture();
+  const now = Date.now();
+  assert.deepEqual(await invoke(dispatchState, ctx, { now }), { pending: 0, instances: [] });
+  assert.equal(reads.includes('platformInstances'), false);
+  await invoke(submit, ctx, args(3));
+  const due = Date.now();
+  tables.apiReviewLinks[1].availableAt = due + 60_000;
+  tables.apiReviewLinks[2].queueManaged = false;
+  tables.platformInstances = [
+    { backendObjectId: 'warm', updatedAt: due, active: 1, pending: 0, workers: 5 },
+    { backendObjectId: 'stale', updatedAt: due - 180_001, active: 0, pending: 0, workers: 5 },
+  ];
+  const state = await invoke(dispatchState, ctx, { now: due });
+  assert.equal(state.pending, 1);
+  assert.deepEqual(state.instances.map((i: any) => i.backendObjectId), ['warm']);
+  await assert.rejects(invoke(dispatchState, ctx, { now: due, secret: 'wrong' }), /Unauthorized/);
 });
 
 test('invalid batch, unauthorized offer, exhausted quota and expired credentials reserve nothing', async () => {

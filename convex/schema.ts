@@ -29,6 +29,7 @@ export default defineSchema({
   reviewMedia: defineTable({ jobId: v.string(), storageId: v.id('_storage') })
     .index('by_job_id', ['jobId']),
   platformInstances: defineTable({
+    backendObjectId: v.optional(v.string()),
     instanceId: v.string(), updatedAt: v.number(), startedAt: v.number(), requests: v.number(), errors: v.number(),
     active: v.number(), pending: v.number(), workers: v.number(), cpuPercent: v.optional(v.number()),
     memoryBytes: v.optional(v.number()), memoryLimitBytes: v.optional(v.number()),

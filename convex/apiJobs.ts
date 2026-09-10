@@ -178,6 +178,34 @@ export const pending = query({
   },
 });
 
+export const dispatchState = query({
+  args: { secret: v.string(), now: v.number() },
+  returns: v.object({
+    pending: v.number(),
+    instances: v.array(v.object({
+      backendObjectId: v.optional(v.string()), updatedAt: v.number(),
+      active: v.number(), pending: v.number(), workers: v.number(),
+    })),
+  }),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    // Enough demand to fill every configured shard; avoid scanning a backlog.
+    const queued = await ctx.db.query("apiReviewLinks")
+      .withIndex("by_queue_managed_and_status_and_available_at", q =>
+        q.eq("queueManaged", true).eq("status", "active").lte("availableAt", args.now))
+      .take(500);
+    if (!queued.length) return { pending: 0, instances: [] };
+    const instances = await ctx.db.query("platformInstances")
+      .withIndex("by_updated_at", q => q.gte("updatedAt", args.now - 180_000))
+      .order("desc").take(200);
+    return {
+      pending: queued.length,
+      instances: instances.map(({ backendObjectId, updatedAt, active, pending, workers }) =>
+        ({ backendObjectId, updatedAt, active, pending, workers })),
+    };
+  },
+});
+
 export const claim = mutation({
   args: { secret: v.string() }, returns: v.any(),
   handler: async (ctx, args) => {

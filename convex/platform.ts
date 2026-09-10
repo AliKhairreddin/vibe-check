@@ -6,7 +6,7 @@ function authorize(secret: string) {
   if (!process.env.CONVEX_HTTP_SECRET || secret !== process.env.CONVEX_HTTP_SECRET) throw new Error('Unauthorized');
 }
 export const recordHeartbeat = mutation({
-  args: { secret: v.string(), instanceId: v.string(), startedAt: v.number(), requests: v.number(), errors: v.number(), active: v.number(), pending: v.number(), workers: v.number(), cpuPercent: v.optional(v.number()), memoryBytes: v.optional(v.number()), memoryLimitBytes: v.optional(v.number()) },
+  args: { secret: v.string(), backendObjectId: v.optional(v.string()), instanceId: v.string(), startedAt: v.number(), requests: v.number(), errors: v.number(), active: v.number(), pending: v.number(), workers: v.number(), cpuPercent: v.optional(v.number()), memoryBytes: v.optional(v.number()), memoryLimitBytes: v.optional(v.number()) },
   returns: v.null(), handler: async (ctx, args) => {
     authorize(args.secret);
     const previous = await ctx.db.query('platformInstances').withIndex('by_instance_id', q => q.eq('instanceId', args.instanceId)).unique();

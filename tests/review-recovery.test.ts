@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { listInterrupted, claimInterrupted, failInterrupted } from '../convex/reviews.ts';
+import { tickState } from '../convex/automations.ts';
 
 const secret = 'test-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
@@ -61,6 +62,18 @@ test('idle maintenance container leaves active and waiting work on other contain
   const rows = await invoke(listInterrupted, ctx, { limit: 100, idleInstanceId: 'maintenance' });
   assert.deepEqual(rows.map((row: any) => row.jobId), ['interrupted']);
   assert.equal(rows[0].processingInstanceId, 'old');
+});
+
+test('cron eligibility does not wake a container for healthy reviews or durable API work', async () => {
+  const { ctx, tables, add, now } = fixture();
+  tables.platformInstances.push({ instanceId: 'busy', updatedAt: now });
+  add('healthy', { processingInstanceId: 'busy', status: 'running_ocr' });
+  add('new', { updatedAt: now, status: 'queued' });
+  add('api', { apiBatchId: 'batch', status: 'queued' });
+  add('automation', { automationRunId: 'run' });
+  assert.equal((await invoke(tickState, ctx, { now })).needs_review_recovery, false);
+  add('interrupted-ocr', { status: 'running_ocr' });
+  assert.equal((await invoke(tickState, ctx, { now })).needs_review_recovery, true);
 });
 
 test('expired owners are recoverable and recent legacy work gets a rollout grace period', async () => {

@@ -5622,22 +5622,6 @@ def test_live_scan_telegram_message_links_live_page(monkeypatch):
     assert '/reviews/live-job/report' in message
 
 
-def test_worker_scheduled_recovery_precedes_automation_eligibility_gate():
-    worker_source = (
-        Path(__file__).resolve().parents[2] / 'worker' / 'index.ts'
-    ).read_text(encoding='utf-8')
-    scheduled_source = worker_source[worker_source.index('  scheduled('):]
-
-    recovery_request = scheduled_source.index(
-        'new URL("/api/internal/review-recovery"',
-    )
-    automation_gate = scheduled_source.index(
-        'if (!await hasDueAutomations(env)) return;',
-    )
-
-    assert recovery_request < automation_gate
-
-
 def test_worker_routes_api_browser_navigation_before_spa_assets():
     wrangler_config = json.loads(
         (Path(__file__).resolve().parents[2] / 'wrangler.jsonc').read_text(

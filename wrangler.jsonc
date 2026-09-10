@@ -15,8 +15,8 @@
     {
       "class_name": "ReviewBackend",
       "image": "./Dockerfile",
-      "instance_type": "standard-3",
-      "max_instances": 50,
+      "instance_type": "standard-4",
+      "max_instances": 100,
       "rollout_active_grace_period": 300
     }
   ],
@@ -134,7 +134,7 @@
     "OPENROUTER_STT_CHUNK_CONCURRENCY": "3",
     "OPENROUTER_STT_MAX_CHUNKS": "30",
     "OPENROUTER_STT_WHOLE_AUDIO_MAX_SECONDS": "90",
-    "REVIEW_BACKEND_SHARDS": "10",
+    "REVIEW_BACKEND_SHARDS": "40",
     "SESSION_TTL_SECONDS": "43200"
   },
   "observability": {

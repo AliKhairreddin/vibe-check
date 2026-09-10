@@ -1,3 +1,4 @@
+import { hasLocalWork, planPartnerDispatch, type ShardHeartbeat } from "./scaling";
 import { Container } from "@cloudflare/containers";
 import {
   ADMIN_HOST,
@@ -40,7 +41,6 @@ type OptionalSecrets = Env & {
   TELEGRAM_MESSAGE_THREAD_ID?: string;
 };
 
-const BACKEND_SLOTS = ["primary-blue", "primary-green", "primary-v25"] as const;
 const BACKEND_SHARD_HEADER = "x-vibe-backend-shard";
 const ADMIN_ORIGIN = `https://${ADMIN_HOST}`;
 const API_ORIGIN = `https://${API_HOST}`;
@@ -230,15 +230,6 @@ async function fetchBackend(env: Env, request: Request): Promise<Response> {
   throw lastError;
 }
 
-async function stopInactiveBackends(env: Env): Promise<void> {
-  const activeSlot = backendSlot(env);
-  await Promise.allSettled(
-    BACKEND_SLOTS
-      .filter((slot) => slot !== activeSlot)
-      .map((slot) => env.REVIEW_BACKEND.getByName(slot).destroy()),
-  );
-}
-
 type AutomationSchedule = {
   days_of_week: number[];
   last_run_status?: string | null;
@@ -287,6 +278,7 @@ async function hasDueAutomations(env: Env): Promise<boolean> {
       args: { secret: env.CONVEX_HTTP_SECRET, now },
       format: "json",
     }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     throw new Error(`Automation eligibility check failed with status ${response.status}`);
@@ -329,16 +321,21 @@ async function dispatchPartnerJobs(env: Env): Promise<void> {
   const response = await fetch(`${env.CONVEX_URL.replace(/\/$/, "")}/api/query`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path: "apiJobs:pending", args: { secret: env.CONVEX_HTTP_SECRET, now: Date.now() }, format: "json" }),
+    body: JSON.stringify({ path: "apiJobs:dispatchState", args: { secret: env.CONVEX_HTTP_SECRET, now: Date.now() }, format: "json" }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Partner queue check failed: ${response.status}`);
-  const result = await response.json() as { status?: string; value?: boolean };
+  const result = await response.json() as { status?: string; value?: { pending: number; instances: ShardHeartbeat[] } };
   if (result.status !== "success") throw new Error("Partner queue check failed");
-  if (!result.value) return;
+  if (!result.value?.pending) return;
   const count = backendShardCount(env);
-  const results = await Promise.allSettled(Array.from({ length: count }, async (_, index) => {
+  const shards = Array.from({ length: count }, (_, index) => {
     const name = count === 1 ? backendSlot(env) : `${backendSlot(env)}-${index}`;
+    return { name, objectId: env.REVIEW_BACKEND.idFromName(name).toString() };
+  });
+  const selected = planPartnerDispatch(result.value.pending, shards, result.value.instances,
+    Number(env.JOB_WORKER_CONCURRENCY) || 5, Date.now());
+  const results = await Promise.allSettled(selected.map(async ({ name }) => {
     const drained = await env.REVIEW_BACKEND.getByName(name).fetch(new Request(
       new URL("/api/internal/partner-jobs", ADMIN_ORIGIN),
       { method: "POST", headers: { "x-automation-secret": env.CONVEX_HTTP_SECRET } },
@@ -346,13 +343,13 @@ async function dispatchPartnerJobs(env: Env): Promise<void> {
     if (!drained.ok) throw new Error(`Partner queue drain failed: ${drained.status}`);
     await drained.body?.cancel();
   }));
-  console.log(JSON.stringify({ event: "partner_queue_dispatch", shards: count,
+  console.log(JSON.stringify({ event: "partner_queue_dispatch", shards: selected.length, configuredShards: count, pending: result.value.pending,
     failed: results.filter(result => result.status === "rejected").length }));
 }
 
 export class ReviewBackend extends Container<Env> {
   defaultPort = 8000;
-  sleepAfter = "30m";
+  sleepAfter = "5m";
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
@@ -362,6 +359,7 @@ export class ReviewBackend extends Container<Env> {
       ACP_CLIENT_USERNAME: optionalSecrets.ACP_CLIENT_USERNAME ?? "acp",
       ADMIN_PASSWORD: optionalSecrets.ADMIN_PASSWORD ?? "",
       API_PUBLIC_URL: env.API_PUBLIC_URL,
+      BACKEND_OBJECT_ID: ctx.id.toString(),
       APP_PASSWORD: optionalSecrets.APP_PASSWORD ?? "",
       APP_ADMIN_HOSTS: env.APP_ADMIN_HOSTS,
       APP_ALLOWED_HOSTS: env.APP_ALLOWED_HOSTS,
@@ -449,13 +447,6 @@ export class ReviewBackend extends Container<Env> {
       headers.set("x-app-password", optionalSecrets.APP_PASSWORD);
     }
     try {
-      if (await hasDueAutomations(this.env)) {
-        this.renewActivityTimeout();
-        console.log(JSON.stringify({
-          event: "review_backend_kept_awake_for_durable_work",
-        }));
-        return;
-      }
       const response = await this.containerFetch(
         "http://localhost/api/internal/queue-state",
         { headers },
@@ -463,8 +454,8 @@ export class ReviewBackend extends Container<Env> {
       if (!response.ok) {
         throw new Error(`Queue state returned ${response.status}`);
       }
-      const state = await response.json() as { active?: number; pending?: number };
-      if ((state.active ?? 0) > 0 || (state.pending ?? 0) > 0) {
+      const state = await response.json() as { active?: number; pending?: number; background?: number };
+      if (hasLocalWork(state)) {
         this.renewActivityTimeout();
         console.log(JSON.stringify({
           event: "review_backend_kept_awake",
@@ -620,7 +611,8 @@ export default {
       headers,
     });
     ctx.waitUntil((async () => {
-      await stopInactiveBackends(env);
+      // Eligibility stays at the edge so an idle platform can scale to zero.
+      if (!await hasDueAutomations(env)) return;
       const backend = env.REVIEW_BACKEND.getByName(backendName(env));
       const recoveryResponse = await backend.fetch(new Request(
         new URL("/api/internal/review-recovery", baseUrl),
@@ -646,7 +638,6 @@ export default {
         failed: recoveryResult.recovered?.failed ?? 0,
         requeued: recoveryResult.recovered?.requeued ?? 0,
       }));
-      if (!await hasDueAutomations(env)) return;
       const response = await backend.fetch(request);
       if (!response.ok) {
         throw new Error(`Automation tick failed with status ${response.status}`);

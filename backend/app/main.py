@@ -2853,7 +2853,11 @@ async def tick_review_automations(request:Request):
 @app.get('/api/internal/queue-state')
 def internal_queue_state(request:Request):
     require_automation_secret(request)
-    return queue_state()
+    return {
+        **queue_state(), 'background': len(background_tasks),
+        'configured_shards': int(os.getenv('REVIEW_BACKEND_SHARDS', '1')),
+        'ocr_thread_limit': os.getenv('OMP_THREAD_LIMIT'),
+    }
 
 
 @app.post('/api/internal/review-recovery')
@@ -2865,7 +2869,8 @@ async def internal_review_recovery(request:Request):
 @app.post('/api/internal/partner-jobs')
 async def internal_partner_jobs(request:Request):
     require_automation_secret(request)
-    return await partner_jobs.drain_partner_jobs()
+    partner_jobs.wake_partner_jobs()
+    return queue_state()
 
 
 @app.get('/api/automations', response_model=ReviewAutomationList)

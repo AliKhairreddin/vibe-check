@@ -1100,7 +1100,7 @@ function ReviewWorkspace() {
           <CardHeader>
             <CardTitle className="text-xl">Batch progress</CardTitle>
             <CardDescription className="max-sm:col-span-2">
-              Jobs are submitted in groups of up to {UPLOAD_CONCURRENCY}, without waiting for earlier reviews to finish. The backend can process up to 50 creatives in parallel; additional jobs wait automatically.
+              Jobs are submitted in groups of up to {UPLOAD_CONCURRENCY}, without waiting for earlier reviews to finish. Reviews process in parallel as capacity becomes available; additional jobs wait automatically.
             </CardDescription>
             <CardAction className="max-sm:row-span-1 max-sm:row-start-1">
               <div className="flex items-center gap-2">

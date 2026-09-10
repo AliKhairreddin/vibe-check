@@ -1,5 +1,5 @@
 FROM --platform=linux/amd64 python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 JOB_DATA_DIR=/tmp/vibe-check/jobs
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 JOB_DATA_DIR=/tmp/vibe-check/jobs OMP_THREAD_LIMIT=1
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr libgl1 libglib2.0-0 fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt

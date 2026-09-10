@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { interruptedReviews } from "./reviewRecovery.ts";
+import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
 
 const AUTOMATION_RUN_LEASE_MS = 30 * 60 * 1000;
@@ -83,7 +84,7 @@ export const tickState = query({
     requireSecret(args.secret);
     const maintenance = await ctx.db
       .query("maintenanceState")
-      .withIndex("by_key", (q) => q.eq("key", "reviewOfferStatsV2"))
+      .withIndex("by_key", (q) => q.eq("key", "reviewOfferStatsV4StoredVertical"))
       .unique();
     const running = await ctx.db
       .query("automationRuns")
@@ -100,28 +101,7 @@ export const tickState = query({
           )
           .take(1);
 
-    let needsReviewRecovery = false;
-    for (const status of [
-      "queued",
-      "extracting",
-      "analyzing_visuals",
-      "transcribing",
-      "reviewing_with_llm",
-    ]) {
-      const reviews = await ctx.db
-        .query("reviews")
-        .withIndex("by_status_deleted_automation_updated", (q) =>
-          q
-            .eq("status", status)
-            .eq("deletedAt", undefined)
-            .eq("automationRunId", undefined)
-        )
-        .take(1);
-      if (reviews.length) {
-        needsReviewRecovery = true;
-        break;
-      }
-    }
+    const needsReviewRecovery = (await interruptedReviews(ctx, 1, args.now)).length > 0;
 
     let needsNotification = false;
     for (const status of ["pending", "failed", "claimed"]) {

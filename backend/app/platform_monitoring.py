@@ -56,6 +56,7 @@ def heartbeat():
         return
     state = queue_state()
     storage._convex_call('mutation', 'platform:recordHeartbeat', {
+        **({'backendObjectId': os.environ['BACKEND_OBJECT_ID']} if os.environ.get('BACKEND_OBJECT_ID') else {}),
         'instanceId': INSTANCE_ID, 'startedAt': STARTED_AT, 'requests': _requests, 'errors': _errors,
         'active': state['active'], 'pending': state['pending'], 'workers': state['workers'], **resource_usage(),
     })

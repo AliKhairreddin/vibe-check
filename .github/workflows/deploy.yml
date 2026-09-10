@@ -52,6 +52,13 @@ jobs:
       - name: Verify
         run: pnpm run verify
 
+      - name: Benchmark OCR CPU and thread settings
+        run: |
+          docker build --tag vibe-check-ocr-benchmark .
+          docker run --rm --entrypoint python \
+            --volume "$PWD/scripts/benchmark-ocr.py:/app/scripts/benchmark-ocr.py:ro" \
+            vibe-check-ocr-benchmark /app/scripts/benchmark-ocr.py | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Check required deployment secrets
         run: |
           missing=0
@@ -94,11 +101,16 @@ jobs:
           deployment=$(retry_wrangler deployments status --json)
           version_id=$(echo "$deployment" | jq -r '.versions[] | select(.percentage == 100) | .version_id' | head -n 1)
           current_slot=""
+          current_shards=""
           if [ -n "$version_id" ]; then
             version=$(retry_wrangler versions view "$version_id" --json)
             current_slot=$(echo "$version" | jq -r '.resources.bindings[]? | select(.name == "BACKEND_SLOT") | .text' | head -n 1)
+            current_shards=$(echo "$version" | jq -r '.resources.bindings[]? | select(.name == "REVIEW_BACKEND_SHARDS") | .text' | head -n 1)
           fi
           current_slot=${current_slot:-primary-v25}
+          current_shards=${current_shards:-10}
+          configured_shards=$(jq -r '.vars.REVIEW_BACKEND_SHARDS' wrangler.jsonc)
+          echo "CONFIGURED_BACKEND_SHARDS=$configured_shards" >> "$GITHUB_ENV"
           if [ "$current_slot" = "primary-blue" ]; then
             next_slot=primary-green
           else
@@ -106,7 +118,9 @@ jobs:
           fi
           echo "CURRENT_BACKEND_SLOT=$current_slot" >> "$GITHUB_ENV"
           echo "NEXT_BACKEND_SLOT=$next_slot" >> "$GITHUB_ENV"
-          retry_wrangler deploy --keep-vars --var "BACKEND_SLOT:$current_slot"
+          # Preserve routing while the new image rolls out. --keep-vars alone
+          # would silently retain the old shard count at activation as well.
+          retry_wrangler deploy --keep-vars --var "BACKEND_SLOT:$current_slot" --var "REVIEW_BACKEND_SHARDS:$current_shards"
 
       - name: Wait for Cloudflare container rollout
         run: |
@@ -135,14 +149,15 @@ jobs:
           for attempt in $(seq 1 90); do
             info=$(retry_wrangler containers info "$app_id")
             errors=$(echo "$info" | jq '.health.errors | length')
-            healthy=$(echo "$info" | jq '.health.instances.healthy')
             rollout=$(echo "$info" | jq -r '.active_rollout_id // empty')
             if [ "$errors" -gt 0 ]; then
               echo "$info"
               echo "::error::Cloudflare container rollout reported an error"
               exit 1
             fi
-            if [ -z "$rollout" ] && [ "$healthy" -ge 1 ]; then
+            # Zero healthy instances is valid when all containers are asleep.
+            # The activation health check below verifies the new image starts.
+            if [ -z "$rollout" ]; then
               exit 0
             fi
             sleep 10
@@ -168,4 +183,30 @@ jobs:
             done
           }
 
-          retry_wrangler deploy --containers-rollout=none --keep-vars --var "BACKEND_SLOT:$NEXT_BACKEND_SLOT"
+          retry_wrangler deploy --containers-rollout=none --keep-vars --var "BACKEND_SLOT:$NEXT_BACKEND_SLOT" --var "REVIEW_BACKEND_SHARDS:$CONFIGURED_BACKEND_SHARDS"
+
+      - name: Check activated backend
+        run: |
+          python - <<'PY'
+          import os, subprocess, time
+          import httpx
+          secret = subprocess.run(['pnpm', 'exec', 'convex', 'env', 'get', 'CONVEX_HTTP_SECRET'],
+                                  capture_output=True, text=True, check=True).stdout.strip()
+          if not secret:
+              raise RuntimeError('Backend health-check credential is unavailable')
+          for attempt in range(7):
+              try:
+                  response = httpx.get('https://admin.adchecked.com/api/internal/queue-state',
+                                       headers={'x-automation-secret': secret}, timeout=120)
+                  response.raise_for_status()
+                  state = response.json()
+                  assert state['workers'] > 0, 'No live job workers'
+                  assert state['configured_shards'] == int(os.environ['CONFIGURED_BACKEND_SHARDS']), 'Wrong shard configuration'
+                  assert state['ocr_thread_limit'] == '1', 'Wrong OCR thread configuration'
+                  print('Activated backend is healthy; shard and OCR configuration verified.')
+                  break
+              except Exception:
+                  if attempt == 6:
+                      raise
+                  time.sleep(10)
+          PY
