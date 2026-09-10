@@ -119,6 +119,7 @@ export function isAdminPagePath(pathname: string): boolean {
     || pathname === '/live-scans'
     || pathname === '/automations'
     || pathname === '/settings'
+    || pathname === '/learning'
     || pathname === '/shares'
     || pathname === '/publisher'
     || pathname.startsWith('/reviews/')

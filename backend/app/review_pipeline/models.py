@@ -189,6 +189,8 @@ class OfferComplianceResult(BaseModel):
     offer_id: str = 'acp'
     offer_name: str = 'ACP'
     guideline_version: int | None = None
+    learning_version: int = 0
+    applied_learning: list[str] = Field(default_factory=list)
     overall_status: ResultStatus
     summary: str
     source_results: SourceResults = Field(default_factory=SourceResults)
@@ -620,9 +622,12 @@ class ReviewBatch(BaseModel):
 
 
 class ClientReviewDecisionInput(BaseModel):
+    feedback_scope: Literal['similar_creatives', 'this_creative'] | None = None
+    finding_index: int | None = Field(default=None, ge=0, le=24)
     decision: Literal['pending', 'approved', 'disapproved']
     feedback_reason: Literal[
         'false_positive',
+        'confirmed_issue',
         'missed_policy_issue',
         'partner_preference',
         'one_off_exception',

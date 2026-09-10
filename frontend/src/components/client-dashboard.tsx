@@ -141,6 +141,8 @@ type DecisionInput = {
   decision: ClientDecisionValue;
   feedbackNote?: string;
   feedbackReason?: ClientFeedbackReason;
+  feedbackScope?: 'similar_creatives' | 'this_creative';
+  findingIndex?: number;
 };
 
 type ClientAuthValue = {
@@ -423,7 +425,7 @@ function ClientDashboard() {
   }, [allGroups, expandedGroups, queryClient, selectedPortal]);
 
   const decisionMutation = useMutation({
-    mutationFn: ({ clientId, jobId, decision, feedbackNote, feedbackReason }: {
+    mutationFn: ({ clientId, jobId, decision, feedbackNote, feedbackReason, feedbackScope, findingIndex }: {
       clientId: string;
       jobId: string;
     } & DecisionInput) => decideClientReview(
@@ -431,7 +433,7 @@ function ClientDashboard() {
       jobId,
       decision,
       feedbackNote !== undefined || feedbackReason
-        ? { note: feedbackNote, reason: feedbackReason }
+        ? { note: feedbackNote, reason: feedbackReason, scope: feedbackScope, findingIndex }
         : undefined
     ),
     onSuccess: (decision, variables) => {
@@ -1045,7 +1047,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
   }, [review.decision?.feedback_note, review.job_id]);
 
   function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
-    if (decision !== aiDecision(review)) {
+    if (review.ai_status === 'yellow' || decision !== aiDecision(review)) {
       setDraftDecision(decision);
       if (!isExpanded) onToggle();
       return;
@@ -1126,6 +1128,8 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
                 decision: review.decision.decision,
                 feedbackNote: note,
                 ...(review.decision.feedback_reason ? { feedbackReason: review.decision.feedback_reason } : {}),
+                ...(review.decision.feedback_scope ? { feedbackScope: review.decision.feedback_scope } : {}),
+                ...(review.decision.finding_index != null ? { findingIndex: review.decision.finding_index } : {}),
               });
             }
           }}
@@ -1135,14 +1139,15 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
       ) : null}
       {draftDecision ? (
         <FeedbackForm
+          clientId={clientId}
           decision={draftDecision}
           initialNote={draftNote}
           isSaving={isSaving}
           review={review}
           onCancel={() => setDraftDecision(null)}
-          onSubmit={(feedbackReason, feedbackNote) => {
+          onSubmit={(feedbackReason, feedbackNote, feedbackScope, findingIndex) => {
             setDraftNote(feedbackNote);
-            onDecide({ decision: draftDecision, feedbackNote, feedbackReason });
+            onDecide({ decision: draftDecision, feedbackNote, feedbackReason, feedbackScope, findingIndex });
             setDraftDecision(null);
           }}
         />
@@ -1205,12 +1210,12 @@ function ClientReviewDetail() {
     staleTime: 60_000,
   });
   const decisionMutation = useMutation({
-    mutationFn: ({ decision, feedbackNote, feedbackReason }: DecisionInput) => decideClientReview(
+    mutationFn: ({ decision, feedbackNote, feedbackReason, feedbackScope, findingIndex }: DecisionInput) => decideClientReview(
       clientId,
       jobId,
       decision,
       feedbackNote !== undefined || feedbackReason
-        ? { note: feedbackNote, reason: feedbackReason }
+        ? { note: feedbackNote, reason: feedbackReason, scope: feedbackScope, findingIndex }
         : undefined
     ),
     onSuccess: (decision) => {
@@ -1243,7 +1248,7 @@ function ClientReviewDetail() {
       <div className="grid gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to reviews</Link>
-          <div className="flex flex-wrap gap-2"><ShareButton jobIds={[jobId]} clientId={clientId} />{session.role !== 'publisher' ? <DecisionControl review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} /> : <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge>}</div>
+          <div className="flex flex-wrap gap-2"><ShareButton jobIds={[jobId]} clientId={clientId} />{session.role !== 'publisher' ? <DecisionControl clientId={clientId} review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} /> : <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge>}</div>
         </div>
 
         <Card>
@@ -1306,16 +1311,21 @@ function FindingCard({ clientId, driveUrl, fileName, finding, frame, index, jobI
   );
 }
 
-function FeedbackForm({ decision, initialNote = '', isSaving, onCancel, onSubmit, review }: {
+function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel, onSubmit, review }: {
+  clientId: string;
   decision: Exclude<ClientDecisionValue, 'pending'>;
   initialNote?: string;
   isSaving: boolean;
   onCancel: () => void;
-  onSubmit: (reason: ClientFeedbackReason, note: string) => void;
+  onSubmit: (reason: ClientFeedbackReason, note: string, scope: 'similar_creatives' | 'this_creative', findingIndex?: number) => void;
   review: ClientReviewItem;
 }) {
   const [reason, setReason] = useState<ClientFeedbackReason | ''>('');
   const [note, setNote] = useState(initialNote);
+  const [scope, setScope] = useState<'similar_creatives' | 'this_creative'>('similar_creatives');
+  const [findingIndex, setFindingIndex] = useState('');
+  const detail = useQuery({ queryKey: ['client', clientId, 'review', review.job_id], queryFn: () => getClientReview(clientId, review.job_id), staleTime: 60_000 });
+  const findings = detail.data?.report.findings ?? [];
   const options = feedbackReasonOptions(decision);
   const noteRequired = reason ? isCalibrationReason(reason) : false;
   const canSubmit = Boolean(reason) && (!noteRequired || note.trim().length >= 3);
@@ -1331,11 +1341,11 @@ function FeedbackForm({ decision, initialNote = '', isSaving, onCancel, onSubmit
       onSubmit={(event) => {
         event.preventDefault();
         if (!reason || !canSubmit) return;
-        onSubmit(reason, note.trim());
+        onSubmit(reason, note.trim(), isCalibrationReason(reason) ? scope : 'this_creative', findingIndex ? Number(findingIndex) - 1 : undefined);
       }}
     >
       <div className="grid gap-1">
-        <p className="text-sm font-semibold">Why are you choosing a different decision?</p>
+        <p className="text-sm font-semibold">What informed your decision?</p>
         <p className="text-xs leading-5 text-muted-foreground">Choose the reason that best matches your decision.</p>
       </div>
       <div className="grid gap-1.5">
@@ -1361,6 +1371,17 @@ function FeedbackForm({ decision, initialNote = '', isSaving, onCancel, onSubmit
           onChange={(event) => setNote(event.currentTarget.value)}
         />
       </div>
+      {findings.length > 0 ? <div className="grid gap-1.5">
+        <Label htmlFor={`feedback-finding-${review.job_id}`}>Related finding (optional)</Label>
+        <Select id={`feedback-finding-${review.job_id}`} value={findingIndex} onValueChange={(value) => setFindingIndex(String(value))}
+          options={[{ value: '', label: 'General feedback or a missed issue' }, ...findings.map((finding, index) => ({ value: String(index + 1), label: `${index + 1}. ${finding.evidence}` }))]} />
+      </div> : null}
+      {reason && isCalibrationReason(reason) ? <div className="grid gap-1.5">
+        <Label htmlFor={`feedback-scope-${review.job_id}`}>Use this feedback for</Label>
+        <Select id={`feedback-scope-${review.job_id}`} value={scope} onValueChange={(value) => setScope(value as typeof scope)}
+          options={[{ value: 'this_creative', label: 'This creative only' }, { value: 'similar_creatives', label: 'Future similar creatives too' }]} />
+        <p className="text-xs leading-5 text-muted-foreground">Reusable feedback is checked against other decisions before guidelines change automatically.</p>
+      </div> : null}
       <div className="flex justify-end gap-2">
         <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={onCancel}>Cancel</Button>
         <Button type="submit" size="xs" disabled={isSaving || !canSubmit}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Save decision</Button>
@@ -1369,7 +1390,7 @@ function FeedbackForm({ decision, initialNote = '', isSaving, onCancel, onSubmit
   );
 }
 
-function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; onDecide: (input: DecisionInput) => void; review: ClientReviewItem }) {
+function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: string; isSaving: boolean; onDecide: (input: DecisionInput) => void; review: ClientReviewItem }) {
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
   const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
   const [isNoteOpen, setIsNoteOpen] = useState(false);
@@ -1379,7 +1400,7 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
   }, [review.decision?.feedback_note, review.job_id]);
 
   function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
-    if (decision !== aiDecision(review)) {
+    if (review.ai_status === 'yellow' || decision !== aiDecision(review)) {
       setDraftDecision(decision);
       return;
     }
@@ -1424,6 +1445,8 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
                 decision: review.decision.decision,
                 feedbackNote: note,
                 ...(review.decision.feedback_reason ? { feedbackReason: review.decision.feedback_reason } : {}),
+                ...(review.decision.feedback_scope ? { feedbackScope: review.decision.feedback_scope } : {}),
+                ...(review.decision.finding_index != null ? { findingIndex: review.decision.finding_index } : {}),
               });
             }
           }}
@@ -1433,14 +1456,15 @@ function DecisionControl({ isSaving, onDecide, review }: { isSaving: boolean; on
       ) : null}
       {draftDecision ? (
         <FeedbackForm
+          clientId={clientId}
           decision={draftDecision}
           initialNote={draftNote}
           isSaving={isSaving}
           review={review}
           onCancel={() => setDraftDecision(null)}
-          onSubmit={(feedbackReason, feedbackNote) => {
+          onSubmit={(feedbackReason, feedbackNote, feedbackScope, findingIndex) => {
             setDraftNote(feedbackNote);
-            onDecide({ decision: draftDecision, feedbackNote, feedbackReason });
+            onDecide({ decision: draftDecision, feedbackNote, feedbackReason, feedbackScope, findingIndex });
             setDraftDecision(null);
           }}
         />
@@ -1646,8 +1670,9 @@ function DecisionLayerLine({ label, values }: {
 }
 
 function AiRecommendation({ status }: { status: OverallStatus }) {
-  const approved = status !== 'red';
-  return <Badge className={cn(status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300')} variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}>{approved ? <CheckCircle2 /> : <XCircle />}{approved ? 'AI recommends approval' : 'AI recommends disapproval'}</Badge>;
+  if (status === 'yellow') return <Badge variant="outline" className="border-yellow-600/40 bg-yellow-400/15 text-yellow-800 dark:text-yellow-200">Needs an edit or your judgment</Badge>;
+  const approved = status === 'green';
+  return <Badge variant={status === 'red' ? 'destructive' : status === 'green' ? 'secondary' : 'outline'}>{approved ? <CheckCircle2 /> : <XCircle />}{approved ? 'AI recommends approval' : 'AI recommends disapproval'}</Badge>;
 }
 
 function StatusBadge({ status }: { status: OverallStatus }) {
@@ -1712,11 +1737,11 @@ export function effectiveReviewStatus(review: ClientReviewItem): OverallStatus {
 
 export function isClientOverride(review: ClientReviewItem) {
   if (!review.decision) return false;
-  return review.decision.decision !== aiDecision(review);
+  return review.ai_status !== 'yellow' && review.decision.decision !== aiDecision(review);
 }
 
 function isCalibrationReason(reason: ClientFeedbackReason) {
-  return reason === 'false_positive' || reason === 'missed_policy_issue' || reason === 'partner_preference';
+  return reason === 'confirmed_issue' || reason === 'false_positive' || reason === 'missed_policy_issue' || reason === 'partner_preference';
 }
 
 function feedbackReasonOptions(decision: Exclude<ClientDecisionValue, 'pending'>): { label: string; value: ClientFeedbackReason }[] {
@@ -1729,6 +1754,7 @@ function feedbackReasonOptions(decision: Exclude<ClientDecisionValue, 'pending'>
     ];
   }
   return [
+    { label: 'The flagged issue needs fixing', value: 'confirmed_issue' },
     { label: 'AdChecked missed a policy issue', value: 'missed_policy_issue' },
     { label: 'Use this preference for similar creatives', value: 'partner_preference' },
     { label: 'Business decision', value: 'business_decision' },

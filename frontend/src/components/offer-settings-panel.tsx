@@ -334,6 +334,7 @@ export function OfferSettingsPanel() {
         <CardTitle className="text-xl">Offer profiles</CardTitle>
         <CardDescription>
           Maintain source guidelines and higher-priority current internal rules separately for every offer.
+          {selectedOfferId ? <a className="ml-1 font-medium underline underline-offset-4" href={`/learning?offer=${encodeURIComponent(selectedOfferId)}`}>View learning and version history</a> : null}
         </CardDescription>
         <CardAction>
           <Button

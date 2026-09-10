@@ -15,6 +15,8 @@ import type * as apiPartners from "../apiPartners.js";
 import type * as automations from "../automations.js";
 import type * as batches from "../batches.js";
 import type * as clientReviews from "../clientReviews.js";
+import type * as learning from "../learning.js";
+import type * as learningTypes from "../learningTypes.js";
 import type * as liveScans from "../liveScans.js";
 import type * as offers from "../offers.js";
 import type * as platform from "../platform.js";
@@ -46,6 +48,8 @@ declare const fullApi: ApiFromModules<{
   automations: typeof automations;
   batches: typeof batches;
   clientReviews: typeof clientReviews;
+  learning: typeof learning;
+  learningTypes: typeof learningTypes;
   liveScans: typeof liveScans;
   offers: typeof offers;
   platform: typeof platform;

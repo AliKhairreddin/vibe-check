@@ -2639,7 +2639,7 @@ async def test_effective_policy_review_returns_green_with_valid_override(monkeyp
     async def fake_effective_review(evidence, model):
         review_calls.append(evidence)
         assert evidence['internal_overrides'][0]['override_id'] == 'cash-imagery'
-        assert evidence['partner_feedback_precedents'] == [precedent]
+        assert evidence['partner_feedback_precedents'] == []
         return ComplianceReport.model_validate({
             'overall_status':'green',
             'summary':'Ready under the current internal rule.',
@@ -2675,7 +2675,7 @@ async def test_effective_policy_review_returns_green_with_valid_override(monkeyp
     assert result.applied_overrides[0].override_id == 'cash-imagery'
     assert result.applied_overrides[0].title == 'Cash imagery exception'
     assert result.internal_disposition == 'accepted_with_override'
-    assert result.policy_sources[-1] == 'ACP partner feedback precedents (1)'
+    assert result.policy_sources[-1] == f'ACP current internal rules (version {profile.version})'
     outcomes=review_jobs._completed_offer_outcomes(
         ReviewRequestMeta(offer_outcomes=[OfferOutcome(
             offer_id='acp',
@@ -3320,7 +3320,7 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert decision.json()['feedback_note'] == 'Approved after client review.'
     assert updated.json()['reviews'][0]['decision']['decision'] == 'approved'
     assert updated.json()['reviews'][0]['decision']['feedback_note'] == 'Approved after client review.'
-    assert missing_feedback.status_code == 400
+    assert missing_feedback.status_code == 200  # Yellow is a request for judgment, not an approval.
     assert learning_decision.status_code == 200
     assert learning_decision.json()['feedback_reason'] == 'missed_policy_issue'
     assert learning_reviews.json()['reviews'][0]['decision']['feedback_note'] == 'The price disclaimer must appear in the same frame.'

@@ -96,6 +96,7 @@ LEGACY_RESULT_STATUSES = {
 }
 CALIBRATION_FEEDBACK_REASONS = {
     'false_positive',
+    'confirmed_issue',
     'missed_policy_issue',
     'partner_preference',
 }
@@ -1142,6 +1143,8 @@ def set_client_review_decision(
     decision:str,
     feedback_reason:str|None=None,
     feedback_note:str='',
+    feedback_scope:str|None=None,
+    finding_index:int|None=None,
 )->dict[str, Any]:
     if decision not in {'approved','disapproved'}:
         raise ValueError('Decision must be approved or disapproved.')
@@ -1156,6 +1159,10 @@ def set_client_review_decision(
         'jobId':job_id,
         'decision':decision,
     }
+    if feedback_scope is not None:
+        args['feedbackScope']=feedback_scope
+    if finding_index is not None:
+        args['findingIndex']=finding_index
     if feedback_reason is not None:
         args['feedbackReason']=feedback_reason
     if feedback_note:
@@ -1169,13 +1176,12 @@ def set_client_review_decision(
     ai_status=_normalize_result_status(report.get('overall_status'))
     if ai_status is None:
         raise ValueError('Client review result is unavailable.')
-    expected_decision='disapproved' if ai_status == 'red' else 'approved'
-    is_override=decision != expected_decision
+    expected_decision=None if ai_status == 'yellow' else 'disapproved' if ai_status == 'red' else 'approved'
+    is_override=expected_decision is not None and decision != expected_decision
     if is_override and feedback_reason is None:
         raise ValueError('Tell us why your decision differs from AdChecked.')
     if (
-        is_override
-        and feedback_reason in CALIBRATION_FEEDBACK_REASONS
+        feedback_reason in CALIBRATION_FEEDBACK_REASONS
         and len(feedback_note) < 3
     ):
         raise ValueError('Add a short note so AdChecked can learn the policy distinction.')
@@ -1203,7 +1209,15 @@ def set_client_review_decision(
         'jobId':job_id,
         'offerId':offer_id,
     }
-    if is_override and feedback_reason is not None:
+    if feedback_scope is not None:
+        value['feedbackScope']=feedback_scope
+    if finding_index is not None:
+        if finding_index < 0 or finding_index >= len(report.get('findings', [])):
+            raise ValueError('Choose a finding from this review.')
+        value['findingIndex']=finding_index
+    value['guidelineVersion']=report.get('guideline_version')
+    value['learningVersion']=report.get('learning_version', 0)
+    if feedback_reason is not None:
         value['feedbackReason']=feedback_reason
     if feedback_note:
         value['feedbackNote']=feedback_note

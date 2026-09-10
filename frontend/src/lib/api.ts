@@ -180,6 +180,8 @@ export type OfferResult = {
   offer_id: string;
   offer_name: string;
   guideline_version?: number | null;
+  learning_version?: number;
+  applied_learning?: string[];
   overall_status: ResultStatus;
   summary: string;
   source_results?: {
@@ -229,12 +231,15 @@ export type ReviewEvidence = {
 export type ClientDecisionValue = 'pending' | 'approved' | 'disapproved';
 export type ClientFeedbackReason =
   | 'false_positive'
+  | 'confirmed_issue'
   | 'missed_policy_issue'
   | 'partner_preference'
   | 'one_off_exception'
   | 'business_decision';
 
 export type ClientReviewDecision = {
+  feedback_scope?: 'similar_creatives' | 'this_creative' | null;
+  finding_index?: number | null;
   decided_at: number;
   decision: Exclude<ClientDecisionValue, 'pending'>;
   feedback_note: string | null;
@@ -1143,7 +1148,7 @@ export async function decideClientReview(
   clientId: string,
   jobId: string,
   decision: ClientDecisionValue,
-  feedback?: { note?: string; reason?: ClientFeedbackReason }
+  feedback?: { note?: string; reason?: ClientFeedbackReason; scope?: 'similar_creatives' | 'this_creative'; findingIndex?: number }
 ): Promise<ClientReviewDecision | null> {
   return requestJson<ClientReviewDecision | null>(
     `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/decision`,
@@ -1154,6 +1159,8 @@ export async function decideClientReview(
         decision,
         ...(feedback ? { feedback_note: feedback.note ?? '' } : {}),
         ...(feedback?.reason ? { feedback_reason: feedback.reason } : {}),
+        ...(feedback?.scope ? { feedback_scope: feedback.scope } : {}),
+        ...(feedback?.findingIndex !== undefined ? { finding_index: feedback.findingIndex } : {}),
       }),
     }
   );

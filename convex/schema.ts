@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { candidateValidator, feedbackFields, lessonValidator, learningMetricsValidator } from './learningTypes.ts';
 
 export default defineSchema({
   publishers: defineTable({
@@ -91,6 +92,8 @@ export default defineSchema({
     .index("by_job_id", ["jobId"])
     .index("by_started_at", ["startedAt"]),
   clientReviewDecisions: defineTable({
+    ...feedbackFields,
+    learningFindings: v.optional(v.any()),
     aiFindings: v.optional(v.array(v.string())),
     aiStatus: v.optional(v.union(
       v.literal("green"),
@@ -105,6 +108,7 @@ export default defineSchema({
     feedbackNote: v.optional(v.string()),
     feedbackReason: v.optional(v.union(
       v.literal("false_positive"),
+      v.literal("confirmed_issue"),
       v.literal("missed_policy_issue"),
       v.literal("partner_preference"),
       v.literal("one_off_exception"),
@@ -119,6 +123,8 @@ export default defineSchema({
     .index("by_job_id", ["jobId"])
     .index("by_offer_id_and_decided_at", ["offerId", "decidedAt"]),
   clientReviewDecisionHistory: defineTable({
+    ...feedbackFields,
+    learningFindings: v.optional(v.any()),
     aiFindings: v.optional(v.array(v.string())),
     aiStatus: v.optional(v.union(
       v.literal("green"),
@@ -133,6 +139,7 @@ export default defineSchema({
     feedbackNote: v.optional(v.string()),
     feedbackReason: v.optional(v.union(
       v.literal("false_positive"),
+      v.literal("confirmed_issue"),
       v.literal("missed_policy_issue"),
       v.literal("partner_preference"),
       v.literal("one_off_exception"),
@@ -654,6 +661,34 @@ export default defineSchema({
     .index("by_partner_id_and_created_at", ["partnerId", "createdAt"])
     .index("by_status_and_next_attempt_at", ["status", "nextAttemptAt"])
     .index("by_status_and_lease_expires_at", ["status", "leaseExpiresAt"]),
+  learningEvidence: defineTable({
+    jobId: v.string(), offerId: v.string(), guidelineVersion: v.number(), learningVersion: v.number(),
+    fingerprint: v.string(), evidence: v.any(), complete: v.boolean(), createdAt: v.number(),
+  }).index('by_job_id_and_offer_id', ['jobId', 'offerId']),
+  learningStates: defineTable({
+    offerId: v.string(), enabled: v.boolean(), generation: v.number(), version: v.number(),
+    minimumRunGeneration: v.optional(v.number()),
+    rerunRequested: v.optional(v.boolean()),
+    status: v.union(v.literal('pending'), v.literal('processing'), v.literal('idle'), v.literal('failed'), v.literal('paused')),
+    nextAttemptAt: v.number(), attempts: v.number(), leaseToken: v.optional(v.string()),
+    message: v.string(), updatedAt: v.number(), suppressedKeys: v.array(v.string()),
+  }).index('by_offer_id', ['offerId']).index('by_status_and_next_attempt_at', ['status', 'nextAttemptAt']),
+  learningVersions: defineTable({
+    offerId: v.string(), version: v.number(), guidelineVersion: v.number(), generation: v.number(),
+    lessons: v.array(lessonValidator), baseText: v.string(),
+    reason: v.string(), actor: v.string(), createdAt: v.number(), metrics: learningMetricsValidator,
+    decisions: v.array(v.object({ id: v.string(), jobId: v.string(), decidedAt: v.number(),
+      decision: v.string(), note: v.string(), reason: v.string() })),
+  }).index('by_offer_id_and_version', ['offerId', 'version']),
+  learningRuns: defineTable({
+    offerId: v.string(), generation: v.number(), guidelineVersion: v.number(), createdAt: v.number(),
+    candidates: v.array(candidateValidator), message: v.string(),
+  }).index('by_offer_id_and_created_at', ['offerId', 'createdAt']),
+  learningShadows: defineTable({
+    offerId: v.string(), jobId: v.string(), runId: v.id('learningRuns'), fingerprint: v.string(),
+    baseline: v.string(), candidate: v.string(), createdAt: v.number(),
+  }).index('by_offer_id_and_run_id', ['offerId', 'runId'])
+    .index('by_job_id_and_offer_id', ['jobId', 'offerId']),
   offerProfiles: defineTable({
     createdAt: v.number(),
     displayName: v.string(),

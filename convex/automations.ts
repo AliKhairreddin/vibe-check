@@ -102,6 +102,9 @@ export const tickState = query({
           .take(1);
 
     const needsReviewRecovery = (await interruptedReviews(ctx, 1, args.now)).length > 0;
+    const learningJobs = await Promise.all(['pending', 'processing'].map(status =>
+      ctx.db.query('learningStates').withIndex('by_status_and_next_attempt_at', q =>
+        status === 'processing' ? q.eq('status', 'processing') : q.eq('status', 'pending').lte('nextAttemptAt', args.now)).take(1)));
 
     let needsNotification = false;
     for (const status of ["pending", "failed", "claimed"]) {
@@ -198,7 +201,7 @@ export const tickState = query({
         || expiredApiEvidence.length
         || needsApiReconciliation
       ),
-      needs_maintenance: !maintenance?.complete,
+      needs_maintenance: !maintenance?.complete || learningJobs.some(rows => rows.length > 0),
     };
   },
 });

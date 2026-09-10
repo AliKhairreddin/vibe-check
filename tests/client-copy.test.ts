@@ -44,7 +44,7 @@ test('keeps internal review-processing language out of the customer portal', () 
 
 test('uses direct customer-facing sign-in and decision copy', () => {
   assert.match(clientDashboardSource, /Sign in to review your creatives and share your decisions\./);
-  assert.match(clientDashboardSource, /Why are you choosing a different decision\?/);
+  assert.match(clientDashboardSource, /What informed your decision\?/);
   assert.match(clientDashboardSource, /Different from recommendation/);
 });
 

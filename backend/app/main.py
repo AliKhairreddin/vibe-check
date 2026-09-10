@@ -177,7 +177,7 @@ from .review_pipeline.partner_api import (
     rotate_webhook_secret,
     save_api_partner,
 )
-from .review_pipeline import partner_jobs
+from .review_pipeline import partner_jobs, learning
 
 COPY_LABEL_MAX_LENGTH = 72
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
@@ -1258,12 +1258,16 @@ def public_client_review(value:dict)->dict:
             'decision':decision.get('decision'),
             'feedback_note':decision.get('feedbackNote'),
             'feedback_reason':decision.get('feedbackReason'),
+            'feedback_scope':decision.get('feedbackScope'),
+            'finding_index':decision.get('findingIndex'),
         } if decision else None),
         'previous_decision':({
             'decided_at':previous_decision.get('decidedAt'),
             'decision':previous_decision.get('decision'),
             'feedback_note':previous_decision.get('feedbackNote'),
             'feedback_reason':previous_decision.get('feedbackReason'),
+            'feedback_scope':previous_decision.get('feedbackScope'),
+            'finding_index':previous_decision.get('findingIndex'),
         } if previous_decision else None),
         'file_name':value.get('fileName'),
         'issue_summary':value.get('issueSummary'),
@@ -1606,6 +1610,8 @@ def decide_client_review(
             payload.decision,
             payload.feedback_reason,
             payload.feedback_note,
+            payload.feedback_scope,
+            payload.finding_index,
         )
     except FileNotFoundError:
         raise HTTPException(404, 'Review not found.') from None
@@ -1616,6 +1622,8 @@ def decide_client_review(
         'decision':value.get('decision'),
         'feedback_note':value.get('feedbackNote'),
         'feedback_reason':value.get('feedbackReason'),
+        'feedback_scope':value.get('feedbackScope'),
+        'finding_index':value.get('findingIndex'),
     }
 
 
@@ -2852,6 +2860,7 @@ async def tick_review_automations(request:Request):
     results=await run_due_review_automations()
     start_background_task(deliver_batch_notifications_in_background())
     start_background_task(maintain_partner_api_in_background())
+    start_background_task(learning.process_pending())
     return {'runs':[result.model_dump(mode='json') for result in results]}
 
 
@@ -3808,6 +3817,39 @@ async def retry_batch_drive_item(
         except Exception:
             logger.exception('Could not restore failed batch status for %s/%s',batch_id,item_id)
         raise
+
+
+@app.get('/api/learning/{offer_id}')
+def learning_dashboard(offer_id: str, request: Request, before_version: int | None = None):
+    session = require_admin(request)
+    if not OFFER_ID_PATTERN.fullmatch(offer_id):
+        raise HTTPException(404, 'Advertiser not found.')
+    try:
+        value = learning.dashboard(offer_id, before_version)
+        return {**value, 'canManage': session.get('role', 'owner') == 'owner'}
+    except Exception:
+        logger.exception('Learning dashboard unavailable.')
+        raise HTTPException(503, 'Learning history is temporarily unavailable. Reviews remain available.') from None
+
+
+@app.post('/api/learning/{offer_id}/control')
+def control_learning(offer_id: str, payload: learning.LearningControl, request: Request):
+    session = require_settings_admin(request)
+    if not OFFER_ID_PATTERN.fullmatch(offer_id):
+        raise HTTPException(404, 'Advertiser not found.')
+    from .review_pipeline.storage import _convex_call, convex_enabled
+    if not convex_enabled():
+        raise HTTPException(503, 'Durable learning storage is not configured.')
+    try:
+        _convex_call('mutation', 'learning:control', {
+            'offerId': offer_id, 'action': payload.action, 'expectedVersion': payload.expected_version,
+            'actor': session.get('username') or 'owner',
+            **({'restoreVersion': payload.restore_version} if payload.restore_version is not None else {}),
+            **({'lessonKey': payload.lesson_key} if payload.lesson_key else {}),
+        })
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {'saved': True}
 
 
 @app.get('/api/offers/catalog')

@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
 import { classifyReviewVertical } from "./reviewVerticals.ts";
+import { enqueueLearning } from './learning.ts';
+import { feedbackFields } from './learningTypes.ts';
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 
@@ -9,6 +11,7 @@ type ResultStatus = "green" | "yellow" | "red";
 const MAX_FEEDBACK_NOTE_LENGTH = 1000;
 const CALIBRATION_FEEDBACK_REASONS = new Set([
   "false_positive",
+  "confirmed_issue",
   "missed_policy_issue",
   "partner_preference",
 ]);
@@ -29,12 +32,14 @@ function normalizeResultStatus(value: unknown): ResultStatus | null {
 const decisionValueValidator = v.union(v.literal("approved"), v.literal("disapproved"));
 const feedbackReasonValidator = v.union(
   v.literal("false_positive"),
+  v.literal("confirmed_issue"),
   v.literal("missed_policy_issue"),
   v.literal("partner_preference"),
   v.literal("one_off_exception"),
   v.literal("business_decision"),
 );
 const decisionValidator = v.object({
+  ...feedbackFields,
   decidedAt: v.number(),
   decision: decisionValueValidator,
   feedbackNote: v.optional(v.string()),
@@ -162,13 +167,21 @@ function publicDecision(decision: {
   decidedAt: number;
   decision: "approved" | "disapproved";
   feedbackNote?: string;
-  feedbackReason?: "false_positive" | "missed_policy_issue" | "partner_preference" | "one_off_exception" | "business_decision";
+  feedbackScope?: 'similar_creatives' | 'this_creative';
+  findingIndex?: number;
+  guidelineVersion?: number;
+  learningVersion?: number;
+  feedbackReason?: "false_positive" | "confirmed_issue" | "missed_policy_issue" | "partner_preference" | "one_off_exception" | "business_decision";
 } | undefined) {
   return decision ? {
     decidedAt: decision.decidedAt,
     decision: decision.decision,
     ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
     ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
+    ...(decision.feedbackScope ? { feedbackScope: decision.feedbackScope } : {}),
+    ...(decision.findingIndex !== undefined ? { findingIndex: decision.findingIndex } : {}),
+    ...(decision.guidelineVersion !== undefined ? { guidelineVersion: decision.guidelineVersion } : {}),
+    ...(decision.learningVersion !== undefined ? { learningVersion: decision.learningVersion } : {}),
   } : null;
 }
 
@@ -181,12 +194,17 @@ async function archiveDecision(
     ...(decision.aiFindings ? { aiFindings: decision.aiFindings } : {}),
     ...(decision.aiStatus ? { aiStatus: decision.aiStatus } : {}),
     ...(decision.aiSummary ? { aiSummary: decision.aiSummary } : {}),
+    ...(decision.learningFindings ? { learningFindings: decision.learningFindings } : {}),
     archivedAt,
     clientId: decision.clientId,
     decidedAt: decision.decidedAt,
     decision: decision.decision,
     ...(decision.feedbackNote ? { feedbackNote: decision.feedbackNote } : {}),
     ...(decision.feedbackReason ? { feedbackReason: decision.feedbackReason } : {}),
+    ...(decision.feedbackScope ? { feedbackScope: decision.feedbackScope } : {}),
+    ...(decision.findingIndex !== undefined ? { findingIndex: decision.findingIndex } : {}),
+    ...(decision.guidelineVersion !== undefined ? { guidelineVersion: decision.guidelineVersion } : {}),
+    ...(decision.learningVersion !== undefined ? { learningVersion: decision.learningVersion } : {}),
     jobId: decision.jobId,
     offerId: decision.offerId,
   });
@@ -486,6 +504,8 @@ export const getReport = query({
 
 export const decide = mutation({
   args: {
+    feedbackScope: feedbackFields.feedbackScope,
+    findingIndex: feedbackFields.findingIndex,
     secret: v.string(),
     clientId: v.string(),
     offerId: v.string(),
@@ -510,8 +530,8 @@ export const decide = mutation({
     if (!aiStatus) {
       throw new Error("Client review result is unavailable");
     }
-    const expectedDecision = aiStatus === "red" ? "disapproved" : "approved";
-    const isOverride = expectedDecision !== args.decision;
+    const expectedDecision = aiStatus === 'yellow' ? null : aiStatus === "red" ? "disapproved" : "approved";
+    const isOverride = expectedDecision !== null && expectedDecision !== args.decision;
     const feedbackNote = args.feedbackNote?.trim() ?? "";
     if (feedbackNote.length > MAX_FEEDBACK_NOTE_LENGTH) {
       throw new Error(`Feedback note must be ${MAX_FEEDBACK_NOTE_LENGTH} characters or fewer`);
@@ -520,8 +540,7 @@ export const decide = mutation({
       throw new Error("Tell us why your decision differs from AdChecked");
     }
     if (
-      isOverride
-      && args.feedbackReason
+      args.feedbackReason
       && CALIBRATION_FEEDBACK_REASONS.has(args.feedbackReason)
       && feedbackNote.length < 3
     ) {
@@ -541,6 +560,11 @@ export const decide = mutation({
     ]);
     const report = storedReport?.report ?? offerReport(review?.report, args.offerId);
     const preview = reportPreview(report, aiStatus);
+    const fullReport = objectValue(report);
+    const findings = Array.isArray(fullReport?.findings) ? fullReport.findings : [];
+    if (args.findingIndex !== undefined && (!Number.isSafeInteger(args.findingIndex) || args.findingIndex < 0 || args.findingIndex >= findings.length)) {
+      throw new Error('Choose a finding from this review.');
+    }
     const existing = await ctx.db
       .query("clientReviewDecisions")
       .withIndex("by_client_id_and_offer_id_and_job_id", (q) =>
@@ -554,6 +578,7 @@ export const decide = mutation({
     const value = {
       clientId: args.clientId,
       aiFindings: preview.findings,
+      learningFindings: findings.slice(0, 25).map(item => { const finding = objectValue(item); return { source: String(finding?.source ?? ''), evidence: String(finding?.evidence ?? '').slice(0, 300), policy_reason: String(finding?.policy_reason ?? '').slice(0, 300) }; }),
       aiStatus,
       aiSummary: preview.summary,
       decidedAt: now,
@@ -561,20 +586,31 @@ export const decide = mutation({
       jobId: args.jobId,
       offerId: args.offerId,
       updatedAt: now,
+      ...(args.feedbackScope ? { feedbackScope: args.feedbackScope } : {}),
+      ...(args.findingIndex !== undefined ? { findingIndex: args.findingIndex } : {}),
+      ...(typeof fullReport?.guideline_version === 'number' ? { guidelineVersion: fullReport.guideline_version } : {}),
+      ...(typeof fullReport?.learning_version === 'number' ? { learningVersion: fullReport.learning_version } : {}),
       ...(feedbackNote ? { feedbackNote } : {}),
-      ...(isOverride && args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
+      ...(args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
     };
+    const unchanged = existing && existing.decision === value.decision && existing.feedbackNote === value.feedbackNote
+      && existing.feedbackReason === value.feedbackReason && existing.feedbackScope === value.feedbackScope
+      && existing.findingIndex === value.findingIndex;
+    if (unchanged) return publicDecision(existing)!;
     if (existing) {
       await archiveDecision(ctx, existing, now);
       await ctx.db.replace(existing._id, { ...value, createdAt: existing.createdAt });
     } else {
       await ctx.db.insert("clientReviewDecisions", { ...value, createdAt: now });
     }
+    await enqueueLearning(ctx, args.offerId, Boolean(existing));
     return {
       decidedAt: now,
       decision: args.decision,
       ...(feedbackNote ? { feedbackNote } : {}),
-      ...(isOverride && args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
+      ...(args.feedbackReason ? { feedbackReason: args.feedbackReason } : {}),
+      ...(args.feedbackScope ? { feedbackScope: args.feedbackScope } : {}),
+      ...(args.findingIndex !== undefined ? { findingIndex: args.findingIndex } : {}),
     };
   },
 });
@@ -650,6 +686,7 @@ export const clearDecision = mutation({
     if (!existing) return { cleared: false };
     await archiveDecision(ctx, existing, Date.now());
     await ctx.db.delete(existing._id);
+    await enqueueLearning(ctx, args.offerId, true);
     return { cleared: true };
   },
 });

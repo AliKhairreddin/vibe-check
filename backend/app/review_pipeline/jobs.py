@@ -37,6 +37,7 @@ from .vision import observe_frames_with_openrouter
 from .llm import review_with_openrouter
 from .timing import ProcessingTimer
 from .partner_api import persist_api_evidence
+from . import learning
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 
@@ -235,9 +236,12 @@ async def _review_offer(
     frames:list[dict],
     visual_observations:dict | None,
     evidence_note:str,
+    job_id:str = '',
 )->OfferComplianceResult:
     policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
-    partner_feedback_precedents=await anyio.to_thread.run_sync(list_client_feedback_examples, profile.offer_id)
+    # Raw disagreements no longer bypass the tested, versioned learning process.
+    partner_feedback_precedents=[]
+    learning_context=await learning.review_context(profile.offer_id, profile.version)
     evidence=build_review_evidence(
         media_kind,
         meta,
@@ -256,10 +260,22 @@ async def _review_offer(
     except Exception:
         logger.exception('Offer review failed for %s', profile.offer_id)
         raise
+    _validate_applied_overrides(report, profile)
+    enforce_consequence_based_red(report, profile)
+    # Supplemental per-review policy is outside the saved policy's tested scope.
+    applied_learning=[]
+    if not meta.policy_text.strip():
+        report,applied_learning=await learning.apply_learning(evidence, profile, report, learning_context, meta.model)
+    report.learning_version=int(learning_context.get('version', 0)) if not meta.policy_text.strip() else 0
+    report.applied_learning=applied_learning
+    if job_id:
+        await learning.persist_evidence(job_id, profile, {**evidence, 'additional_policy_present':bool(meta.policy_text.strip())}, report.learning_version)
     report.offer_id=profile.offer_id
     report.offer_name=profile.display_name
     report.guideline_version=profile.version
     report.policy_sources=[*policy_sources]
+    if report.learning_version:
+        report.policy_sources.append(f'{profile.display_name} learned clarifications (version {report.learning_version})')
     if build_internal_override_context(profile):
         report.policy_sources.append(
             f'{profile.display_name} current internal rules (version {profile.version})'
@@ -443,6 +459,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     frames,
                     visual_observations,
                     evidence_note,
+                    job_id=job_id,
                 )
                 for profile in profiles
             ])

@@ -129,6 +129,7 @@ import {
 import { ApiAccessPanel } from '@/components/api-access-panel';
 import { ApiDocsPage } from '@/components/api-docs-page';
 import { ApiReferencePage } from '@/components/api-reference-page';
+import { LearningPage } from '@/components/learning-page';
 import { OfferSettingsPanel } from '@/components/offer-settings-panel';
 import { AutomationsPage } from '@/components/automations-page';
 import { LiveScansPage } from '@/components/live-scans-page';
@@ -412,6 +413,7 @@ function AppSidebar({
             <SidebarGroupLabel className="uppercase tracking-[0.12em]">Operations</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
+                <ShellLink to="/learning" label="Learning" icon={<History />} />
                 <ShellLink to="/live-scans" label="Live scans" icon={<Radio />} />
                 {canManageSettings ? <ShellLink to="/automations" label="Automations" icon={<CalendarClock />} /> : null}
                 <ShellLink to="/developers/api" label="API docs" icon={<Code2 />} />
@@ -481,7 +483,7 @@ function ShellLink({
 }: {
   icon: React.ReactNode;
   label: string;
-  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/developers/api' | '/settings' | '/shares' | '/publisher';
+  to: '/' | '/reviews/new' | '/history' | '/live-scans' | '/automations' | '/developers/api' | '/settings' | '/learning' | '/shares' | '/publisher';
 }) {
   const { setOpenMobile } = useSidebar();
 
@@ -2804,6 +2806,11 @@ function ReportPage() {
           </CardAction>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {Boolean(activeOffer.learning_version) ? <details className="rounded-md border p-3 text-sm">
+            <summary className="cursor-pointer font-medium">Learning applied · revision {activeOffer.learning_version}</summary>
+            <p className="mt-2 text-muted-foreground">Base guidelines v{activeOffer.guideline_version}. {activeOffer.applied_learning?.length ? `${activeOffer.applied_learning.length} learned clarification(s) applied to this creative.` : 'No learned clarification changed this result.'}</p>
+            <a className="mt-2 inline-block font-medium underline underline-offset-4" href={`/learning?offer=${encodeURIComponent(activeOffer.offer_id)}&version=${activeOffer.learning_version}`}>View guideline history and evidence</a>
+          </details> : null}
           {activeOutcome?.client_decision && activeOutcome.automated_status ? (
             <Alert>
               <CheckCircle2 />
@@ -4121,6 +4128,8 @@ const batchRoute = createRoute({
   validateSearch: validateReviewSearch,
   component: BatchPage,
 });
+const learningRoute = createRoute({ getParentRoute: () => rootRoute, path: '/learning', component: LearningPage });
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -4181,6 +4190,7 @@ const router = createRouter({
     progressRoute,
     reportRoute,
     settingsRoute,
+    learningRoute,
     publisherOperationsRoute,
     sharesRoute,
   ]),

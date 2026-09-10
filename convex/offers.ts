@@ -1,5 +1,6 @@
 import { type MutationCtx, mutation, query } from "./_generated/server";
 import { getConvexSize, v } from "convex/values";
+import { enqueueLearning } from './learning.ts';
 
 const OFFER_ID_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$/;
 const MAX_DISPLAY_NAME_LENGTH = 160;
@@ -304,6 +305,7 @@ export const upsert = mutation({
     if (existing) await ctx.db.replace(existing._id, storedProfile(profile));
     else await ctx.db.insert("offerProfiles", storedProfile(profile));
     await ensureRevision(ctx, profile);
+    await enqueueLearning(ctx, offerId, true);
     return publicProfile(profile);
   },
 });
@@ -337,6 +339,7 @@ export const disable = mutation({
     assertProfileDocumentSize(profile);
     await ctx.db.replace(existing._id, storedProfile(profile));
     await ensureRevision(ctx, profile);
+    await enqueueLearning(ctx, offerId, true);
     return publicProfile(profile);
   },
 });
