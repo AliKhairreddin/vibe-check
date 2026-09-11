@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getSelection, release, restrictSmartFinancialAutoBatch } from '../convex/reviewReleases.ts';
-import { upsertStatus, softDelete, syncReviewOfferStats } from '../convex/reviews.ts';
+import { upsertStatus, softDelete, syncReviewOfferStats, getStatus, listRecent } from '../convex/reviews.ts';
 import { list, getDetail, getReport, hasReview, decide, clearDecision } from '../convex/clientReviews.ts';
 import { listSubmissions, createShare, getShare } from '../convex/workspaces.ts';
 import { getAccessibleReview, getSharedOfferReport, listSharedOfferReviews } from '../convex/apiPartners.ts';
@@ -65,6 +65,7 @@ function fixture() {
     },
     async insert(table: string, value: any) { const row = { ...value, _id: `${table}:${++serial}`, _creationTime: serial }; (tables[table] ??= []).push(row); return row._id; },
     async patch(id: string, value: any) { const row = Object.values(tables).flat().find(row => row._id === id); assert.ok(row); Object.assign(row, value); },
+    async replace(id: string, value: any) { const row = Object.values(tables).flat().find(row => row._id === id); assert.ok(row); const createdAt = row._creationTime; for (const key of Object.keys(row)) delete row[key]; Object.assign(row, value, { _id: id, _creationTime: createdAt }); },
     async delete(id: string) { for (const rows of Object.values(tables)) { const i = rows.findIndex(row => row._id === id); if (i >= 0) rows.splice(i, 1); } },
   };
   const ctx = { db, storage: { delete: async () => {} } } as any;
@@ -78,6 +79,46 @@ function fixture() {
   const releaseArgs = { jobIds: ['creative'], offerIds: ['smart-financial'], confirmed: true, releasedBy: 'admin' };
   return { ctx, tables, add, releaseArgs };
 }
+
+test('pending keeps the assessment, decisions override it, and reset restores it across review and batch responses', async () => {
+  for (const assessment of ['green', 'yellow', 'red']) {
+    const { ctx, tables, add } = fixture();
+    await add('creative', { releasedOfferIds: undefined, batchId: 'batch', batchItemId: 'item', report: {
+      offer_outcomes: ['kissterra', 'smart-financial'].map(offer_id => ({ offer_id, offer_name: offer_id, evaluation_state: 'evaluated', overall_status: assessment, message: '' })),
+      offer_results: ['kissterra', 'smart-financial'].map(offer_id => ({ offer_id, overall_status: assessment, summary: 'Original assessment', findings: [] })),
+    } });
+    await ctx.db.insert('reviewBatches', { batchId: 'batch', createdAt: 1, updatedAt: 1, expectedCount: 1, notificationStatus: 'sent', items: [{
+      itemId: 'item', jobId: 'creative', fileName: 'creative.mp4', mediaKind: 'video', status: 'complete', message: '',
+      offerOutcomes: ['kissterra', 'smart-financial'].map(offerId => ({ offerId, offerName: offerId, evaluationState: 'evaluated', overallStatus: assessment, message: '' })),
+    }] });
+    const args = { clientId: 'kissterra', offerId: 'kissterra', jobId: 'creative' };
+    for (const [decision, expected] of [[null, assessment], ['approved', 'green'], ['disapproved', 'red'], [null, assessment]]) {
+      if (decision) await invoke(decide, ctx, { ...args, decision, feedbackReason: 'business_decision' });
+      else await invoke(clearDecision, ctx, args);
+      const [review] = await invoke(list, ctx, { ...args, limit: 100 });
+      const detail = await invoke(getDetail, ctx, args);
+      for (const value of [review, detail.review]) {
+        assert.equal(value.aiStatus, assessment);
+        assert.equal(value.effectiveStatus, expected);
+        assert.equal(value.decision?.decision ?? null, decision);
+      }
+      const batch = await invoke(getBatch, ctx, { batchId: 'batch' });
+      const [listedBatch] = await invoke(getBatches, ctx, { batchIds: ['batch'] });
+      const status = await invoke(getStatus, ctx, { jobId: 'creative' });
+      const [recent] = await invoke(listRecent, ctx, { limit: 100 });
+      for (const value of [batch.items[0], listedBatch.items[0], status, recent]) {
+        const result = value.offer_outcomes.find((outcome: any) => outcome.offer_id === 'kissterra');
+        assert.equal(result.automated_status ?? result.overall_status, assessment);
+        assert.equal(result.effective_status ?? result.overall_status, expected);
+        assert.equal(result.overall_status, expected);
+        assert.equal(result.client_decision ?? null, decision);
+        assert.equal(value.offer_outcomes.find((outcome: any) => outcome.offer_id === 'smart-financial').overall_status, assessment);
+      }
+      assert.equal(tables.reviewBatches[0].items[0].offerOutcomes[0].overallStatus, assessment);
+      assert.equal(tables.reviewOfferStats[0].resultStatus, assessment);
+    }
+  }
+});
 
 test('new jobs start private, including when their first update is already complete', async () => {
   const { ctx, tables } = fixture();

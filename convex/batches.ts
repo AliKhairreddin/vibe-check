@@ -449,8 +449,8 @@ async function hydrateBatchItems(
           return {
             ...outcome,
             automatedStatus: automatedStatus ?? undefined,
-            effectiveStatus: "yellow" as const,
-            overallStatus: "yellow" as const,
+            effectiveStatus: automatedStatus ?? undefined,
+            overallStatus: automatedStatus ?? undefined,
           };
         }
         const effectiveStatus: ResultStatus = decision.decision === "approved" ? "green" : "red";
@@ -581,7 +581,7 @@ export const getBatches = query({
     );
     const hydrated = await Promise.all(batches.map(async (batch) => {
       if (!batch) return null;
-      const items = await hydrateBatchItems(ctx, batch.batchId, batch.items);
+      const items = await hydrateBatchItems(ctx, batch.batchId, batch.items, true);
       return publicBatch({ ...batch, items });
     }));
     return hydrated.flatMap((batch) => batch ? [batch] : []);

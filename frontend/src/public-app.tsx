@@ -6,6 +6,8 @@ import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Badge } from './components/ui/badge';
+import { OfferResultBadge } from './components/offer-outcomes';
+import { effectiveReviewStatus } from './lib/client-review-status';
 import { PricingPage } from './components/pricing-page';
 import { acceptInvite, getInvite, getSharedCollection, getSharedDetail } from './lib/workspace-api';
 
@@ -36,7 +38,7 @@ function SharedCreative({ token, jobId }: { token: string; jobId: string }) {
   if (query.isLoading) return <p className="p-6">Loading creative…</p>;
   if (query.error || !query.data) return <p role="alert" className="rounded-xl border p-6 text-destructive">{query.error?.message ?? 'Creative unavailable'}</p>;
   const { review, report, media_url: mediaUrl, evidence_frames: frames } = query.data;
-  return <article className="overflow-hidden rounded-2xl border bg-card"><div className="border-b p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="break-words text-xl font-semibold">{review.file_name}</h2><p className="mt-1 text-sm text-muted-foreground">{report.offer_name} · {new Date(review.created_at).toLocaleDateString()}</p></div><Badge variant="outline">{review.effective_status === 'green' ? 'Ready' : review.effective_status === 'red' ? 'On hold' : 'Needs review'}</Badge></div></div>
+  return <article className="overflow-hidden rounded-2xl border bg-card"><div className="border-b p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="break-words text-xl font-semibold">{review.file_name}</h2><p className="mt-1 text-sm text-muted-foreground">{report.offer_name} · {new Date(review.created_at).toLocaleDateString()}</p></div><div className="flex flex-wrap items-center gap-2"><OfferResultBadge status={effectiveReviewStatus(review)} automatedStatus={review.ai_status} clientDecision={review.decision?.decision} />{!review.decision ? <Badge variant="outline">Pending advertiser decision</Badge> : null}</div></div></div>
     <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"><div>
       {review.media_kind === 'copy_only' ? <div className="rounded-xl bg-muted p-8 text-center text-sm">Ad copy review</div> : mediaError ? frames[0] ? <img alt="Creative evidence preview" src={frames[0].url} className="max-h-96 w-full rounded-xl object-contain" /> : <p className="rounded-xl bg-muted p-8 text-sm">The original media is unavailable. Review findings appear alongside.</p> : review.media_kind === 'video' ? <video className="max-h-[30rem] w-full rounded-xl bg-black" src={mediaUrl} poster={frames[0]?.url} controls preload="metadata" onError={() => setMediaError(true)} /> : <img className="max-h-[30rem] w-full rounded-xl object-contain" src={mediaUrl} alt={review.file_name} onError={() => setMediaError(true)} />}
       {review.decision ? <div className="mt-4 rounded-xl border p-4"><p className="text-sm font-semibold">Advertiser decision: {review.decision.decision}</p>{review.decision.feedback_note ? <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{review.decision.feedback_note}</p> : null}</div> : null}

@@ -130,13 +130,14 @@ export function DashboardPage() {
     ),
     enabled: Boolean(effectiveOfferIds.length),
     staleTime: 15_000,
+    refetchInterval: 30_000,
   });
   const recentQuery = useQuery({
     queryKey: ['reviews', 'recent', 8],
     queryFn: () => listReviews(8),
     refetchInterval: (query) => query.state.data?.some(
       (review) => !review.report_ready && review.status !== 'failed'
-    ) ? 3_000 : false,
+    ) ? 3_000 : 30_000,
   });
   const recentReviews = (recentQuery.data ?? []).filter((review) =>
     selectedVertical === 'all' || review.vertical === selectedVertical

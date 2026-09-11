@@ -506,6 +506,27 @@ def create_batch(
     })
     return ReviewBatch.model_validate(remote) if remote is not None else batch
 
+def _local_batch_with_decisions(batch:ReviewBatch)->ReviewBatch:
+    decisions=_latest_local_client_decisions()
+    for item in batch.items:
+        for outcome in item.offer_outcomes:
+            if outcome.evaluation_state != 'evaluated':
+                continue
+            assessment=outcome.automated_status or outcome.overall_status
+            decision=decisions.get((outcome.offer_id, item.job_id))
+            outcome.automated_status=assessment
+            outcome.client_decision=decision.get('decision') if decision else None
+            outcome.client_decided_at=decision.get('decidedAt') if decision else None
+            outcome.client_feedback_note=decision.get('feedbackNote') if decision else None
+            outcome.client_feedback_reason=decision.get('feedbackReason') if decision else None
+            outcome.effective_status=(
+                'green' if outcome.client_decision == 'approved'
+                else 'red' if outcome.client_decision == 'disapproved'
+                else assessment
+            )
+            outcome.overall_status=outcome.effective_status
+    return batch
+
 def get_batch(batch_id:str)->ReviewBatch:
     remote=_convex_call('query', 'batches:getBatch', {'batchId': batch_id})
     if remote is not None:
@@ -513,7 +534,7 @@ def get_batch(batch_id:str)->ReviewBatch:
     path=batch_path(batch_id)
     if not path.exists():
         raise FileNotFoundError(batch_id)
-    return ReviewBatch.model_validate(read_json(path))
+    return _local_batch_with_decisions(ReviewBatch.model_validate(read_json(path)))
 
 def get_batches(batch_ids:list[str])->list[ReviewBatch]:
     unique_batch_ids=list(dict.fromkeys(batch_id for batch_id in batch_ids if batch_id))[:100]
@@ -529,7 +550,7 @@ def get_batches(batch_ids:list[str])->list[ReviewBatch]:
         path=batch_path(batch_id)
         if not path.exists():
             continue
-        batches.append(ReviewBatch.model_validate(read_json(path)))
+        batches.append(_local_batch_with_decisions(ReviewBatch.model_validate(read_json(path))))
     return batches
 
 def _update_local_batch_item(
@@ -543,7 +564,17 @@ def _update_local_batch_item(
     message:str='',
     claim_notification:bool=False,
 )->tuple[ReviewBatch,bool]:
+    # Persist the assessment snapshot, never the decision overlay returned to viewers.
     batch=get_batch(batch_id)
+    for item in batch.items:
+        for outcome in item.offer_outcomes:
+            outcome.overall_status=outcome.automated_status or outcome.overall_status
+            outcome.automated_status=None
+            outcome.effective_status=None
+            outcome.client_decision=None
+            outcome.client_decided_at=None
+            outcome.client_feedback_note=None
+            outcome.client_feedback_reason=None
     normalized_result=_normalize_result_status(result)
     found=False
     for item in batch.items:
@@ -1046,6 +1077,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
         ), None)
         if outcome is None or outcome.overall_status is None:
             continue
+        ai_status=outcome.automated_status or outcome.overall_status
         decision=decisions.get(f'{client_id}:{offer_id}:{review.job_id}')
         batch_source_label=None
         batch_created_at=review.created_at or 0
@@ -1058,7 +1090,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
                 pass
         report=_report_offer_result(get_report(review.job_id), offer_id)
         issue_summary=None
-        if outcome.overall_status != 'green' and report:
+        if ai_status != 'green' and report:
             issue_summary=str(report.get('summary') or '').strip()
             if not issue_summary:
                 findings=report.get('findings') if isinstance(report.get('findings'), list) else []
@@ -1066,8 +1098,8 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
                 issue_summary=str(first_finding.get('evidence') or '').strip()
             if len(issue_summary) > 300:
                 issue_summary=f'{issue_summary[:297].rstrip()}...'
-        if outcome.overall_status != 'green' and not issue_summary:
-            issue_summary='Needs review' if outcome.overall_status == 'yellow' else 'Critical issue'
+        if ai_status != 'green' and not issue_summary:
+            issue_summary='Needs review' if ai_status == 'yellow' else 'Critical issue'
         suffix=Path(review.file_name).suffix.lower()
         media_kind=(
             'copy_only' if not review.has_creative
@@ -1075,11 +1107,11 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
             else 'video'
         )
         reviews.append({
-            'aiStatus':outcome.overall_status,
+            'aiStatus':ai_status,
             'effectiveStatus':(
                 'green' if decision and decision.get('decision') == 'approved'
                 else 'red' if decision and decision.get('decision') == 'disapproved'
-                else 'yellow'
+                else ai_status
             ),
             'batchCreatedAt':batch_created_at,
             'batchId':review.batch_id,
@@ -1090,7 +1122,7 @@ def list_client_reviews(client_id:str, offer_id:str, limit:int=1000, publisher_i
             'issueSummary':issue_summary,
             'jobId':review.job_id,
             'mediaKind':media_kind,
-            'preview':_client_review_preview(report, outcome.overall_status, review),
+            'preview':_client_review_preview(report, ai_status, review),
             'previousDecision':previous_decisions.get((client_id, offer_id, review.job_id)),
             'vertical':review.vertical,
         })

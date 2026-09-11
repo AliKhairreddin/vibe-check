@@ -79,10 +79,10 @@ const reviewValidator = v.object({
 });
 
 function effectiveStatus(
-  _aiStatus: ResultStatus,
+  aiStatus: ResultStatus,
   decision: { decision: "approved" | "disapproved" } | undefined,
 ): ResultStatus {
-  if (!decision) return "yellow";
+  if (!decision) return aiStatus;
   return decision.decision === "approved" ? "green" : "red";
 }
 

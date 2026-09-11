@@ -1387,6 +1387,7 @@ function HistoryCard({
     queryFn: () => getBatches(batchIds),
     enabled: batchIds.length > 0,
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
   const historyEntries = useMemo(
     () => buildHistoryEntries(reviews, batchesQuery.data ?? []),
@@ -2356,6 +2357,7 @@ function AllHistoryPage() {
     queryFn: ({ pageParam }) => listReviewHistoryPage(pageParam, 50, source),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
+    refetchInterval: 30_000,
   });
   const reviews = query.data?.pages.flatMap((page) => page.reviews) ?? [];
 
@@ -2640,7 +2642,7 @@ function ReportPage() {
   const [selectedOfferId, setSelectedOfferId] = useState(reportSearch.offer ?? '');
   useEffect(() => setSelectedOfferId(reportSearch.offer ?? ''), [reportSearch.offer, jobId]);
   const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId) });
-  const statusQuery = useQuery({ queryKey: ['status', jobId], queryFn: () => getStatus(jobId) });
+  const statusQuery = useQuery({ queryKey: ['status', jobId], queryFn: () => getStatus(jobId), refetchInterval: 30_000 });
   const sourceQuery = useQuery({
     queryKey: ['source', jobId],
     queryFn: () => getReviewSources(jobId),
@@ -3026,7 +3028,7 @@ function BatchPage() {
     queryFn: () => getBatch(batchId),
     refetchInterval: (current: { state: { data?: ReviewBatch } }) => {
       const batch = current.state.data;
-      return batch?.items.every((item) => isTerminalBatchStatus(item.status)) ? false : 1500;
+      return batch?.items.every((item) => isTerminalBatchStatus(item.status)) ? 30_000 : 1500;
     },
   });
   const offerCatalogQuery = useQuery({
@@ -3321,7 +3323,7 @@ function BatchItemDecisionDetails({ item, offers }: { item: ReviewBatchItem; off
             <div className="grid content-start gap-1.5">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Effective disposition</span>
               {effectiveStatus ? <StatusBadge status={effectiveStatus} /> : <Badge variant="outline">Not ready</Badge>}
-              <span className="text-xs text-muted-foreground">{effectiveStatus === 'green' ? 'Ready' : effectiveStatus === 'red' ? 'Hold' : 'Needs decision'}</span>
+              <span className="text-xs text-muted-foreground">{effectiveStatus === 'green' ? 'Ready' : effectiveStatus === 'red' ? 'Hold' : 'Needs review'}</span>
             </div>
           </section>
         );

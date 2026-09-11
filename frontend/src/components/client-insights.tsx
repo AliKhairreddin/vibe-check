@@ -111,6 +111,7 @@ export function ClientBatchPage() {
     queryKey: ['client', clientId, 'reviews', publisherId],
     queryFn: () => listClientReviews(clientId, 1000, publisherId),
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
   const reviews = (query.data?.reviews ?? []).filter((review) => review.batch_id === batchId);
   const batch = reviews.length && portal
@@ -200,8 +201,8 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
     queries: portals.map((portal) => ({
       queryKey: ['client', portal.client_id, 'reviews', publisherId],
       queryFn: () => listClientReviews(portal.client_id, 1000, publisherId),
-      refetchInterval: 60_000,
-      refetchOnWindowFocus: false,
+      refetchInterval: 30_000,
+      refetchOnWindowFocus: true,
       staleTime: 30_000,
     })),
   });

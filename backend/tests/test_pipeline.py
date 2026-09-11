@@ -2852,6 +2852,41 @@ def test_review_stats_are_offer_aware_and_keep_override_counts_separate(tmp_path
     assert combined.accepted_overrides == 1
 
 
+@pytest.mark.parametrize('assessment', ['green', 'yellow', 'red'])
+def test_pending_decisions_preserve_assessments_and_decision_reset_restores_them(tmp_path, monkeypatch, assessment):
+    monkeypatch.setattr(review_storage, 'JOB_DATA_DIR', tmp_path)
+    monkeypatch.setattr(review_storage, 'CONVEX_URL', '')
+    monkeypatch.setattr(review_storage, 'CONVEX_HTTP_SECRET', '')
+    set_status('color-check', JobStatus.queued, 0, 'Queued', 'creative.mp4', batch_id='color-batch')
+    set_report('color-check', {'overall_status': assessment, 'summary': 'Original review', 'findings': []})
+    set_status('color-check', JobStatus.complete, 100, 'Complete')
+    # The local fixture predates explicit release gating, just like existing reviews.
+    record = get_status('color-check')
+    record.released_offer_ids = None
+    review_storage.write_json(tmp_path/'color-check'/'status.json', record.model_dump(mode='json'))
+    batch = ReviewBatch(batch_id='color-batch', created_at=1, updated_at=1, expected_count=1, items=[ReviewBatchItem(
+        item_id='item', job_id='color-check', file_name='creative.mp4', media_kind='video', status='complete',
+        offer_outcomes=[OfferOutcome(offer_id='acp', offer_name='ACP', evaluation_state='evaluated', overall_status=assessment)],
+    )])
+    review_storage.write_json(review_storage.batch_path(batch.batch_id), batch.model_dump(mode='json'))
+    for decision, expected in [(None, assessment), ('approved', 'green'), ('disapproved', 'red'), (None, assessment)]:
+        if decision:
+            review_storage.set_client_review_decision('acp', 'acp', 'color-check', decision, feedback_reason='business_decision')
+        else:
+            review_storage.clear_client_review_decision('acp', 'acp', 'color-check')
+        [client_review] = review_storage.list_client_reviews('acp', 'acp')
+        assert client_review['aiStatus'] == assessment
+        assert client_review['effectiveStatus'] == expected
+        for value in [get_batch('color-batch'), get_batches(['color-batch'])[0]]:
+            outcome = value.items[0].offer_outcomes[0]
+            assert outcome.automated_status == assessment
+            assert outcome.overall_status == expected
+            assert outcome.client_decision == decision
+        review_storage.update_batch_item('color-batch', 'item', status='complete')
+        stored = review_storage.read_json(review_storage.batch_path('color-batch'))
+        assert stored['items'][0]['offer_outcomes'][0]['overall_status'] == assessment
+
+
 def test_client_approval_is_effective_green_in_local_admin_history_and_stats(tmp_path, monkeypatch):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
@@ -3295,7 +3330,7 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
     assert cross_scoped.status_code == 404
     assert acp_reviews.status_code == 200
     assert acp_reviews.json()['reviews'][0]['ai_status'] == 'green'
-    assert acp_reviews.json()['reviews'][0]['effective_status'] == 'yellow'
+    assert acp_reviews.json()['reviews'][0]['effective_status'] == 'green'
     assert admin_acp_reviews.status_code == 200
     assert reviews.status_code == 200
     assert reviews.json()['reviews'][0]['ai_status'] == 'yellow'

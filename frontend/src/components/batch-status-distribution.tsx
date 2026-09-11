@@ -105,7 +105,7 @@ export function BatchStatusDistribution({
       </div>
 
       <p className="rounded-lg border bg-background/70 px-3 py-2 text-xs leading-5 text-muted-foreground">
-        A client decision can resolve a yellow assessment operationally, but the original AdChecked result remains visible for audit history.
+        Results use the AdChecked assessment until the advertiser decides. Approval turns the result green; disapproval turns it red. The original assessment stays unchanged.
       </p>
     </section>
   );
@@ -171,5 +171,5 @@ function ResultBar({ counts, label, total }: { counts: Record<OverallStatus, num
 function operationalLabel(status: OverallStatus) {
   if (status === 'green') return 'Ready';
   if (status === 'red') return 'Hold';
-  return 'Needs decision';
+  return 'Needs review';
 }
