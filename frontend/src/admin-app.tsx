@@ -2641,7 +2641,7 @@ function ReportPage() {
   const reportSearch = reportRoute.useSearch();
   const [selectedOfferId, setSelectedOfferId] = useState(reportSearch.offer ?? '');
   useEffect(() => setSelectedOfferId(reportSearch.offer ?? ''), [reportSearch.offer, jobId]);
-  const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId) });
+  const query = useQuery({ queryKey: ['report', jobId], queryFn: () => getReport(jobId), refetchInterval: 30_000 });
   const statusQuery = useQuery({ queryKey: ['status', jobId], queryFn: () => getStatus(jobId), refetchInterval: 30_000 });
   const sourceQuery = useQuery({
     queryKey: ['source', jobId],

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getSelection, release, restrictSmartFinancialAutoBatch } from '../convex/reviewReleases.ts';
-import { upsertStatus, softDelete, syncReviewOfferStats, getStatus, listRecent } from '../convex/reviews.ts';
+import { upsertStatus, softDelete, syncReviewOfferStats, getStatus, getReport as getAdminReport, listRecent } from '../convex/reviews.ts';
 import { list, getDetail, getReport, hasReview, decide, clearDecision } from '../convex/clientReviews.ts';
 import { listSubmissions, createShare, getShare } from '../convex/workspaces.ts';
 import { getAccessibleReview, getSharedOfferReport, listSharedOfferReviews } from '../convex/apiPartners.ts';
@@ -105,8 +105,9 @@ test('pending keeps the assessment, decisions override it, and reset restores it
       const batch = await invoke(getBatch, ctx, { batchId: 'batch' });
       const [listedBatch] = await invoke(getBatches, ctx, { batchIds: ['batch'] });
       const status = await invoke(getStatus, ctx, { jobId: 'creative' });
+      const report = await invoke(getAdminReport, ctx, { jobId: 'creative' });
       const [recent] = await invoke(listRecent, ctx, { limit: 100 });
-      for (const value of [batch.items[0], listedBatch.items[0], status, recent]) {
+      for (const value of [batch.items[0], listedBatch.items[0], status, report, recent]) {
         const result = value.offer_outcomes.find((outcome: any) => outcome.offer_id === 'kissterra');
         assert.equal(result.automated_status ?? result.overall_status, assessment);
         assert.equal(result.effective_status ?? result.overall_status, expected);
