@@ -68,7 +68,7 @@ test('keeps decision actions state-aware and supports optional notes', () => {
 
 test('uses neutral client workspace labels and exposes result filtering', () => {
   assert.match(clientDashboardSource, /<h1[^>]*>Review queue<\/h1>/);
-  assert.match(clientDashboardSource, /label="Result"/);
+  assert.match(clientDashboardSource, /label="Assessment"/);
   assert.match(clientDashboardSource, /label: 'Green', value: 'green'/);
   assert.match(clientDashboardSource, /label: 'Yellow', value: 'yellow'/);
   assert.match(clientDashboardSource, /label: 'Red', value: 'red'/);
@@ -124,7 +124,7 @@ test('lets clients switch layouts and save review queue defaults', () => {
   assert.match(clientAppSource, /path: '\/client\/settings'/);
   assert.match(clientDashboardSource, /aria-label="Grid view"/);
   assert.match(clientDashboardSource, /aria-label="List view"/);
-  assert.match(clientDashboardSource, /<span>Result<\/span>[\s\S]*<span>Findings<\/span>[\s\S]*<span>Decision<\/span>/);
+  assert.match(clientDashboardSource, /<span>Assessment<\/span>[\s\S]*<span>Findings<\/span>[\s\S]*<span>Decision<\/span>/);
   assert.match(clientSettingsSource, /Default review layout/);
   assert.match(clientSettingsSource, /Display density/);
   assert.match(clientSettingsSource, /Default result filter/);

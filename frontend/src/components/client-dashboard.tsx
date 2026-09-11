@@ -133,8 +133,8 @@ type BatchFilter = 'all' | 'unchecked' | 'checked';
 
 function reviewRowColumns(publisher: boolean) {
   return publisher
-    ? 'min-[1200px]:grid-cols-[minmax(0,1fr)_4.5rem_5rem_8.5rem_5rem]'
-    : 'min-[1200px]:grid-cols-[minmax(0,1fr)_4.5rem_5rem_7rem_22rem]';
+    ? 'min-[1200px]:grid-cols-[minmax(0,1fr)_6rem_5rem_8.5rem_5rem]'
+    : 'min-[1200px]:grid-cols-[minmax(0,1fr)_6rem_5rem_7rem_22rem]';
 }
 
 type DecisionInput = {
@@ -377,7 +377,7 @@ function ClientDashboard() {
     if (batchFilter === 'unchecked' && isChecked) return [];
     const visibleReviews = group.reviews.filter((review) => {
       if (statusFilter !== 'all' && decisionStatus(review) !== statusFilter) return false;
-      if (resultFilter !== 'all' && effectiveReviewStatus(review) !== resultFilter) return false;
+      if (resultFilter !== 'all' && review.ai_status !== resultFilter) return false;
       if (!normalizedSearch) return true;
       return `${review.file_name} ${review.issue_summary ?? ''}`.toLocaleLowerCase().includes(normalizedSearch);
     });
@@ -540,6 +540,7 @@ function ClientDashboard() {
                 { label: 'Red', tone: 'danger', value: aiStatusCounts.red },
               ]}
             />
+            <p className="text-xs text-muted-foreground lg:col-span-2">Assessment colors show AdChecked’s original review. Pending creatives still need your decision, even when the assessment is green.</p>
           </section>
 
           <section aria-label="Review filters" className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 shadow-xs">
@@ -584,13 +585,13 @@ function ClientDashboard() {
             />
             <CompactFilterMenu
               icon={<ShieldCheck />}
-              label="Result"
+              label="Assessment"
               onChange={setResultFilter}
               options={[
                 { count: reviews.length, label: 'All colors', value: 'all' },
-                { count: statusCounts.green, label: 'Green', value: 'green' },
-                { count: statusCounts.yellow, label: 'Yellow', value: 'yellow' },
-                { count: statusCounts.red, label: 'Red', value: 'red' },
+                { count: aiStatusCounts.green, label: 'Green', value: 'green' },
+                { count: aiStatusCounts.yellow, label: 'Yellow', value: 'yellow' },
+                { count: aiStatusCounts.red, label: 'Red', value: 'red' },
               ]}
               value={resultFilter}
             />
@@ -658,9 +659,9 @@ function ClientDashboard() {
               {visibleGroups.map((group) => {
                 const isExpanded = expandedGroups.has(group.id);
                 const selectedCount = isSelecting ? group.reviews.filter(review => selection.ids.has(review.job_id)).length : 0;
-                const red = group.reviews.filter((review) => effectiveReviewStatus(review) === 'red').length;
-                const yellow = group.reviews.filter((review) => effectiveReviewStatus(review) === 'yellow').length;
-                const green = group.reviews.filter((review) => effectiveReviewStatus(review) === 'green').length;
+                const red = group.reviews.filter((review) => review.ai_status === 'red').length;
+                const yellow = group.reviews.filter((review) => review.ai_status === 'yellow').length;
+                const green = group.reviews.filter((review) => review.ai_status === 'green').length;
                 const pending = group.reviews.filter((review) => !review.decision).map((review) => review.job_id);
                 const recommendedPending = group.reviews
                   .filter((review) => !review.decision && aiDecision(review) === 'approved')
@@ -710,7 +711,7 @@ function ClientDashboard() {
                         label={group.kind === 'batch' ? 'Share batch' : 'Share group'}
                         size="xs"
                       />
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-muted-foreground">
+                      <div aria-label="Group assessments" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-muted-foreground">
                         <span>{group.reviews.length} total</span>
                         <span className="text-red-700 dark:text-red-300">{red} red</span>
                         <span className="text-yellow-700 dark:text-yellow-300">{yellow} yellow</span>
@@ -728,7 +729,7 @@ function ClientDashboard() {
                         {preferences.reviewView === 'list' ? (
                           <div className={cn('mb-1 hidden gap-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground min-[1200px]:grid', reviewRowColumns(session.role === 'publisher'))}>
                             <span>Creative</span>
-                            <span>Result</span>
+                            <span>Assessment</span>
                             <span>Findings</span>
                             <span>Decision</span>
                             <span className="text-right">Actions</span>
@@ -1040,7 +1041,6 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
   const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
   const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const effectiveStatus = effectiveReviewStatus(review);
 
   useEffect(() => {
     setDraftNote(review.decision?.feedback_note ?? '');
@@ -1065,9 +1065,9 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
   return (
     <article className={cn(
       'self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors',
-      effectiveStatus === 'green' && 'border-emerald-600/45 bg-emerald-500/[0.025]',
-      effectiveStatus === 'yellow' && 'border-yellow-600/45',
-      effectiveStatus === 'red' && 'border-red-600/45',
+      review.ai_status === 'green' && 'border-emerald-600/45 bg-emerald-500/[0.025]',
+      review.ai_status === 'yellow' && 'border-yellow-600/45',
+      review.ai_status === 'red' && 'border-red-600/45',
       isExpanded && 'ring-1 ring-ring/30',
       isSelected && 'ring-2 ring-blue-500/60'
     )} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
@@ -1089,10 +1089,11 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
             </label>
           ) : null}
         </div>
-        {view === 'list' ? <div><StatusBadge status={effectiveStatus} /></div> : null}
+        {view === 'list' ? <div><StatusBadge status={review.ai_status} /></div> : null}
         {view === 'list' ? <span className="text-xs tabular-nums text-muted-foreground max-[1199px]:justify-self-end">{review.preview.finding_count} finding{review.preview.finding_count === 1 ? '' : 's'}</span> : null}
         {view === 'list' ? <div className={session.role !== 'publisher' ? 'col-span-2 min-[1200px]:col-span-1' : undefined}>{session.role === 'publisher' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : review.decision ? <ClientDecisionBadge decision={review.decision.decision} /> : <Badge variant="outline">Pending</Badge>}</div> : null}
         <div className={cn('flex min-w-0 flex-wrap items-center gap-1.5', view === 'list' && (session.role === 'publisher' ? 'justify-end' : 'col-span-2 min-[1200px]:col-span-1 min-[1200px]:justify-end'))}>
+          {view === 'grid' ? <StatusBadge status={review.ai_status} /> : null}
           <ShareButton jobIds={[review.job_id]} clientId={clientId} size="xs" label={view === 'list' ? 'Share' : undefined} />
           {session.role === 'publisher' ? (view === 'grid' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : null) : review.decision ? (
             <>
@@ -1106,6 +1107,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
             </>
           ) : (
             <>
+              {view === 'grid' ? <Badge variant="outline">Pending</Badge> : null}
               <Button type="button" size="xs" variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}><Check />Approve</Button>
               <Button type="button" size="xs" variant="destructive" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
               <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
@@ -1159,7 +1161,6 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
 
 function InlineCreativeDetails({ clientId, review }: { clientId: string; review: ClientReviewItem }) {
   const { preview } = review;
-  const effectiveStatus = effectiveReviewStatus(review);
   return (
     <div className="grid gap-4 border-t bg-muted/10 p-3">
       <CreativeThumbnail
@@ -1173,8 +1174,7 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
       />
       <div className="grid gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge status={effectiveStatus} />
-          {effectiveStatus !== review.ai_status ? <Badge variant="outline">AdChecked: {statusLabel(review.ai_status)}</Badge> : null}
+          <StatusBadge status={review.ai_status} />
           <Badge variant="outline">{preview.finding_count} finding{preview.finding_count === 1 ? '' : 's'}</Badge>
         </div>
         <p className="text-sm leading-6 text-muted-foreground">{preview.summary}</p>
@@ -1269,7 +1269,7 @@ function ClientReviewDetail() {
             />
             <div className="grid content-start gap-3">
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{report.summary}</p>
-              <div className="flex flex-wrap gap-2"><StatusBadge status={effectiveReviewStatus(review)} />{effectiveReviewStatus(review) !== review.ai_status ? <Badge variant="outline">AdChecked: {statusLabel(review.ai_status)}</Badge> : null}<Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
+              <div className="flex flex-wrap gap-2"><StatusBadge status={review.ai_status} />{review.decision ? <ClientDecisionBadge decision={review.decision.decision} /> : <Badge variant="outline">Pending</Badge>}<Badge variant="outline">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</Badge>{isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}</div>
               {review.decision?.feedback_note ? <p className="max-w-3xl rounded-lg border bg-muted/20 p-3 text-sm leading-6"><span className="font-semibold">Decision note:</span> {review.decision.feedback_note}</p> : null}
               {!review.decision && review.previous_decision?.feedback_note ? <p className="max-w-3xl rounded-lg border bg-muted/20 p-3 text-sm leading-6 text-muted-foreground"><span className="font-semibold text-foreground">Previous decision note:</span> {review.previous_decision.feedback_note}</p> : null}
               <div className="flex flex-wrap items-center gap-2">
@@ -1676,7 +1676,7 @@ function AiRecommendation({ status }: { status: OverallStatus }) {
 }
 
 function StatusBadge({ status }: { status: OverallStatus }) {
-  return <Badge className={cn(status === 'green' && 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300', status === 'red' && 'border-red-600/30 bg-red-500/15 text-red-700 dark:text-red-300')} variant="outline">{statusLabel(status)}</Badge>;
+  return <Badge aria-label={`AdChecked assessment: ${statusLabel(status)}`} title={`AdChecked assessment: ${statusLabel(status)}`} className={cn(status === 'green' && 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', status === 'yellow' && 'border-yellow-600/30 bg-yellow-400/15 text-yellow-700 dark:text-yellow-300', status === 'red' && 'border-red-600/30 bg-red-500/15 text-red-700 dark:text-red-300')} variant="outline">{statusLabel(status)}</Badge>;
 }
 
 function SeverityBadge({ severity }: { severity: Finding['severity'] }) {
