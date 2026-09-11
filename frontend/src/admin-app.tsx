@@ -214,9 +214,10 @@ const SOURCE_LABELS: Record<Finding['source'], string> = {
   policy: 'Policy',
   visual: 'Visual',
 };
-const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | 'failed', string> = {
+const STATUS_LABELS: Record<OverallStatus | 'analyzing_visuals' | 'complete' | 'complete_with_failures' | 'failed', string> = {
   analyzing_visuals: 'Analyzing Visuals',
   complete: 'Complete',
+  complete_with_failures: 'Some failed',
   failed: 'Failed',
   green: 'Green',
   yellow: 'Yellow',
@@ -3651,13 +3652,16 @@ function OwnerAccessRequired({ section }: { section: string }) {
 function StatusBadge({ status }: { status: string }) {
   const result = normalizeResultStatus(status);
   if (result) return <ResultBadge status={result} />;
-  if (isFailedBatchStatus(status)) {
-    return <Badge variant="destructive">{formatStatus(status)}</Badge>;
-  }
-  if (status === 'complete') {
-    return <Badge variant="secondary">{formatStatus(status)}</Badge>;
-  }
-  return <Badge variant="outline">{formatStatus(status)}</Badge>;
+  const label = formatStatus(status);
+  return (
+    <Badge
+      variant={isFailedBatchStatus(status) ? 'destructive' : status === 'complete' ? 'secondary' : 'outline'}
+      className="max-w-full"
+      title={status === 'complete_with_failures' ? 'Batch finished; some reviews failed.' : label}
+    >
+      <span className="truncate">{label}</span>
+    </Badge>
+  );
 }
 
 function ResultBadge({ status }: { status: OverallStatus }) {
