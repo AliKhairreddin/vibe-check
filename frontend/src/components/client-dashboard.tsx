@@ -979,6 +979,9 @@ export function ClientPortalFrame({ children, workspaceName }: {
             {session.role !== 'publisher' && (routePortal?.client_id ?? clientId) === 'smart-financial' ? (
               <p className="truncate text-muted-foreground" title="Brittany Belezos">Brittany Belezos</p>
             ) : null}
+            {session.role !== 'publisher' && (routePortal?.client_id ?? clientId) === 'kissterra' ? (
+              <p className="truncate text-muted-foreground" title="Oren Even">Oren Even</p>
+            ) : null}
           </div>
         </SidebarFooter>
         <ClientSidebarBorderTrigger />
