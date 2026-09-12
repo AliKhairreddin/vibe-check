@@ -1364,14 +1364,17 @@ function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel
         />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'Additional details' : 'Additional details (optional)'}</Label>
+        <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'Additional details (required)' : 'Additional details (optional)'}</Label>
         <Textarea
           id={`feedback-note-${review.job_id}`}
+          aria-describedby={noteRequired ? `feedback-note-help-${review.job_id}` : undefined}
+          required={noteRequired}
           maxLength={1000}
           placeholder={noteRequired ? 'Tell us what should be considered for this creative.' : 'Share any helpful context.'}
           value={note}
           onChange={(event) => setNote(event.currentTarget.value)}
         />
+        {noteRequired ? <p id={`feedback-note-help-${review.job_id}`} className="text-xs leading-5 text-muted-foreground">This reason requires additional details. Enter at least 3 characters (excluding surrounding spaces) to enable Save decision.</p> : null}
       </div>
       {findings.length > 0 ? <div className="grid gap-1.5">
         <Label htmlFor={`feedback-finding-${review.job_id}`}>Related finding (optional)</Label>
