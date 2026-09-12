@@ -17,13 +17,13 @@ portal uses direct uploads at `https://app.adchecked.com/login`.
 
 | Plan | Monthly USD | Annual USD | Publisher teams | Reviews/month |
 | --- | ---: | ---: | ---: | ---: |
-| Starter | 299 | 2,990 | 5 | 250 |
-| Growth | 799 | 7,990 | 25 | 1,000 |
-| Enterprise | From 1,999 | By agreement | Custom | Custom |
+| Starter | 599 | 5,990 | 5 | 250 |
+| Growth | 1,999 | 19,990 | 25 | 1,000 |
+| Enterprise | From 4,499 | By agreement | Custom | Custom |
 
 The proposed annual discount equals two monthly payments (16.67%). At full usage,
-monthly list revenue per review is $1.196 for Starter and $0.799 for Growth;
-annualized revenue per review is about $0.997 and $0.666. These are starting
+monthly list revenue per review is $2.396 for Starter and $1.999 for Growth;
+annualized revenue per review is about $1.997 and $1.666. These are starting
 commercial assumptions, not verified margins. Review actual inference, media,
 storage, and support costs before agreeing high-volume custom pricing. Growth
 prices a larger review allowance and network capacity; publishers do not pay
