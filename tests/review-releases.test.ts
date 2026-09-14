@@ -144,8 +144,12 @@ test('publisher can preview own private results but advertiser publisher filters
   await ctx.db.insert('publisherSubmissions', { clientId: 'kissterra', publisherId: 'owner', jobId: 'creative' });
   const args = { clientId: 'kissterra', offerId: 'kissterra', jobId: 'creative', publisherId: 'owner' };
   assert.deepEqual(await invoke(list, ctx, { ...args, limit: 100 }), []);
-  assert.equal((await invoke(list, ctx, { ...args, limit: 100, previewPublisherId: 'owner' })).length, 1);
-  assert.equal((await invoke(getDetail, ctx, { ...args, previewPublisherId: 'owner' })).review.jobId, 'creative');
+  const privateReviews = await invoke(list, ctx, { ...args, limit: 100, previewPublisherId: 'owner' });
+  assert.equal(privateReviews.length, 1);
+  assert.equal(privateReviews[0].released, false);
+  const privateDetail = (await invoke(getDetail, ctx, { ...args, previewPublisherId: 'owner' })).review;
+  assert.equal(privateDetail.jobId, 'creative');
+  assert.equal(privateDetail.released, false);
   assert.equal(await invoke(hasReview, ctx, { ...args, previewPublisherId: 'owner' }), true);
   assert.equal(await invoke(getDetail, ctx, { ...args, previewPublisherId: 'other' }), null);
   assert.deepEqual(await invoke(listSubmissions, ctx, args), []);
@@ -217,12 +221,17 @@ test('batch selection checks completion, releases all eligible creatives, and sk
   await add('a', { batchId: 'batch' }); await add('b', { batchId: 'batch' }); await add('failed', { batchId: 'batch', status: 'failed' });
   const batch = { batchId: 'batch', expectedCount: 3, items: [{ status: 'complete' }, { status: 'queued' }, { status: 'failed' }] };
   await ctx.db.insert('reviewBatches', batch);
+  for (const jobId of ['a', 'b']) await ctx.db.insert('publisherSubmissions', { clientId: 'kissterra', publisherId: 'owner', jobId });
+  const queueArgs = { clientId: 'kissterra', offerId: 'kissterra', publisherId: 'owner', previewPublisherId: 'owner', limit: 100 };
+  assert.ok((await invoke(list, ctx, queueArgs)).every((row: any) => !row.batchComplete && !row.released));
   await assert.rejects(invoke(getSelection, ctx, { batchId: 'batch' }), /Wait/);
   batch.items[1].status = 'complete';
+  assert.ok((await invoke(list, ctx, queueArgs)).every((row: any) => row.batchComplete && !row.released));
   const preview = await invoke(getSelection, ctx, { batchId: 'batch' });
   assert.deepEqual(preview.job_ids, ['a', 'b']);
   assert.ok(preview.offers.every((offer: any) => offer.pending === 2));
   assert.equal((await invoke(release, ctx, { ...releaseArgs, jobIds: preview.job_ids })).released, 2);
+  assert.ok((await invoke(list, ctx, { clientId: 'smart-financial', offerId: 'smart-financial', limit: 100 })).every((row: any) => row.batchComplete && row.released));
 });
 
 test('batch responses include releases beyond the loaded history page and retain legacy visibility', async () => {

@@ -6,13 +6,13 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { createShare, listShares, revokeShare } from '@/lib/workspace-api';
 
-type ShareButtonProps = { jobIds: string[]; clientId?: string; offerId?: string; label?: string; size?: 'sm' | 'xs' };
+type ShareButtonProps = { jobIds: string[]; clientId?: string; offerId?: string; label?: string; size?: 'sm' | 'xs'; disabled?: boolean; title?: string };
 
 export function ShareButton(props: ShareButtonProps) {
   return <ShareLinkControl key={JSON.stringify([props.clientId, props.offerId, [...props.jobIds].sort()])} {...props} />;
 }
 
-function ShareLinkControl({ jobIds, clientId, offerId, label, size = 'sm' }: ShareButtonProps) {
+function ShareLinkControl({ jobIds, clientId, offerId, label, size = 'sm', disabled, title }: ShareButtonProps) {
   const [url, setUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const cache = useQueryClient();
@@ -27,9 +27,9 @@ function ShareLinkControl({ jobIds, clientId, offerId, label, size = 'sm' }: Sha
   return <Dialog.Root>
     <Dialog.Trigger
       render={<Button size={size} variant="outline" />}
-      disabled={!jobIds.length || jobIds.length > 100 || mutation.isPending}
+      disabled={disabled || !jobIds.length || jobIds.length > 100 || mutation.isPending}
       onClick={() => { if (!url) mutation.mutate(); }}
-      title={jobIds.length > 100 ? 'Select up to 100 creatives per link' : `Share ${jobIds.length} completed creative${jobIds.length === 1 ? '' : 's'} in one public link, valid for 30 days`}
+      title={title ?? (jobIds.length > 100 ? 'Select up to 100 creatives per link' : `Share ${jobIds.length} completed creative${jobIds.length === 1 ? '' : 's'} in one public link, valid for 30 days`)}
     >
       {mutation.isPending ? <LoaderCircle className="animate-spin" /> : <Link2 />} {label ?? (jobIds.length > 1 ? `Share ${jobIds.length} creatives` : 'Share creative')}
     </Dialog.Trigger>

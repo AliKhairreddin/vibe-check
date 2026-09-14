@@ -247,6 +247,8 @@ export type ClientReviewDecision = {
 };
 
 export type ClientReviewItem = {
+  released?: boolean;
+  batch_complete?: boolean;
   publisher_id?: string | null;
   ai_status: OverallStatus;
   effective_status: OverallStatus;

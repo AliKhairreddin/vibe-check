@@ -34,6 +34,13 @@ async def test_release_email_publisher_scope_and_explicit_worker_send_boundary(p
     monkeypatch.setattr(release_emails.storage, 'CONVEX_HTTP_SECRET', 'transport-test-secret')
     headers = {'origin': 'https://app.adchecked.com'}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']()) as client:
+        response = await client.get('/api/client/kissterra/release-emails/batches', params=[('offer_id', 'kissterra'), ('initial_batch_ids', 'auto'), ('initial_batch_ids', 'home')])
+        assert response.status_code == 200
+        assert calls[-1][0] == 'batches' and calls[-1][1]['initialBatchIds'] == ['auto', 'home']
+        assert calls[-1][1]['publisherId'] == 'publisher-a' and calls[-1][1]['clientId'] == 'kissterra'
+        before = len(calls)
+        response = await client.get('/api/client/kissterra/release-emails/batches', params=[('offer_id', 'kissterra')] + [('initial_batch_ids', str(i)) for i in range(11)])
+        assert response.status_code == 422 and len(calls) == before
         response = await client.post('/api/client/kissterra/release-emails/preview', json=email_payload(), headers=headers)
         assert response.status_code == 200
         function, args, mutation = calls[-1]

@@ -41,16 +41,31 @@ function fixture() {
 
 test('one preview combines Auto and Home with separate scoped revocable links; preview retries reuse them', async () => {
   const f = fixture(); await f.add('auto'); await f.add('home', 'home-insurance');
+  await f.ctx.db.insert('reviews', { batchId: 'auto', jobId: 'auto-2', fileName: 'second.mp4', status: 'complete', reportReady: true, vertical: 'auto-insurance' });
+  await f.ctx.db.insert('reviewOfferStats', { jobId: 'auto-2', offerId: 'kissterra', status: 'complete', resultStatus: 'yellow' });
   await f.ctx.db.insert('reviewOfferStats', { jobId: 'auto', offerId: 'acp', status: 'complete', resultStatus: 'red' });
   const options = await invoke(batches, f.ctx, { offerId: 'kissterra', cursor: null });
   assert.deepEqual(options.batches.map((batch: any) => batch.label), ['Auto', 'Home']);
   const draft = await invoke(prepare, f.ctx, f.args);
   assert.equal(draft.status, 'draft'); assert.equal(draft.links.length, 2);
+  assert.deepEqual(draft.links[0].jobIds, ['auto', 'auto-2']);
   assert.notEqual(draft.links[0].url, draft.links[1].url);
   assert.ok(f.tables.publicShares.every(row => row.items.every((item: any) => item.offerId === 'kissterra')));
   assert.ok(f.tables.publicShares.every(row => row.tokenHash.length === 64 && !('token' in row)));
   assert.deepEqual(await invoke(prepare, f.ctx, f.args), draft);
   assert.equal(f.tables.publicShares.length, 2);
+});
+
+test('selected older batches are included together on the first page without bypassing release checks', async () => {
+  const f = fixture();
+  for (let i = 0; i < 10; i++) await f.add(`recent-${i}`);
+  await f.add('auto'); await f.add('home', 'home-insurance'); await f.add('private');
+  f.tables.reviewOfferStats.find(row => row.jobId === 'private').withheld = true;
+  const page = await invoke(batches, f.ctx, { offerId: 'kissterra', cursor: null, initialBatchIds: ['auto', 'home', 'private', 'auto'] });
+  assert.deepEqual(page.batches.slice(0, 2).map((batch: any) => batch.batchId), ['auto', 'home']);
+  assert.equal(page.batches.length, 12);
+  assert.ok(!page.batches.some((batch: any) => batch.batchId === 'private'));
+  await assert.rejects(invoke(batches, f.ctx, { offerId: 'kissterra', cursor: null, initialBatchIds: Array.from({ length: 11 }, (_, i) => `batch-${i}`) }), /between 1 and 10/);
 });
 
 test('private, processing, partially released and foreign publisher batches cannot enter an email', async () => {

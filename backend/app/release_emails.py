@@ -8,7 +8,7 @@ from __future__ import annotations
 import secrets
 import uuid
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .review_pipeline import storage
@@ -94,9 +94,13 @@ def register(app):
 
     @app.get('/api/release-emails/batches')
     @app.get('/api/client/{client_id}/release-emails/batches')
-    def batches(request: Request, offer_id: str, cursor: str | None = None, initial_batch_id: str | None = None, client_id: str | None = None):
+    def batches(request: Request, offer_id: str, cursor: str | None = None, initial_batch_id: str | None = None, client_id: str | None = None,
+                initial_batch_ids: list[str] | None = Query(default=None, max_length=10)):
         scope = scope_for(request, client_id, offer_id)
-        return call('batches', {**scope, 'offerId': offer_id, 'cursor': cursor, **({'initialBatchId': initial_batch_id} if initial_batch_id else {})})
+        selected = list(dict.fromkeys(([initial_batch_id] if initial_batch_id else []) + (initial_batch_ids or [])))
+        if len(selected) > 10 or any(not batch_id or len(batch_id) > 100 for batch_id in selected):
+            raise HTTPException(422, 'Select up to 10 valid batch IDs.')
+        return call('batches', {**scope, 'offerId': offer_id, 'cursor': cursor, **({'initialBatchIds': selected} if selected else {})})
 
     @app.get('/api/release-emails/recent')
     @app.get('/api/client/{client_id}/release-emails/recent')

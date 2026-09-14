@@ -13,6 +13,8 @@ import { Menu } from '@base-ui/react/menu';
 import { Users, Link2, CreditCard } from 'lucide-react';
 import { WorkspaceProvider, useWorkspace } from './workspace-context';
 import { ShareButton } from './share-controls';
+import { EmailBatchesButton } from './release-email-dialog';
+import { ReleaseButton } from './release-controls';
 import { listPublishers } from '@/lib/workspace-api';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
@@ -389,6 +391,11 @@ function ClientDashboard() {
   const isSelecting = selection?.scope === selectionScope;
   const visibleReviewIds = visibleGroups.flatMap(group => group.reviews.map(review => review.job_id));
   const selectedReviewIds = isSelecting ? visibleReviewIds.filter(id => selection.ids.has(id)) : [];
+  const selectedBatchIds = isSelecting ? allGroups
+    .filter(group => group.kind === 'batch' && group.reviews.every(review => selection.ids.has(review.job_id)))
+    .map(group => group.id.slice('batch:'.length)) : [];
+  const selectedBatchesHavePrivateCreatives = allGroups.some(group => selectedBatchIds.includes(group.id.slice('batch:'.length)) && group.reviews.some(review => review.released === false));
+  const selectionHasProcessingBatch = reviews.some(review => selectedReviewIds.includes(review.job_id) && review.batch_complete === false);
   useEffect(() => setSelection(null), [selectionScope]);
 
   useEffect(() => {
@@ -503,7 +510,7 @@ function ClientDashboard() {
             <div>
               <p className="text-sm font-medium text-muted-foreground">Creative decisions</p>
               <h1 className="font-heading text-3xl font-semibold tracking-tight">Review queue</h1>
-              <p className="mt-1 text-sm text-muted-foreground">Review each creative, apply your final decision, and inspect every finding.</p>
+              <p className="mt-1 text-sm text-muted-foreground">{session.role === 'publisher' ? 'Review your batches, release them to your advertiser, then send the batch links by email.' : 'Review each creative, apply your final decision, and inspect every finding.'}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <MetricBadge label="total" value={reviews.length} />
@@ -556,7 +563,22 @@ function ClientDashboard() {
                     <CheckCircle2 />Select all
                   </Button>
                   <span className="text-xs tabular-nums text-muted-foreground" role="status" aria-live="polite">{selectedReviewIds.length} selected</span>
-                  {selectedReviewIds.length ? <ShareButton jobIds={selectedReviewIds} clientId={selectedPortal.client_id} label="Share selected" size="sm" /> : null}
+                  {session.role === 'publisher' && selectedReviewIds.length > 0 && selectedReviewIds.length <= 100 ? <ReleaseButton
+                    jobIds={selectedReviewIds}
+                    clientId={selectedPortal.client_id}
+                    hasReleased={reviews.some(review => selectedReviewIds.includes(review.job_id) && review.released)}
+                    emailBatchIds={selectedBatchIds.length <= 10 ? selectedBatchIds : undefined}
+                    label="Release selected"
+                    disabled={selectionHasProcessingBatch}
+                    size="sm"
+                  /> : null}
+                  {selectedReviewIds.length ? <ShareButton jobIds={selectedReviewIds} clientId={selectedPortal.client_id} label="Share selected" size="sm" disabled={session.role === 'publisher' && reviews.some(review => selectedReviewIds.includes(review.job_id) && review.released === false)} /> : null}
+                  {session.role === 'publisher' && selectedBatchIds.length ? <EmailBatchesButton
+                    clientId={selectedPortal.client_id}
+                    initialBatchIds={selectedBatchIds}
+                    disabled={selectedBatchIds.length > 10 || selectedBatchesHavePrivateCreatives || selectionHasProcessingBatch}
+                    title={selectedBatchIds.length > 10 ? 'Select up to 10 whole batches for one email' : selectedBatchesHavePrivateCreatives ? 'Release the selected batches before emailing' : `Email ${selectedBatchIds.length} whole batch${selectedBatchIds.length === 1 ? '' : 'es'}`}
+                  /> : null}
                 </>
               ) : (
                 <Button type="button" size="sm" variant="outline" disabled={!visibleReviewIds.length} onClick={() => setSelection({ scope: selectionScope, ids: new Set() })}>
@@ -654,6 +676,10 @@ function ClientDashboard() {
           ) : visibleGroups.length ? (
             <div className="grid gap-3">
               {visibleGroups.map((group) => {
+                const wholeGroup = allGroups.find(batch => batch.id === group.id) ?? group;
+                const hasPrivateCreatives = wholeGroup.reviews.some(review => review.released === false);
+                const allReleased = wholeGroup.reviews.every(review => review.released === true);
+                const batchProcessing = wholeGroup.reviews.some(review => review.batch_complete === false);
                 const isExpanded = expandedGroups.has(group.id);
                 const selectedCount = isSelecting ? group.reviews.filter(review => selection.ids.has(review.job_id)).length : 0;
                 const red = group.reviews.filter((review) => effectiveReviewStatus(review) === 'red').length;
@@ -702,12 +728,29 @@ function ClientDashboard() {
                           View insights
                         </Link>
                       ) : null}
+                      {session.role === 'publisher' ? <ReleaseButton
+                        batchId={group.kind === 'batch' ? group.id.slice('batch:'.length) : undefined}
+                        jobIds={group.kind === 'batch' ? undefined : wholeGroup.reviews.map(review => review.job_id)}
+                        clientId={selectedPortal.client_id}
+                        hasReleased={wholeGroup.reviews.some(review => review.released)}
+                        label={batchProcessing ? 'Batch processing' : allReleased ? 'Released' : group.kind === 'batch' ? 'Release batch' : 'Release group'}
+                        disabled={batchProcessing}
+                      /> : null}
                       <ShareButton
-                        jobIds={(allGroups.find(batch => batch.id === group.id)?.reviews ?? group.reviews).map(review => review.job_id)}
+                        jobIds={wholeGroup.reviews.map(review => review.job_id)}
                         clientId={selectedPortal.client_id}
                         label={group.kind === 'batch' ? 'Share batch' : 'Share group'}
                         size="xs"
+                        disabled={session.role === 'publisher' && (hasPrivateCreatives || batchProcessing)}
+                        title={session.role === 'publisher' && (hasPrivateCreatives || batchProcessing) ? 'Finish and release the whole batch before sharing' : undefined}
                       />
+                      {session.role === 'publisher' && group.kind === 'batch' ? <EmailBatchesButton
+                        clientId={selectedPortal.client_id}
+                        initialBatchId={group.id.slice('batch:'.length)}
+                        size="xs"
+                        disabled={hasPrivateCreatives || batchProcessing}
+                        title={hasPrivateCreatives || batchProcessing ? 'Finish and release the whole batch before emailing' : `Email the whole ${formatBatchTitle(group)} batch`}
+                      /> : null}
                       <div aria-label="Group results" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-muted-foreground">
                         <span>{group.reviews.length} total</span>
                         <span className="text-red-700 dark:text-red-300">{red} red</span>

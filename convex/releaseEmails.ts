@@ -38,12 +38,14 @@ async function releasedBatch(ctx: QueryCtx, scope: Scope, offerId: string, batch
 
 const batchView = v.object({ batchId: v.string(), label: v.string(), title: v.string(), createdAt: v.number(), count: v.number() });
 export const batches = query({
-  args: { ...scopeArgs, offerId: v.string(), cursor: v.union(v.string(), v.null()), initialBatchId: v.optional(v.string()) },
+  args: { ...scopeArgs, offerId: v.string(), cursor: v.union(v.string(), v.null()), initialBatchId: v.optional(v.string()), initialBatchIds: v.optional(v.array(v.string())) },
   returns: v.object({ batches: v.array(batchView), cursor: v.string(), isDone: v.boolean() }),
   handler: async (ctx, args) => {
     authorize(args, args.offerId);
+    const initialIds = [...new Set([...(args.initialBatchId ? [args.initialBatchId] : []), ...(args.initialBatchIds ?? [])])];
+    if (initialIds.length > 10) throw new Error('Select between 1 and 10 distinct released batches');
     const page = await ctx.db.query('reviewBatches').withIndex('by_created_at').order('desc').paginate({ numItems: 10, cursor: args.cursor });
-    const ids = [...new Set([...(!args.cursor && args.initialBatchId ? [args.initialBatchId] : []), ...page.page.map(row => row.batchId)])];
+    const ids = [...new Set([...(!args.cursor ? initialIds : []), ...page.page.map(row => row.batchId)])];
     const batches = [];
     for (const batchId of ids) {
       const batch = await releasedBatch(ctx, args, args.offerId, batchId);

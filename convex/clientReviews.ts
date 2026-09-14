@@ -61,6 +61,8 @@ const previewValidator = v.object({
   summary: v.string(),
 });
 const reviewValidator = v.object({
+  released: v.boolean(),
+  batchComplete: v.boolean(),
   publisherId: v.optional(v.string()),
   aiStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
   effectiveStatus: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
@@ -321,6 +323,8 @@ export const list = query({
         sourceUrl: stat.sourceUrl ?? review?.sourceUrl,
       });
       return [{
+        released: !stat.withheld,
+        batchComplete: !batchId || Boolean(batch && batch.items.length >= batch.expectedCount && batch.items.every(item => ['complete', 'failed', 'upload_failed'].includes(item.status))),
         ...(ownership[index] ? { publisherId: ownership[index]!.publisherId } : {}),
         aiStatus,
         effectiveStatus: effectiveStatus(aiStatus, decision),
@@ -416,6 +420,8 @@ export const getDetail = query({
       googleDriveUrl: driveUrl(review),
       report,
       review: {
+        released: !stat.withheld,
+        batchComplete: !review.batchId || Boolean(batch && batch.items.length >= batch.expectedCount && batch.items.every(item => ['complete', 'failed', 'upload_failed'].includes(item.status))),
         aiStatus,
         effectiveStatus: effectiveStatus(aiStatus, decision ?? undefined),
         batchCreatedAt: batch?.createdAt ?? review.createdAt,

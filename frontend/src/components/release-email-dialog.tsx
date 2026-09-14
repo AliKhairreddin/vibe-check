@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ExternalLink, LoaderCircle, Mail, X } from 'lucide-react';
@@ -16,14 +16,14 @@ type Email = {
   links: { batchId: string; label: string; url: string; jobIds: string[] }[];
 };
 type Options = { advertisers: { id: string; name: string }[]; sender: string; sending_enabled: boolean };
-type Props = { clientId?: string; initialBatchId?: string; initialOfferId?: string };
+type Props = { clientId?: string; initialBatchId?: string; initialBatchIds?: string[]; initialOfferId?: string };
 const post = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const addresses = (value: string) => [...new Set(value.split(/[,;\n]+/).map(item => item.trim().toLowerCase()).filter(Boolean))];
 const date = (value: number) => new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
-export function EmailBatchesButton({ size = 'sm', ...props }: Props & { size?: 'xs' | 'sm' }) {
+export function EmailBatchesButton({ size = 'sm', disabled, title, ...props }: Props & { size?: 'xs' | 'sm'; disabled?: boolean; title?: string }) {
   const [open, setOpen] = useState(false);
-  return <><Button variant="outline" size={size} onClick={() => setOpen(true)}><Mail />Send email</Button><ReleaseEmailDialog {...props} open={open} onOpenChange={setOpen} /></>;
+  return <><Button variant="outline" size={size} disabled={disabled} title={title} onClick={() => setOpen(true)}><Mail />Send email</Button><ReleaseEmailDialog {...props} open={open} onOpenChange={setOpen} /></>;
 }
 
 export function ReleaseEmailDialog({ open, onOpenChange, ...props }: Props & { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -42,7 +42,8 @@ export function ReleaseEmailDialog({ open, onOpenChange, ...props }: Props & { o
   </Dialog.Root>;
 }
 
-function EmailSetup({ clientId, initialBatchId, initialOfferId, setBusy, close }: Props & { setBusy: (busy: boolean) => void; close: () => void }) {
+function EmailSetup({ clientId, initialBatchId, initialBatchIds, initialOfferId, setBusy, close }: Props & { setBusy: (busy: boolean) => void; close: () => void }) {
+  const requestedBatchIds = useMemo(() => [...new Set([...(initialBatchId ? [initialBatchId] : []), ...(initialBatchIds ?? [])])], [initialBatchId, initialBatchIds]);
   const base = clientId ? `/api/client/${encodeURIComponent(clientId)}/release-emails` : '/api/release-emails';
   const options = useQuery({ queryKey: ['release-email-options', clientId], queryFn: () => requestJson<Options>(`${base}/options`) });
   const [selectedOffer, setSelectedOffer] = useState(initialOfferId ?? clientId ?? '');
@@ -52,11 +53,11 @@ function EmailSetup({ clientId, initialBatchId, initialOfferId, setBusy, close }
   if (options.error) return <p role="alert" className="text-sm text-destructive">{options.error.message}</p>;
   return <>
     <label className="grid min-w-0 gap-1.5 text-sm font-medium">Advertiser<Select aria-label="Email advertiser" disabled={locked} value={offerId} onValueChange={setSelectedOffer} options={options.data.advertisers.map(offer => ({ value: offer.id, label: offer.name }))} /></label>
-    <ComposerLoader key={offerId} base={base} offerId={offerId} initialBatchId={initialBatchId} options={options.data} setBusy={value => { setBusy(value); setLocked(value); }} setLocked={setLocked} close={close} />
+    <ComposerLoader key={offerId} base={base} offerId={offerId} initialBatchIds={requestedBatchIds} options={options.data} setBusy={value => { setBusy(value); setLocked(value); }} setLocked={setLocked} close={close} />
   </>;
 }
 
-type ComposerProps = { base: string; offerId: string; initialBatchId?: string; options: Options; setBusy: (busy: boolean) => void; setLocked: (locked: boolean) => void; close: () => void };
+type ComposerProps = { base: string; offerId: string; initialBatchIds: string[]; options: Options; setBusy: (busy: boolean) => void; setLocked: (locked: boolean) => void; close: () => void };
 function ComposerLoader(props: ComposerProps) {
   const recent = useQuery({ queryKey: ['release-emails', props.base, props.offerId], queryFn: () => requestJson<Email[]>(`${props.base}/recent?offer_id=${encodeURIComponent(props.offerId)}`) });
   if (recent.isPending) return <p role="status" className="text-sm">Loading recent emails…</p>;
@@ -64,7 +65,7 @@ function ComposerLoader(props: ComposerProps) {
   return <Composer {...props} recent={recent.data} />;
 }
 
-function Composer({ base, offerId, initialBatchId, options, setBusy, setLocked, close, recent }: ComposerProps & { recent: Email[] }) {
+function Composer({ base, offerId, initialBatchIds, options, setBusy, setLocked, close, recent }: ComposerProps & { recent: Email[] }) {
   const cache = useQueryClient();
   const lastSent = recent.find(email => email.status === 'sent');
   const [to, setTo] = useState(lastSent?.to.join(', ') ?? '');
@@ -80,15 +81,23 @@ function Composer({ base, offerId, initialBatchId, options, setBusy, setLocked, 
   const requestId = useRef<string | null>(null);
   const initialSelected = useRef(false);
   const batches = useInfiniteQuery({
-    queryKey: ['email-batches', base, offerId, initialBatchId], initialPageParam: '',
-    queryFn: ({ pageParam }) => requestJson<{ batches: Batch[]; cursor: string; isDone: boolean }>(`${base}/batches?${new URLSearchParams({ offer_id: offerId, ...(pageParam ? { cursor: pageParam } : {}), ...(initialBatchId ? { initial_batch_id: initialBatchId } : {}) })}`),
+    queryKey: ['email-batches', base, offerId, initialBatchIds], initialPageParam: '',
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ offer_id: offerId, ...(pageParam ? { cursor: pageParam } : {}) });
+      if (!pageParam) for (const batchId of initialBatchIds) params.append('initial_batch_ids', batchId);
+      return requestJson<{ batches: Batch[]; cursor: string; isDone: boolean }>(`${base}/batches?${params}`);
+    },
     getNextPageParam: page => page.isDone ? undefined : page.cursor,
   });
   const available = [...new Map(batches.data?.pages.flatMap(page => page.batches).map(batch => [batch.batchId, batch])).values()];
   useEffect(() => {
-    const batch = batches.data?.pages[0]?.batches.find(item => item.batchId === initialBatchId);
-    if (batch && !initialSelected.current) { initialSelected.current = true; setSelected({ [batch.batchId]: batch.label }); }
-  }, [batches.data, initialBatchId]);
+    const firstPage = batches.data?.pages[0];
+    if (firstPage && !initialSelected.current) {
+      initialSelected.current = true;
+      setSelected(Object.fromEntries(firstPage.batches.filter(batch => initialBatchIds.includes(batch.batchId)).map(batch => [batch.batchId, batch.label])));
+    }
+  }, [batches.data, initialBatchIds]);
+  const unavailableInitialCount = batches.data ? initialBatchIds.filter(id => !batches.data.pages[0].batches.some(batch => batch.batchId === id)).length : 0;
   const prepare = useMutation({
     mutationFn: () => {
       requestId.current ??= crypto.randomUUID().replace(/-/g, '');
@@ -144,6 +153,7 @@ function Composer({ base, offerId, initialBatchId, options, setBusy, setLocked, 
         </div>
         {batches.hasNextPage ? <Button type="button" variant="ghost" size="sm" className="justify-self-start" disabled={batches.isFetchingNextPage} onClick={() => void batches.fetchNextPage()}>{batches.isFetchingNextPage ? 'Loading…' : 'Load older batches'}</Button> : null}
         {batches.error ? <p role="alert" className="text-sm text-destructive">{batches.error.message}</p> : null}
+        {unavailableInitialCount ? <p role="alert" className="text-sm text-destructive">{unavailableInitialCount} selected batch{unavailableInitialCount === 1 ? ' is' : 'es are'} unavailable for email. Release every completed creative in each batch to this advertiser first.</p> : null}
         <p className="text-xs leading-5 text-muted-foreground">Only batches released to this advertiser are included. Private and other advertisers’ results stay out of the email.</p>
       </div>
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">

@@ -1250,6 +1250,8 @@ def public_client_review(value:dict)->dict:
     previous_decision=value.get('previousDecision') if isinstance(value.get('previousDecision'), dict) else None
     preview=value.get('preview') if isinstance(value.get('preview'), dict) else {}
     return {
+        'released':value.get('released', True),
+        'batch_complete':value.get('batchComplete', True),
         'ai_status':value.get('aiStatus'),
         'effective_status':value.get('effectiveStatus') or value.get('aiStatus'),
         'batch_created_at':value.get('batchCreatedAt') or value.get('createdAt'),

@@ -14,8 +14,8 @@ type Selection = {
 };
 const post = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, size = 'xs' }: {
-  jobIds?: string[]; batchId?: string; clientId?: string; hasReleased?: boolean; size?: 'xs' | 'sm';
+export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, size = 'xs', label, emailBatchIds, disabled }: {
+  jobIds?: string[]; batchId?: string; clientId?: string; hasReleased?: boolean; size?: 'xs' | 'sm'; label?: string; emailBatchIds?: string[]; disabled?: boolean;
 }) {
   const cache = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -45,15 +45,16 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
       <TooltipTrigger render={<Button
         variant="outline"
         size={size}
-        aria-label={managing ? 'Manage releases' : 'Release to advertisers'}
+        disabled={disabled}
+        aria-label={label ?? (managing ? 'Manage releases' : 'Release to advertisers')}
         className={managing
           ? 'border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 hover:text-purple-800 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 dark:hover:bg-purple-900/50 dark:hover:text-purple-200'
           : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-900/50 dark:hover:text-blue-200'}
         onClick={() => { setSelected([]); setConfirming(false); setReleaseComplete(false); release.reset(); setOpen(true); }}
       />}>
-        <Send aria-hidden="true" />{managing ? 'Manage' : 'Release'}
+        {label === 'Released' ? <CheckCircle2 aria-hidden="true" /> : <Send aria-hidden="true" />}{label ?? (managing ? 'Manage' : 'Release')}
       </TooltipTrigger>
-      <TooltipContent>{managing ? 'Manage releases' : 'Release to advertisers'}</TooltipContent>
+      <TooltipContent>{label === 'Released' ? 'View release details' : label ?? (managing ? 'Manage releases' : 'Release to advertisers')}</TooltipContent>
     </Tooltip>
     <AlertDialog.Root open={open} onOpenChange={value => { if (!release.isPending) setOpen(value); }}>
       <AlertDialog.Portal>
@@ -62,7 +63,7 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
           <AlertDialog.Popup className="w-full max-w-lg rounded-xl bg-popover p-6 text-popover-foreground shadow-xl ring-1 ring-foreground/10">
             <div className="grid gap-5">
               <div className="grid gap-2">
-                <AlertDialog.Title className="text-lg font-semibold">{releaseComplete ? 'Creatives released' : confirming ? 'Are you sure you want to release?' : managing ? 'Manage releases' : 'Release to advertisers'}</AlertDialog.Title>
+                <AlertDialog.Title className="text-lg font-semibold">{releaseComplete ? 'Creatives released' : confirming ? 'Are you sure you want to release?' : batchId && clientId ? 'Batch release' : managing ? 'Manage releases' : 'Release to advertisers'}</AlertDialog.Title>
                 <AlertDialog.Description className="text-sm leading-6 text-muted-foreground">
                   {releaseComplete ? 'The selected advertisers can now view these results. You can send an email with these and other released batches.' : confirming
                     ? 'The selected advertisers will be able to see these results immediately. Released creatives cannot be deleted, and a release cannot be undone. You can release to additional offers later.'
@@ -93,7 +94,7 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
         </AlertDialog.Viewport>
       </AlertDialog.Portal>
     </AlertDialog.Root>
-    <ReleaseEmailDialog open={emailOpen} onOpenChange={setEmailOpen} clientId={clientId} initialBatchId={batchId} initialOfferId={selected.length === 1 ? selected[0] : undefined} />
+    <ReleaseEmailDialog open={emailOpen} onOpenChange={setEmailOpen} clientId={clientId} initialBatchId={batchId} initialBatchIds={emailBatchIds} initialOfferId={selected.length === 1 ? selected[0] : undefined} />
   </>;
 }
 
