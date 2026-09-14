@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Menu } from '@base-ui/react/menu';
+import { Popover } from '@base-ui/react/popover';
 import { Users, Link2, CreditCard } from 'lucide-react';
 import { WorkspaceProvider, useWorkspace } from './workspace-context';
 import { ShareButton } from './share-controls';
@@ -678,7 +679,6 @@ function ClientDashboard() {
               {visibleGroups.map((group) => {
                 const wholeGroup = allGroups.find(batch => batch.id === group.id) ?? group;
                 const hasPrivateCreatives = wholeGroup.reviews.some(review => review.released === false);
-                const allReleased = wholeGroup.reviews.every(review => review.released === true);
                 const batchProcessing = wholeGroup.reviews.some(review => review.batch_complete === false);
                 const isExpanded = expandedGroups.has(group.id);
                 const selectedCount = isSelecting ? group.reviews.filter(review => selection.ids.has(review.job_id)).length : 0;
@@ -732,8 +732,8 @@ function ClientDashboard() {
                         batchId={group.kind === 'batch' ? group.id.slice('batch:'.length) : undefined}
                         jobIds={group.kind === 'batch' ? undefined : wholeGroup.reviews.map(review => review.job_id)}
                         clientId={selectedPortal.client_id}
-                        hasReleased={wholeGroup.reviews.some(review => review.released)}
-                        label={batchProcessing ? 'Batch processing' : allReleased ? 'Released' : group.kind === 'batch' ? 'Release batch' : 'Release group'}
+                        hasReleased={wholeGroup.reviews.every(review => typeof review.released === 'boolean') ? wholeGroup.reviews.some(review => review.released) : undefined}
+                        label={batchProcessing ? 'Batch processing' : group.kind === 'batch' ? 'Release batch' : 'Release group'}
                         disabled={batchProcessing}
                       /> : null}
                       <ShareButton
@@ -752,10 +752,7 @@ function ClientDashboard() {
                         title={hasPrivateCreatives || batchProcessing ? 'Finish and release the whole batch before emailing' : `Email the whole ${formatBatchTitle(group)} batch`}
                       /> : null}
                       <div aria-label="Group results" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-muted-foreground">
-                        <span>{group.reviews.length} total</span>
-                        <span className="text-red-700 dark:text-red-300">{red} red</span>
-                        <span className="text-yellow-700 dark:text-yellow-300">{yellow} yellow</span>
-                        <span className="text-emerald-700 dark:text-emerald-300">{green} green</span>
+                        <BatchResultBar label={formatBatchTitle(group)} green={green} yellow={yellow} red={red} />
                         {isExpanded && session.role !== 'publisher' ? (
                           <Button type="button" size="xs" variant="success" className="ml-1" disabled={!recommendedPending.length || bulkMutation.isPending} onClick={() => bulkMutation.mutate({ clientId: selectedPortal.client_id, jobIds: recommendedPending })}>
                             {bulkMutation.isPending ? <LoaderCircle className="animate-spin" /> : <Check />}
@@ -1688,6 +1685,39 @@ function QueueMetric({ detail, icon: Icon, label, tone = 'neutral', value }: {
       </span>
     </div>
   );
+}
+
+function BatchResultBar({ label, green, yellow, red }: { label: string; green: number; yellow: number; red: number }) {
+  const [open, setOpen] = useState(false);
+  const total = green + yellow + red;
+  const values = [
+    { label: 'Green', count: green, color: 'bg-emerald-500' },
+    { label: 'Yellow', count: yellow, color: 'bg-yellow-400' },
+    { label: 'Red', count: red, color: 'bg-red-500' },
+  ];
+  return <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Trigger
+      openOnHover delay={160} closeDelay={180}
+      onFocus={() => window.requestAnimationFrame(() => setOpen(true))}
+      render={<Button variant="ghost" size="xs" className="gap-2 px-1" />}
+      aria-label={`Results for ${label}: ${total} creatives, ${green} green, ${yellow} yellow, ${red} red. Open breakdown.`}
+    >
+      <span className="min-w-16 text-right font-normal tabular-nums text-muted-foreground">{total} creatives</span>
+      <span aria-hidden="true" className="flex h-2 w-28 overflow-hidden rounded-full bg-muted sm:w-32">
+        {values.filter(value => value.count > 0).map(value => <span key={value.label} className={cn('h-full', value.color)} style={{ width: `${value.count / total * 100}%` }} />)}
+      </span>
+    </Popover.Trigger>
+    <Popover.Portal><Popover.Positioner sideOffset={8} className="z-50 max-w-[calc(100vw-1rem)]">
+      <Popover.Popup className="w-64 max-w-[calc(100vw-1rem)] rounded-xl border bg-popover p-4 text-popover-foreground shadow-xl outline-none">
+        <Popover.Title className="break-words text-sm font-semibold">{label}</Popover.Title>
+        <Popover.Description className="mt-1 text-xs leading-5 text-muted-foreground">Current results for the {total} creatives shown, including advertiser decisions.</Popover.Description>
+        <dl className="mt-3 grid gap-2">{values.map(value => <div key={value.label} className="flex items-center gap-2 text-xs">
+          <span aria-hidden="true" className={cn('size-2 rounded-full', value.color)} /><dt>{value.label}</dt>
+          <dd className="ml-auto tabular-nums">{value.count} · {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(total ? value.count / total * 100 : 0)}%</dd>
+        </div>)}</dl>
+      </Popover.Popup>
+    </Popover.Positioner></Popover.Portal>
+  </Popover.Root>;
 }
 
 function DecisionLayerLine({ label, values }: {
