@@ -1,5 +1,6 @@
 import { hasLocalWork, planPartnerDispatch, type ShardHeartbeat } from "./scaling";
 import { Container } from "@cloudflare/containers";
+import { deliverReleaseEmail, emailRoute } from './release-emails';
 import {
   ADMIN_HOST,
   API_HOST,
@@ -477,7 +478,7 @@ export class ReviewBackend extends Container<Env> {
 }
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const surface = hostSurface(url.hostname);
     if (surface === "unknown") return secureResponse(unsupportedHostResponse(), surface);
@@ -530,7 +531,23 @@ export default {
         if (!success) return secureResponse(rateLimitedResponse(), surface);
       }
       const backendStartedAt = Date.now();
+      const releaseEmailRoute = emailRoute(url.pathname);
+      if (releaseEmailRoute === 'send' && request.method === 'POST') {
+        const headers = new Headers(request.headers);
+        headers.set('x-release-email-transport', env.CONVEX_HTTP_SECRET);
+        request = new Request(request, { headers });
+      }
       let response = await fetchBackend(env, request);
+      if (response.ok && releaseEmailRoute === 'options' && request.method === 'GET') {
+        const data = await response.json() as Record<string, unknown>;
+        response = Response.json({ ...data, sender: env.RELEASE_EMAIL_FROM, sending_enabled: Boolean(env.RELEASE_EMAIL_FROM && env.RELEASE_EMAIL) }, { headers: { 'cache-control': 'no-store' } });
+      }
+      if (response.ok && releaseEmailRoute === 'send' && request.method === 'POST') {
+        const authorization = await response.json() as { email_id: string; owner_key: string };
+        const delivery = deliverReleaseEmail(env, authorization);
+        ctx.waitUntil(delivery.then(() => undefined));
+        response = await delivery;
+      }
       if (surface === "admin" && url.pathname === "/api/admin/platform" && response.ok) {
         const data = await response.json() as Record<string, unknown>;
         response = Response.json({ ...data, cloudflare: { status: "reachable", backend_latency_ms: Date.now() - backendStartedAt, configured_shards: backendShardCount(env), active_slot: backendSlot(env) } }, { headers: { "cache-control": "no-store" } });

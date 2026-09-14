@@ -81,6 +81,7 @@
   "triggers": {
     "crons": ["* * * * *"]
   },
+  "send_email": [{ "name": "RELEASE_EMAIL", "allowed_sender_addresses": ["releases@adchecked.com"] }],
   "secrets": {
     "required": [
       "ACP_CLIENT_PASSWORD",
@@ -99,6 +100,7 @@
     ]
   },
   "vars": {
+    "RELEASE_EMAIL_FROM": "releases@adchecked.com",
     "API_PUBLIC_URL": "https://api.adchecked.com",
     "APP_ADMIN_HOSTS": "admin.adchecked.com",
     "APP_ALLOWED_HOSTS": "adchecked.com,www.adchecked.com,app.adchecked.com,admin.adchecked.com,api.adchecked.com,vibe-check.thatcanadian.dev,vibe-check.ali-kheireddin1.workers.dev,localhost,127.0.0.1",

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
-from . import workspaces, platform_monitoring
+from . import workspaces, platform_monitoring, release_emails
 from .review_pipeline.models import (
     BatchReviewContext,
     BatchFailure,
@@ -4035,6 +4035,7 @@ def review_media(job_id:str, request:Request):
     return review_media_response(job_id, request)
 
 workspaces.register(app)
+release_emails.register(app)
 platform_monitoring.register(app)
 
 static=Path('frontend/dist')

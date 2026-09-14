@@ -1,6 +1,7 @@
 import { Checkbox } from '@/components/ui/checkbox';
 import { selectedControlClassName } from '@/lib/control-styles';
 import { ReleaseButton } from '@/components/release-controls';
+import { EmailBatchesButton } from '@/components/release-email-dialog';
 import { deletableBatchReviewIds, hasBatchReleases, hasReviewReleases, isReviewDeletable } from '@/lib/review-releases';
 import { Select } from '@/components/ui/select';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -1541,6 +1542,7 @@ function HistoryCard({
           </CardDescription>
           <CardAction>
             <div className="flex items-center gap-2">
+              <EmailBatchesButton />
               <Badge variant="outline">
                 {filtersActive
                   ? `${filteredEntries.length} of ${historyEntries.length}`

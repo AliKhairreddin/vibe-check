@@ -2,7 +2,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useState } from 'react';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LoaderCircle, Send } from 'lucide-react';
+import { CheckCircle2, LoaderCircle, Mail, Send } from 'lucide-react';
+import { ReleaseEmailDialog } from './release-email-dialog';
 import { requestJson } from '@/lib/api';
 import { Button, buttonVariants } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
@@ -19,6 +20,8 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
   const cache = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [releaseComplete, setReleaseComplete] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const targetKey = JSON.stringify([clientId, batchId, jobIds]);
   const [releasedTarget, setReleasedTarget] = useState<string | null>(null);
@@ -32,7 +35,7 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
   });
   const release = useMutation({
     mutationFn: () => requestJson<{ released: number }>(`${base}/release`, post({ job_ids: selection.data?.job_ids, offer_ids: selected, confirmed: true })),
-    onSuccess: () => { setOpen(false); setReleasedTarget(targetKey); void cache.invalidateQueries(); },
+    onSuccess: () => { setReleaseComplete(true); setConfirming(false); setReleasedTarget(targetKey); void cache.invalidateQueries(); },
   });
   const managing = hasReleased || releasedTarget === targetKey || Boolean(selection.data?.offers.some(offer => offer.pending < offer.total));
   const chosen = selection.data?.offers.filter(offer => selected.includes(offer.offer_id) && offer.pending > 0) ?? [];
@@ -46,7 +49,7 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
         className={managing
           ? 'border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 hover:text-purple-800 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 dark:hover:bg-purple-900/50 dark:hover:text-purple-200'
           : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-900/50 dark:hover:text-blue-200'}
-        onClick={() => { setSelected([]); setConfirming(false); release.reset(); setOpen(true); }}
+        onClick={() => { setSelected([]); setConfirming(false); setReleaseComplete(false); release.reset(); setOpen(true); }}
       />}>
         <Send aria-hidden="true" />{managing ? 'Manage' : 'Release'}
       </TooltipTrigger>
@@ -59,16 +62,16 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
           <AlertDialog.Popup className="w-full max-w-lg rounded-xl bg-popover p-6 text-popover-foreground shadow-xl ring-1 ring-foreground/10">
             <div className="grid gap-5">
               <div className="grid gap-2">
-                <AlertDialog.Title className="text-lg font-semibold">{confirming ? 'Are you sure you want to release?' : managing ? 'Manage releases' : 'Release to advertisers'}</AlertDialog.Title>
+                <AlertDialog.Title className="text-lg font-semibold">{releaseComplete ? 'Creatives released' : confirming ? 'Are you sure you want to release?' : managing ? 'Manage releases' : 'Release to advertisers'}</AlertDialog.Title>
                 <AlertDialog.Description className="text-sm leading-6 text-muted-foreground">
-                  {confirming
+                  {releaseComplete ? 'The selected advertisers can now view these results. You can send an email with these and other released batches.' : confirming
                     ? 'The selected advertisers will be able to see these results immediately. Released creatives cannot be deleted, and a release cannot be undone. You can release to additional offers later.'
                     : managing
                       ? 'See which advertisers already have access and release to additional advertisers. Existing releases cannot be undone, and released creatives cannot be deleted.'
                       : 'Choose which advertisers can see the completed results. Unselected offers stay private. You’ll confirm the recipients before anything is released.'}
                 </AlertDialog.Description>
               </div>
-              {selection.isFetching && !confirming ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />Checking completed results…</p> : selection.error ? <p role="alert" className="text-sm text-destructive">{selection.error.message}</p> : selection.data ? <>
+              {releaseComplete ? <p role="status" className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="size-5" />Release saved. No email has been sent.</p> : selection.isFetching && !confirming ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />Checking completed results…</p> : selection.error ? <p role="alert" className="text-sm text-destructive">{selection.error.message}</p> : selection.data ? <>
                 <p className="text-sm font-medium">{selection.data.job_ids.length} completed creative{selection.data.job_ids.length === 1 ? '' : 's'}</p>
                 {confirming ? <ul className="grid gap-2 rounded-lg border p-4 text-sm">{chosen.map(offer => <li key={offer.offer_id} className="flex justify-between gap-4"><span>{offer.offer_name}</span><span>{offer.pending} creative{offer.pending === 1 ? '' : 's'}</span></li>)}</ul> : <div className="grid gap-3">
                   {pending.length > 1 ? <Button className="justify-self-start" variant="secondary" size="sm" onClick={() => setSelected(pending.map(offer => offer.offer_id))}>Select all unreleased offers</Button> : null}
@@ -81,14 +84,16 @@ export function ReleaseButton({ jobIds, batchId, clientId, hasReleased = false, 
               </> : null}
               {release.error ? <p role="alert" className="text-sm text-destructive">{release.error.message}</p> : null}
               <div className="flex flex-wrap justify-end gap-2">
-                <AlertDialog.Close disabled={release.isPending} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Cancel</AlertDialog.Close>
-                {confirming ? <><Button variant="outline" size="sm" disabled={release.isPending} onClick={() => setConfirming(false)}>Back</Button><Button size="sm" disabled={release.isPending || !chosen.length} onClick={() => release.mutate()}>{release.isPending ? <LoaderCircle className="animate-spin" /> : <Send />}{release.isPending ? 'Releasing…' : 'Confirm release'}</Button></> : <Button size="sm" disabled={!chosen.length || selection.isFetching || Boolean(selection.error)} onClick={() => setConfirming(true)}>Review release</Button>}
+                <AlertDialog.Close disabled={release.isPending} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{releaseComplete ? 'Done' : 'Cancel'}</AlertDialog.Close>
+                {managing && !confirming ? <Button size="sm" variant={releaseComplete ? 'default' : 'outline'} onClick={() => { setOpen(false); setEmailOpen(true); }}><Mail />Send email</Button> : null}
+                {releaseComplete ? null : confirming ? <><Button variant="outline" size="sm" disabled={release.isPending} onClick={() => setConfirming(false)}>Back</Button><Button size="sm" disabled={release.isPending || !chosen.length} onClick={() => release.mutate()}>{release.isPending ? <LoaderCircle className="animate-spin" /> : <Send />}{release.isPending ? 'Releasing…' : 'Confirm release'}</Button></> : <Button size="sm" disabled={!chosen.length || selection.isFetching || Boolean(selection.error)} onClick={() => setConfirming(true)}>Review release</Button>}
               </div>
             </div>
           </AlertDialog.Popup>
         </AlertDialog.Viewport>
       </AlertDialog.Portal>
     </AlertDialog.Root>
+    <ReleaseEmailDialog open={emailOpen} onOpenChange={setEmailOpen} clientId={clientId} initialBatchId={batchId} initialOfferId={selected.length === 1 ? selected[0] : undefined} />
   </>;
 }
 

@@ -1,8 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { candidateValidator, feedbackFields, lessonValidator, learningMetricsValidator } from './learningTypes.ts';
+import { emailFields } from './releaseEmailTypes.ts';
 
 export default defineSchema({
+  releaseEmails: defineTable(emailFields)
+    .index('by_email_id', ['emailId'])
+    .index('by_owner_key_and_offer_id', ['ownerKey', 'offerId']),
   publishers: defineTable({
     organizationId: v.optional(v.string()), publisherId: v.string(), clientId: v.string(), name: v.string(), username: v.string(),
     status: v.union(v.literal('invited'), v.literal('active'), v.literal('suspended')),

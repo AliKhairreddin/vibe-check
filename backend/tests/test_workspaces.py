@@ -17,6 +17,53 @@ OTHER = 'b' * 32
 TOKEN = 'c' * 43
 
 
+def email_payload():
+    return {'email_id': 'd' * 32, 'offer_id': 'kissterra', 'batches': [{'batch_id': 'auto', 'label': 'Auto'}, {'batch_id': 'home', 'label': 'Home'}],
+            'to': ['  CLIENT@EXAMPLE.COM '], 'cc': ['client@example.com', 'team@example.com'], 'reply_to': 'reply@example.com',
+            'subject': 'Auto and Home', 'message': 'Please review.', 'signature': 'Creative Team'}
+
+
+@pytest.mark.anyio
+async def test_release_email_publisher_scope_and_explicit_worker_send_boundary(portal, monkeypatch):
+    from app import release_emails
+    calls = []
+    def email_call(function, args, *, mutation=False):
+        calls.append((function, args, mutation))
+        return {'emailId': args.get('emailId'), 'status': 'draft'}
+    monkeypatch.setattr(release_emails, 'call', email_call)
+    monkeypatch.setattr(release_emails.storage, 'CONVEX_HTTP_SECRET', 'transport-test-secret')
+    headers = {'origin': 'https://app.adchecked.com'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']()) as client:
+        response = await client.post('/api/client/kissterra/release-emails/preview', json=email_payload(), headers=headers)
+        assert response.status_code == 200
+        function, args, mutation = calls[-1]
+        assert function == 'prepare' and mutation
+        assert args['publisherId'] == 'publisher-a' and args['clientId'] == 'kissterra'
+        assert args['to'] == ['client@example.com'] and args['cc'] == ['team@example.com']
+        assert len(args['batches']) == 2 and all(len(batch['token']) == 43 for batch in args['batches'])
+        assert (await client.post('/api/client/kissterra/release-emails/preview', json={**email_payload(), 'offer_id': 'acp'}, headers=headers)).status_code == 404
+        endpoint = f"/api/client/kissterra/release-emails/{'d' * 32}/send"
+        assert (await client.post(endpoint, json={}, headers=headers)).status_code == 409
+        assert (await client.post(endpoint, json={'confirmed': True}, headers=headers)).status_code == 503
+        sent = await client.post(endpoint, json={'confirmed': True}, headers={**headers, 'x-release-email-transport': 'transport-test-secret'})
+        assert sent.json() == {'email_id': 'd' * 32, 'owner_key': 'publisher:publisher-a'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']('client')) as client:
+        assert (await client.get('/api/client/kissterra/release-emails/options')).status_code == 403
+
+
+@pytest.mark.anyio
+async def test_release_email_validation_and_admin_auth(portal, monkeypatch):
+    from app import release_emails
+    monkeypatch.setenv('ADMIN_PASSWORD', 'admin-email-test')
+    monkeypatch.setattr(release_emails, 'call', lambda *args, **kwargs: pytest.fail('Invalid email reached storage'))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='http://test') as client:
+        assert (await client.get('/api/release-emails/options')).status_code == 401
+        headers = {'x-app-password': 'operator-only', main.ADMIN_PASSWORD_HEADER: 'admin-email-test'}
+        assert (await client.get('/api/release-emails/options', headers=headers)).status_code == 200
+        for patch in [{'to': ['invalid']}, {'subject': 'Hello\r\nBcc: injected@example.com'}, {'reply_to': 'bad'}, {'batches': []}]:
+            assert (await client.post('/api/release-emails/preview', json={**email_payload(), **patch}, headers=headers)).status_code == 422
+
+
 @pytest.fixture
 def anyio_backend():
     return 'asyncio'

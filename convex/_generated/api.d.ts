@@ -21,6 +21,8 @@ import type * as liveScans from "../liveScans.js";
 import type * as offers from "../offers.js";
 import type * as platform from "../platform.js";
 import type * as publisherOwnership from "../publisherOwnership.js";
+import type * as releaseEmailTypes from "../releaseEmailTypes.js";
+import type * as releaseEmails from "../releaseEmails.js";
 import type * as reportArtifacts from "../reportArtifacts.js";
 import type * as reviewEvidenceFrames from "../reviewEvidenceFrames.js";
 import type * as reviewPayloads from "../reviewPayloads.js";
@@ -54,6 +56,8 @@ declare const fullApi: ApiFromModules<{
   offers: typeof offers;
   platform: typeof platform;
   publisherOwnership: typeof publisherOwnership;
+  releaseEmailTypes: typeof releaseEmailTypes;
+  releaseEmails: typeof releaseEmails;
   reportArtifacts: typeof reportArtifacts;
   reviewEvidenceFrames: typeof reviewEvidenceFrames;
   reviewPayloads: typeof reviewPayloads;
