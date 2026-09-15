@@ -5080,10 +5080,10 @@ def test_batch_telegram_attaches_unified_pdf_after_message(tmp_path, monkeypatch
     assert attached == []  # No report PDF exists when every upload failed.
 
 def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
+    from app.review_pipeline.telegram import _send_telegram_message
     token='secret-token-that-must-not-be-logged'
     monkeypatch.setenv('TELEGRAM_BOT_TOKEN', token)
     monkeypatch.setenv('TELEGRAM_CHAT_ID', '12345')
-    record=JobRecord(job_id='telegram-failure', status=JobStatus.complete)
 
     class FakeClient:
         def __init__(self, timeout):
@@ -5107,8 +5107,8 @@ def test_telegram_error_log_does_not_expose_bot_token(monkeypatch, caplog):
     monkeypatch.setattr('app.review_pipeline.telegram.httpx.Client', FakeClient)
     caplog.set_level(logging.ERROR, logger='app.review_pipeline.telegram')
 
-    assert not send_review_message(record, {'overall_status':'pass', 'findings':[]})
-    assert 'event=review:telegram-failure:complete' in caplog.text
+    assert not _send_telegram_message('Review failed', 'event=review:telegram-failure:failed')
+    assert 'event=review:telegram-failure:failed' in caplog.text
     assert 'error_type=HTTPStatusError' in caplog.text
     assert 'http_status=502' in caplog.text
     assert token not in caplog.text

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { classifyReviewVertical } from "./reviewVerticals.ts";
 import { enqueueLearning } from './learning.ts';
 import { feedbackFields } from './learningTypes.ts';
+import { queueDecisionNotification } from './telegramMilestones.ts';
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 
@@ -610,6 +611,7 @@ export const decide = mutation({
       await ctx.db.insert("clientReviewDecisions", { ...value, createdAt: now });
     }
     await enqueueLearning(ctx, args.offerId, Boolean(existing));
+    await queueDecisionNotification(ctx, args.jobId, args.offerId);
     return {
       decidedAt: now,
       decision: args.decision,
@@ -693,6 +695,7 @@ export const clearDecision = mutation({
     await archiveDecision(ctx, existing, Date.now());
     await ctx.db.delete(existing._id);
     await enqueueLearning(ctx, args.offerId, true);
+    await queueDecisionNotification(ctx, args.jobId, args.offerId);
     return { cleared: true };
   },
 });

@@ -15,7 +15,28 @@ function requireSecret(secret: string) {
 const delivery = v.union(v.null(), v.object({
   eventKey: v.string(), message: v.string(), claimId: v.string(),
   pdfJobId: v.union(v.string(), v.null()),
+  messageId: v.union(v.number(), v.null()), chatId: v.union(v.string(), v.null()),
 }));
+
+export function suppressedMessage(message: string) {
+  return /<(?:b)>[^<]*(?:Review queued|Review batch started|Review delayed|Review resumed|no new creatives|review done|review \d{4}-\d{2}-\d{2} — done<|PDF attachment unavailable)/i.test(message);
+}
+
+// Revision changes preserve the Telegram message identity, including when an
+// email finishes while a delivery claim is in flight.
+export async function setMessage(ctx: MutationCtx, eventKey: string, message: string) {
+  if (message.length > 3900 || !message) throw new Error('Invalid notification');
+  const row = await ctx.db.query('telegramNotifications').withIndex('by_event_key', q => q.eq('eventKey', eventKey)).unique();
+  if (row?.message === message) return;
+  const now = Date.now();
+  if (row) {
+    await ctx.db.patch(row._id, { message, revision: (row.revision ?? 0) + 1, updatedAt: now,
+      ...(row.status === 'claimed' ? {} : { status: 'pending' as const, attempts: 0, nextAttemptAt: now }) });
+  } else {
+    await ctx.db.insert('telegramNotifications', { eventKey, message, revision: 1,
+      status: 'pending', attempts: 0, nextAttemptAt: now, createdAt: now, updatedAt: now });
+  }
+}
 
 export const isApiReview = query({
   args: { secret: v.string(), jobId: v.string() },
@@ -27,19 +48,26 @@ export const isApiReview = query({
   },
 });
 
-async function claimRow(ctx: MutationCtx, row: Doc<'telegramNotifications'>) {
+async function claimRow(ctx: MutationCtx, row: Doc<'telegramNotifications'>, protocol?: number) {
   const now = Date.now();
   if (row.status === 'sent' || row.status === 'exhausted' || row.nextAttemptAt > now) return null;
+  if (suppressedMessage(row.message)) {
+    await ctx.db.patch(row._id, { status: 'sent', claimId: undefined, updatedAt: now });
+    return null;
+  }
+  // Old containers cannot acknowledge editable messages during a rolling deploy.
+  if (row.revision !== undefined && protocol !== 2) return null;
   if (row.attempts >= MAX_ATTEMPTS) {
     await ctx.db.patch(row._id, { status: 'exhausted', claimId: undefined, updatedAt: now });
     return null;
   }
   const claimId = crypto.randomUUID();
   await ctx.db.patch(row._id, {
-    status: 'claimed', claimId, attempts: row.attempts + 1,
+    status: 'claimed', claimId, claimedRevision: row.revision ?? 0, attempts: row.attempts + 1,
     nextAttemptAt: now + LEASE_MS, updatedAt: now,
   });
-  return { eventKey: row.eventKey, message: row.message, claimId, pdfJobId: row.pdfJobId ?? null };
+  return { eventKey: row.eventKey, message: row.message, claimId, pdfJobId: null,
+    messageId: row.messageId ?? null, chatId: row.chatId ?? null };
 }
 
 // Called by the existing authenticated Python backend, never by the browser.
@@ -51,6 +79,7 @@ export const enqueue = mutation({
     if (!args.eventKey || args.eventKey.length > 250 || !args.message || args.message.length > 3900) {
       throw new Error('Invalid notification');
     }
+    if (suppressedMessage(args.message)) return 'sent';
     const existing = await ctx.db.query('telegramNotifications')
       .withIndex('by_event_key', q => q.eq('eventKey', args.eventKey)).unique();
     if (existing) return existing.status;
@@ -65,21 +94,21 @@ export const enqueue = mutation({
 });
 
 export const claim = mutation({
-  args: { secret: v.string(), eventKey: v.optional(v.string()) },
+  args: { secret: v.string(), eventKey: v.optional(v.string()), protocol: v.optional(v.number()) },
   returns: delivery,
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     if (args.eventKey) {
       const row = await ctx.db.query('telegramNotifications')
         .withIndex('by_event_key', q => q.eq('eventKey', args.eventKey!)).unique();
-      return row ? await claimRow(ctx, row) : null;
+      return row ? await claimRow(ctx, row, args.protocol) : null;
     }
     for (const status of ['pending', 'claimed'] as const) {
       const rows = await ctx.db.query('telegramNotifications')
         .withIndex('by_status_and_next_attempt_at', q => q.eq('status', status).lte('nextAttemptAt', Date.now()))
-        .take(10);
+        .take(50);
       for (const row of rows) {
-        const claimed = await claimRow(ctx, row);
+        const claimed = await claimRow(ctx, row, args.protocol);
         if (claimed) return claimed;
       }
     }
@@ -88,7 +117,8 @@ export const claim = mutation({
 });
 
 export const finish = mutation({
-  args: { secret: v.string(), eventKey: v.string(), claimId: v.string(), success: v.boolean() },
+  args: { secret: v.string(), eventKey: v.string(), claimId: v.string(), success: v.boolean(),
+    messageId: v.optional(v.number()), chatId: v.optional(v.string()) },
   returns: v.boolean(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
@@ -96,10 +126,13 @@ export const finish = mutation({
       .withIndex('by_event_key', q => q.eq('eventKey', args.eventKey)).unique();
     if (!row || row.status !== 'claimed' || row.claimId !== args.claimId) return false;
     const now = Date.now();
+    const changed = (row.revision ?? 0) !== (row.claimedRevision ?? 0);
     await ctx.db.patch(row._id, {
-      status: args.success ? 'sent' : row.attempts >= MAX_ATTEMPTS ? 'exhausted' : 'pending',
+      status: changed ? 'pending' : args.success ? 'sent' : row.attempts >= MAX_ATTEMPTS ? 'exhausted' : 'pending',
       claimId: undefined, updatedAt: now,
-      nextAttemptAt: now + Math.min(60_000 * 2 ** (row.attempts - 1), 60 * 60_000),
+      ...(args.success && args.messageId !== undefined ? { messageId: args.messageId, chatId: args.chatId } : {}),
+      ...(changed ? { attempts: 0 } : {}),
+      nextAttemptAt: changed ? now : now + Math.min(60_000 * 2 ** (row.attempts - 1), 60 * 60_000),
     });
     return true;
   },

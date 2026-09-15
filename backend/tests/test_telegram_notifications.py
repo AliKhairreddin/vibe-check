@@ -125,13 +125,13 @@ def test_empty_and_pending_batches_do_not_send_completion(monkeypatch):
     assert not calls
 
 
-def test_missing_projection_still_delivers_snapshot(monkeypatch):
+def test_successful_batch_closes_outbox_without_a_message_or_pdf(monkeypatch):
     monkeypatch.setattr(storage, 'get_batch_offer_summaries', lambda ids: {})
     sent = []
     monkeypatch.setattr(telegram, '_send_event', lambda key, message: sent.append(message) or True)
-    monkeypatch.setattr(telegram, '_attach_batch_pdf', lambda value: True)
+    monkeypatch.setattr(telegram, '_attach_batch_pdf', lambda value: pytest.fail('Unexpected PDF'))
     assert telegram.send_batch_message(batch([item(1, 'red')]))
-    assert '1 red' in sent[0]
+    assert sent == []
 
 
 def test_snapshot_override_survives_summary_hydration(monkeypatch):
@@ -139,7 +139,9 @@ def test_snapshot_override_survives_summary_hydration(monkeypatch):
     sent = []
     monkeypatch.setattr(telegram, '_send_event', lambda key, message: sent.append(message) or True)
     monkeypatch.setattr(telegram, '_attach_batch_pdf', lambda value: True)
-    assert telegram.send_batch_message(batch([item(1, with_override=True)]))
+    failure = item(2)
+    failure.status = 'upload_failed'
+    assert telegram.send_batch_message(batch([item(1, with_override=True), failure]))
     assert '1 green under an approved internal exception.' in sent[0]
 
 
@@ -188,7 +190,11 @@ def test_lifecycle_events_identify_client_and_link_job(monkeypatch, event, live_
     sent = []
     monkeypatch.setattr(telegram, '_send_event', lambda key, message: sent.append((key, message)) or True)
     meta = ReviewRequestMeta(live_scan_kind=live_kind, live_scan_account_name='Buying account')
-    assert telegram.send_job_event(JobRecord(job_id='one', file_name='one.png', offer_ids=['kissterra']), meta, event, 'Safe failure or progress reason')
+    result = telegram.send_job_event(JobRecord(job_id='one', file_name='one.png', offer_ids=['kissterra']), meta, event, 'Safe failure or progress reason')
+    if event != 'failed':
+        assert result is False and sent == []
+        return
+    assert result
     key, message = sent[0]
     assert event in key
     assert 'Kissterra' in message and '/reviews/one' in message
@@ -210,7 +216,11 @@ def test_partner_api_events_stay_out_of_shared_telegram(monkeypatch):
 def test_scheduled_noop_and_failure_alerts(monkeypatch, status):
     sent = []
     monkeypatch.setattr(telegram, '_send_event', lambda key, message: sent.append((key, message)) or True)
-    assert telegram.send_automation_event(SimpleNamespace(name='Daily creatives'), 'run-id', status, 'No new files or unable to read source')
+    result = telegram.send_automation_event(SimpleNamespace(name='Daily creatives'), 'run-id', status, 'No new files or unable to read source')
+    if status == 'no_matches':
+        assert result is False and sent == []
+        return
+    assert result
     assert status in sent[0][0]
     assert 'Daily creatives' in sent[0][1] and '/automations' in sent[0][1]
 
@@ -244,7 +254,7 @@ def test_durable_delivery_enqueues_claims_and_records_failure(monkeypatch):
         if function.endswith(':claim'): return {'eventKey': 'one', 'claimId': 'claim-1', 'message': 'Message'}
         return True
     monkeypatch.setattr(storage, '_convex_call', convex)
-    monkeypatch.setattr(telegram, '_send_telegram_message', lambda *args: False)
+    monkeypatch.setattr(telegram, '_send_telegram_request', lambda *args, **kwargs: None)
     assert not telegram._send_event('one', 'Message')
     assert calls[-1] == ('telegramNotifications:finish', {'eventKey': 'one', 'claimId': 'claim-1', 'success': False})
 
@@ -266,7 +276,7 @@ def test_pending_alert_is_recovered_by_drain(monkeypatch):
         if function.endswith(':finish'): calls.append(args)
         return True
     monkeypatch.setattr(storage, '_convex_call', convex)
-    monkeypatch.setattr(telegram, '_send_telegram_message', lambda *args: True)
+    monkeypatch.setattr(telegram, '_send_telegram_request', lambda *args, **kwargs: 42)
     assert telegram.deliver_pending_telegram_notifications() == 1
     assert calls[0]['claimId'] == 'recovered' and calls[0]['success']
 
@@ -280,15 +290,16 @@ def test_missing_credentials_preserve_pending_notification(monkeypatch):
     assert telegram.deliver_pending_telegram_notifications() == 0
 
 
-def test_pdf_failure_has_separate_alert_and_keeps_result_sent(monkeypatch):
+def test_successful_individual_and_live_reviews_and_starts_are_quiet(monkeypatch):
     storage.set_status('one', JobStatus.complete, 100, 'Complete')
     sent = []
     monkeypatch.setattr(telegram, '_send_telegram_message', lambda message, context: sent.append(message) or True)
-    monkeypatch.setattr(telegram, '_attach_review_pdf', lambda *args: False)
-    assert telegram.send_review_message(JobRecord(job_id='one'), {'overall_status': 'green'})
-    assert len(sent) == 2
-    assert '1 green' in sent[0]
-    assert 'PDF attachment unavailable' in sent[1]
+    monkeypatch.setattr(telegram, '_attach_review_pdf', lambda *args: pytest.fail('Unexpected PDF'))
+    assert not telegram.send_review_message(JobRecord(job_id='one'), {'overall_status': 'green'})
+    assert not telegram.send_live_scan_message(JobRecord(job_id='one'), {'overall_status': 'green'}, ReviewRequestMeta())
+    assert not telegram.send_review_started(JobRecord(job_id='one'), ReviewRequestMeta())
+    assert not telegram.send_review_started(JobRecord(job_id='one'), ReviewRequestMeta(batch_id='batch', batch_item_id='one'))
+    assert sent == []
 
 
 @pytest.mark.parametrize('code,attempts', [(400, 1), (401, 1), (403, 1), (429, 3), (500, 3)])
@@ -307,3 +318,61 @@ def test_telegram_transport_retry_policy(monkeypatch, code, attempts):
     monkeypatch.setattr(telegram.time, 'sleep', lambda seconds: None)
     assert not telegram._send_telegram_message('Message', 'test')
     assert len(sent) == attempts
+
+
+@pytest.mark.parametrize('response_kind', ['sent', 'edited', 'unchanged', 'deleted', 'server_html'])
+def test_editable_transport_preserves_message_identity_and_retries(monkeypatch, response_kind):
+    monkeypatch.setenv('TELEGRAM_BOT_TOKEN', 'test-token')
+    monkeypatch.setenv('TELEGRAM_CHAT_ID', '-100')
+    monkeypatch.setenv('TELEGRAM_MESSAGE_THREAD_ID', '7')
+    requests = []
+    class Client:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, **kwargs):
+            requests.append((url.rsplit('/', 1)[-1], kwargs['json']))
+            request = httpx.Request('POST', url)
+            if response_kind == 'unchanged':
+                return httpx.Response(400, request=request, json={'ok': False, 'description': 'Bad Request: message is not modified'})
+            if response_kind == 'deleted' and len(requests) == 1:
+                return httpx.Response(400, request=request, json={'ok': False, 'description': 'Bad Request: message to edit not found'})
+            if response_kind == 'server_html' and len(requests) == 1:
+                return httpx.Response(502, request=request, text='<html>Bad gateway</html>')
+            return httpx.Response(200, request=request, json={'ok': True, 'result': {'message_id': 100 if response_kind in {'sent', 'deleted'} else 42}})
+    monkeypatch.setattr(telegram.httpx, 'Client', Client)
+    monkeypatch.setattr(telegram.time, 'sleep', lambda _: None)
+    result = telegram._send_telegram_request('Updated summary', 'test', message_id=None if response_kind == 'sent' else 42)
+    assert result == (100 if response_kind in {'sent', 'deleted'} else 42)
+    assert requests[0][0] == ('sendMessage' if response_kind == 'sent' else 'editMessageText')
+    if response_kind != 'sent':
+        assert requests[0][1]['message_id'] == 42
+        assert 'message_thread_id' not in requests[0][1]
+    if response_kind == 'deleted':
+        assert requests[1][0] == 'sendMessage'
+        assert requests[1][1]['message_thread_id'] == '7'
+        assert 'message_id' not in requests[1][1]
+    if response_kind == 'server_html':
+        assert len(requests) == 2
+
+
+@pytest.mark.parametrize('original_chat,expected_id', [('-100', 42), ('-200', None)])
+def test_delivery_edits_only_in_the_original_configured_chat(monkeypatch, original_chat, expected_id):
+    monkeypatch.setenv('TELEGRAM_CHAT_ID', '-100')
+    requests = []
+    acknowledgements = []
+    def send(text, context, *, message_id=None):
+        requests.append(message_id)
+        return message_id or 99
+    monkeypatch.setattr(telegram, '_send_telegram_request', send)
+    monkeypatch.setattr(storage, '_convex_call', lambda kind, function, args: acknowledgements.append(args) or True)
+    assert telegram._deliver_event({'eventKey': 'release:one', 'claimId': 'claim', 'message': 'Email sent',
+                                    'messageId': 42, 'chatId': original_chat, 'pdfJobId': 'legacy'})
+    assert requests == [expected_id]
+    assert acknowledgements == [{'eventKey': 'release:one', 'claimId': 'claim', 'success': True,
+                                 'messageId': expected_id or 99, 'chatId': '-100'}]
+
+
+def test_individual_failure_inside_batch_waits_for_batch_summary(monkeypatch):
+    monkeypatch.setattr(telegram, '_send_event', lambda *a, **k: pytest.fail('Per-creative batch alert'))
+    assert not telegram.send_job_event(JobRecord(job_id='one'), ReviewRequestMeta(batch_id='batch', batch_item_id='one'), 'failed', 'Failed')

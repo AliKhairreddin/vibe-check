@@ -15,6 +15,7 @@ import type * as apiPartners from "../apiPartners.js";
 import type * as automations from "../automations.js";
 import type * as batches from "../batches.js";
 import type * as clientReviews from "../clientReviews.js";
+import type * as crons from "../crons.js";
 import type * as learning from "../learning.js";
 import type * as learningTypes from "../learningTypes.js";
 import type * as liveScans from "../liveScans.js";
@@ -33,6 +34,9 @@ import type * as reviewReleases from "../reviewReleases.js";
 import type * as reviewSources from "../reviewSources.js";
 import type * as reviewVerticals from "../reviewVerticals.js";
 import type * as reviews from "../reviews.js";
+import type * as telegramDigest from "../telegramDigest.js";
+import type * as telegramMessageTypes from "../telegramMessageTypes.js";
+import type * as telegramMilestones from "../telegramMilestones.js";
 import type * as telegramNotifications from "../telegramNotifications.js";
 import type * as workspaces from "../workspaces.js";
 
@@ -50,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   automations: typeof automations;
   batches: typeof batches;
   clientReviews: typeof clientReviews;
+  crons: typeof crons;
   learning: typeof learning;
   learningTypes: typeof learningTypes;
   liveScans: typeof liveScans;
@@ -68,6 +73,9 @@ declare const fullApi: ApiFromModules<{
   reviewSources: typeof reviewSources;
   reviewVerticals: typeof reviewVerticals;
   reviews: typeof reviews;
+  telegramDigest: typeof telegramDigest;
+  telegramMessageTypes: typeof telegramMessageTypes;
+  telegramMilestones: typeof telegramMilestones;
   telegramNotifications: typeof telegramNotifications;
   workspaces: typeof workspaces;
 }>;

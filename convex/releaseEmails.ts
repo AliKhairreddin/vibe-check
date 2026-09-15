@@ -1,4 +1,5 @@
 import { v } from 'convex/values';
+import { recordEmailDelivery } from './telegramMilestones.ts';
 import { mutation, query, type QueryCtx } from './_generated/server.js';
 import type { Doc } from './_generated/dataModel';
 import { emailFields, validateEmailContent } from './releaseEmailTypes.ts';
@@ -133,8 +134,10 @@ export const claim = mutation({
         if (!stat || stat.withheld || stat.deletedAt !== undefined || stat.status !== 'complete') throw new Error('A selected creative is no longer released');
       }
     }
-    await ctx.db.patch(_id, { status: 'sending', claimId: args.claimId, from: args.from });
-    return { claimed: true, email: { ...email, status: 'sending' as const, from: args.from } };
+    const sendingAt = Date.now();
+    await ctx.db.patch(_id, { status: 'sending', sendingAt, claimId: args.claimId, from: args.from });
+    await recordEmailDelivery(ctx, { ...row, status: 'sending', sendingAt });
+    return { claimed: true, email: { ...email, status: 'sending' as const, sendingAt, from: args.from } };
   },
 });
 
@@ -145,7 +148,11 @@ export const finish = mutation({
     authorize({ secret: args.secret });
     const row = await ctx.db.query('releaseEmails').withIndex('by_email_id', q => q.eq('emailId', args.emailId)).unique();
     if (!row || row.claimId !== args.claimId) throw new Error('Email unavailable');
-    if (row.status === 'sending') await ctx.db.patch(row._id, { status: args.status, ...(args.status === 'sent' ? { sentAt: Date.now(), messageId: args.messageId } : {}) });
+    if (row.status === 'sending') {
+      const patch = { status: args.status, ...(args.status === 'sent' ? { sentAt: Date.now(), messageId: args.messageId } : {}) };
+      await ctx.db.patch(row._id, patch);
+      await recordEmailDelivery(ctx, { ...row, ...patch });
+    }
     return null;
   },
 });

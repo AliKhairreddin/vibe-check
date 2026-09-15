@@ -1,93 +1,120 @@
-# Review notifications in Telegram
+# Internal Telegram notifications
 
-The selected offer is the client. A finished batch is summarized by client, using
-the original AdChecked verdict for each submitted item. For example:
+The internal chat reports release and advertiser-review milestones. Processing
+progress stays in the app. These notifications use the selected offer as the
+advertiser and keep AdChecked assessments separate from advertiser decisions.
+
+## Messages and triggers
+
+| Event | Behavior |
+| --- | --- |
+| A review is queued or a batch starts | Quiet. |
+| A review, live scan, or batch finishes successfully | Quiet. Finished batches appear in the roundup until released. |
+| A batch or selected creatives are released | One summary per batch/release action, grouping the newly released advertisers. |
+| An email is being sent or its sending status changes | Edit the matching release summary. Drafting/previewing sends nothing. |
+| One creative is approved/disapproved | Quiet until that advertiser has decided on all released creatives in the batch. |
+| An advertiser finishes a batch | One completion summary with explicit approved/disapproved counts and a feedback link. |
+| A decision changes or a completed batch is reopened | Correct the existing completion post; do not create a stream of new posts. |
+| An automatic retry, recovery, or scan with no new files | Quiet. |
+| A terminal review, upload, import, or automation failure | An actionable failure alert. Batch failures are consolidated at batch completion. |
+| An email send is uncertain or stays in `sending` for ten minutes | An actionable delivery-check alert; never resend email automatically. |
+| Unqueued uploads make no progress for two hours | The existing once-per-batch attention alert. |
+| PDF generation | PDFs remain available in the app; no automatic Telegram attachment or attachment-failure post. |
+
+Release summaries identify the batch and advertiser, count the **newly released**
+creatives using their original red/yellow/green assessment, show advertiser review
+progress at release, and link to the batch filtered to that advertiser. Partial
+releases are labeled. Release is additive: repeating an unchanged release sends
+nothing, and a later release gets its own summary of the newly released creatives.
+Large summaries use bounded continuation posts with stable advertiser groupings.
 
 ```text
-Creative review 2026-09-05 — done
-47/47 reviewed
+Batch released · 15 Sept 2026 Auto
 
-Client: YZX
-🔴 2 red — Review
-🟡 27 yellow — Review
-🟢 18 green — Review
-
-Open batch reports
+Kissterra — 22 creatives
+AdChecked assessment: 🔴 7 · 🟡 15 · 🟢 0
+Advertiser review at release: 0/22 completed
+Notification: Email not sent yet
+Open batch
 ```
 
-Each Review link opens the same batch filtered to that client and color. The
-batch page labels the filter as the AdChecked assessment; later client decisions
-remain visible separately. Zero counts stay visible. An item containing both a
-creative and copy counts once per client, using its overall result. Individual
-messages also retain the creative/copy split. Multiple offers produce separate
-client sections. Long summaries continue in additional messages without dropping
-items or counts. Names and source labels are escaped for Telegram HTML.
+Release makes results visible; it does not send email. The notification line is
+updated after the actual email attempt, including recipients (abbreviated when
+long), sending time, and timezone. Only an email covering the released creatives
+can mark their summary as sent. Provider acceptance means **sent**, not delivered
+to an inbox or read. A newer attempt's status is not overwritten by a late
+callback from an older attempt. The existing email history remains the detailed
+audit record.
 
-## Situation coverage
+Advertiser completion requires an explicit decision on every currently released,
+evaluated creative for that advertiser. AI-green does not mean advertiser-approved.
+Advertisers finish independently. Withheld creatives are excluded; unavailable
+released results prevent a false completion. A subsequent partial release or
+cleared decision reopens the existing completion post. If a decision is cleared
+before the completion post is sent, that premature post is cancelled.
 
-| Situation | Notification |
-| --- | --- |
-| A single image, video, or copy-only review is accepted into the queue | Review queued, client/name, progress link. |
-| A batch starts processing | One batch-start event with client names, source label when known, total items, and progress link. |
-| A single review finishes | Creative/ad-copy review done, client counts, offer-specific report links, creative/copy split when applicable. |
-| All batch items finish successfully | Review done, full client totals, filtered links, and combined report link. |
-| Some items fail | Review done with issues; completed verdicts remain counted and failures have their own links. |
-| Every item fails | Review failed; no failed item is represented as a red verdict. |
-| Upload or Drive import fails before a job starts | Upload/import failed count in the terminal batch summary, linked to failed uploads and retry controls. |
-| Uploads never reach processing | Once no batch progress has been recorded for two hours, an attention alert identifies the outstanding count and links to the batch. Uploads are not cancelled by the alert. |
-| Pipeline error, media/Drive download error, or final timeout | Failed individual/live review alert with the job details link; batch jobs appear in the final batch summary. |
-| A timeout can be retried automatically | Review delayed — retrying, with attempt count and progress link. The eventual final result follows. |
-| A started job resumes after its owning container stops reporting heartbeats | Review resumed after interruption, with a progress link. Active work on other containers is excluded, and recovery rechecks ownership and progress before requeuing. |
-| A waiting job is restored before processing has started, or an older job has no recorded owner | Recover quietly; no claim that processing was interrupted. |
-| Interrupted work has no recovery source | Failed review with re-upload instructions, or a failed item in the final batch summary. |
-| Live creative or primary text completes | Live review done, client counts, Meta account/creative context, report and Live Scans links. |
-| Live review fails | Live failure alert with job and Live Scans links. |
-| A scheduled Drive scan completes reviews | The same client summary, with the schedule name as the source. |
-| A scheduled scan finds no matching files | Scheduled review — no new creatives, with the reason and schedules link. |
-| All matching Drive versions were already reviewed | No-new-creatives message explaining that the current versions were already reviewed. |
-| A schedule cannot start, including unavailable offers/guidelines or Drive access problems | Scheduled review could not start, with corrective instructions and schedules link. |
-| Partial scheduled import failure | Failed imports in the batch summary; the existing automation recovery continues to retry unqueued files. |
-| An offer is disabled or lacks guidelines | Explicit not-reviewed count and reason; never counted as green. |
-| A completed result is missing from the compact projection | Use the saved final outcome when available; otherwise explicitly show results unavailable. Do not copy one client's primary verdict to other clients. |
-| Green under an internal exception | Green count plus the number using an approved internal exception. |
-| PDF generation, attachment, or size failure | Separate PDF-unavailable notice linking to the saved review. The review result remains successful. All-failed batches do not attempt an empty PDF attachment. |
-| Telegram rate limit, network error, or server failure | Immediate bounded retry, then durable retry with backoff. Review processing is unaffected. |
-| Duplicate terminal callback or delivery worker overlap | Stable event keys deduplicate acknowledged messages; leased claims prevent concurrent ownership. |
+## Daily roundup
 
-Normal extraction/transcription/analysis progress stays on the linked job page.
-The summary is not sent as complete while batch items are pending. Repeating an
-unchanged terminal callback does not send another result. A user retry that changes
-the final batch results gets a new summary.
+The default is **18:00 America/Toronto**, checked every five minutes and adjusted
+for daylight saving time. Change these **Convex deployment environment variables**:
 
-## Delivery and operational boundaries
+- `TELEGRAM_DIGEST_TIME`: local `HH:mm`, default `18:00`.
+- `TELEGRAM_DIGEST_TIMEZONE`: IANA timezone, default `America/Toronto`.
+- `TELEGRAM_DIGEST_ENABLED`: set `false` to disable future daily runs.
+- `TELEGRAM_ADMIN_URL`: admin link origin, default `https://admin.adchecked.com`.
 
-`telegramNotifications` stores event keys, rendered messages, claim ownership,
-attempts, and delivery state. Existing scheduled maintenance drains it even when
-no new review is running. Failed or expired claims are retried up to eight durable
-attempts; stale claims cannot acknowledge newer deliveries. Exhausted records remain
-inspectable in Convex (`status: exhausted`). Batch completion continues to use the
-existing batch outbox as well. The local, Convex-disabled development fallback only
-has immediate delivery retries.
+The roundup groups finished batches by advertiser, showing assessment totals,
+creatives ready for release, release-email status, advertiser-review progress, and
+reviews completed since the previous roundup. Outstanding work remains visible
+on subsequent days. Old completed batches are omitted. Empty roundups send nothing.
 
-Telegram requires a working bot token, chat ID, and optional topic ID. Missing
-credentials leave durable events pending without consuming delivery attempts.
-Permanent permissions/configuration errors require an operator to fix the bot or
-chat; a bot cannot report its own inability to reach that chat. Messages use HTML
-and conservatively stay below the [Telegram message size limit](https://core.telegram.org/bots/api#sendmessage).
-Transport logs record error classes/statuses, not bot URLs or tokens.
+A durable daily run paginates the batch history, then the advertiser-sorted entries,
+so it does not silently truncate history to a recent page. Continuation posts are
+used only when Telegram's message length requires them. On the first run, existing
+email records seed the delivery projection before batches are summarized. This
+prevents already-sent emails from being labeled unsent. Cursor and message writes
+are transactional; scheduler retries resume rather than restart the roundup.
 
-Delivery is at least once: if Telegram accepts a message but the acknowledgement
-or subsequent Convex write is lost, retrying can duplicate it. A complete Convex
-outage can also prevent an event from being recorded; such errors are logged.
-PDF attachments are best effort; their failure does not retry a successfully
-acknowledged summary.
+Operators can inspect a single batch without sending anything:
 
-These alerts go to the configured internal Telegram chat. Partner API reviews keep
-their existing isolated signed completion/failure webhooks and are excluded from
-the shared chat. Authentication errors and rejected submissions before a review
-record exists stay in the requesting UI/API response. Client approval/disapproval
-decisions remain separate from automated review completion notifications.
+```sh
+CONVEX_DEPLOYMENT=prod:energetic-partridge-813 pnpm exec convex run telegramMilestones:previewBatch '{"batchId":"BATCH_ID"}'
+```
 
-No live messages are sent by the regression tests. They validate the sample totals,
-all review media types, failures, unavailable results, lifecycle events, HTML/length,
-offer filters, API isolation, delivery claims, retries, and duplicate suppression.
+## Delivery, isolation, and deployment
+
+The existing Python backend sends and edits messages using the Cloudflare runtime
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and optional `TELEGRAM_MESSAGE_THREAD_ID`.
+The existing maintenance/Worker schedule wakes the backend for pending messages,
+even without a new review job. Convex cron jobs prepare the daily roundup and
+check stalled email attempts; no bot token is needed in Convex.
+
+The outbox stores a stable event key, rendered text, revision, Telegram message/chat
+IDs, lease ownership, attempts, and delivery state. If an email finishes while the
+release post is being sent, the original acknowledgement retains its message ID
+and queues the newer revision as an edit. Unchanged Telegram edits count as
+successful acknowledgements. A deleted or uneditable original post is replaced.
+Changing the configured chat creates a new post in that chat rather than applying
+an unrelated message ID there. Messages use escaped HTML and fit Telegram's UTF-16
+length limit. Release-part boundaries reserve delivery-text space so email updates
+do not leave stale continuation messages.
+
+Immediate retries handle transient transport failures; durable claims retry with
+backoff up to eight attempts. Exhausted records remain inspectable in Convex.
+Missing transport credentials preserve pending messages without using attempts.
+Tokens, bot URLs, and response bodies are excluded from error logs. Delivery is
+at least once: a Telegram acceptance followed by a lost acknowledgement can still
+produce a duplicate. Old processing-success/start messages are suppressed during
+rollout, and old backend containers cannot claim the new editable messages.
+
+Only internally owned reviews feed these summaries. Partner API reviews retain
+their isolated signed webhooks; external publisher submissions are excluded from
+the shared internal chat. Digital Nudge attribution follows the repository's
+existing internal-source classification. Advertiser-group routing is not enabled;
+it requires a separate advertiser-to-chat mapping and recipient-scoped messages.
+
+Tests use local database fixtures and mocked Telegram transport. They cover quiet
+triggers, assessments versus decisions, partial releases, reopened/cancelled
+completion, email coverage and uncertainty, message editing and acknowledgement
+races, tenant isolation, daily pagination, DST, HTML bounds, retries, and legacy
+rollout suppression. Tests and read-only previews do not send live messages.

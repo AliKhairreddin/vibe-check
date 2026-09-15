@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { candidateValidator, feedbackFields, lessonValidator, learningMetricsValidator } from './learningTypes.ts';
 import { emailFields } from './releaseEmailTypes.ts';
+import { deliveryFields, releaseSection } from './telegramMessageTypes.ts';
 
 export default defineSchema({
   releaseEmails: defineTable(emailFields)
@@ -44,6 +45,10 @@ export default defineSchema({
     eventKey: v.string(),
     message: v.string(),
     pdfJobId: v.optional(v.string()),
+    revision: v.optional(v.number()),
+    claimedRevision: v.optional(v.number()),
+    messageId: v.optional(v.number()),
+    chatId: v.optional(v.string()),
     status: v.union(v.literal('pending'), v.literal('claimed'), v.literal('sent'), v.literal('exhausted')),
     attempts: v.number(),
     claimId: v.optional(v.string()),
@@ -53,6 +58,19 @@ export default defineSchema({
   })
     .index('by_event_key', ['eventKey'])
     .index('by_status_and_next_attempt_at', ['status', 'nextAttemptAt']),
+  telegramReleaseSummaries: defineTable({
+    eventKey: v.string(), batchId: v.string(), title: v.string(), sections: v.array(releaseSection), createdAt: v.number(),
+  }).index('by_batch_id', ['batchId']),
+  telegramBatchDeliveries: defineTable(deliveryFields)
+    .index('by_batch_id_and_offer_id', ['batchId', 'offerId']).index('by_status_and_updated_at', ['status', 'updatedAt']),
+  telegramDigestEntries: defineTable({
+    day: v.string(), batchId: v.string(), offerId: v.string(), name: v.string(), message: v.string(),
+  }).index('by_day_and_name', ['day', 'name']).index('by_day_and_batch_id', ['day', 'batchId']),
+  telegramDigestRuns: defineTable({
+    day: v.string(), startedAt: v.number(), since: v.number(),
+    status: v.union(v.literal('emails'), v.literal('scanning'), v.literal('sending'), v.literal('complete')),
+    cursor: v.union(v.string(), v.null()), part: v.number(), buffer: v.array(v.string()),
+  }).index('by_day', ['day']).index('by_started_at', ['startedAt']),
   maintenanceState: defineTable({
     complete: v.boolean(),
     cursor: v.optional(v.string()),

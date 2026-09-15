@@ -10,6 +10,7 @@ export const emailFields = {
   subject: v.string(), message: v.string(), signature: v.string(), links: v.array(emailLink),
   status: emailStatus, createdAt: v.number(), expiresAt: v.number(),
   sentAt: v.optional(v.number()), from: v.optional(v.string()), messageId: v.optional(v.string()),
+  sendingAt: v.optional(v.number()),
   claimId: v.optional(v.string()),
 };
 

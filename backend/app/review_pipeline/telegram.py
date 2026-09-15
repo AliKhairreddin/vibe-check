@@ -132,12 +132,8 @@ def send_review_message(
     ad_copy_text: str = '',
     media_kind: MediaKind | None = None,
 ) -> bool:
-    sent = _send_event(
-        f'review:{record.job_id}:complete',
-        build_review_message(record, report, ad_copy_text, media_kind),
-        pdf_job_id=record.job_id,
-    )
-    return sent
+    # Successful processing is visible in the app; release is the milestone.
+    return False
 
 
 def build_live_scan_message(
@@ -187,12 +183,7 @@ def send_live_scan_message(
     meta: ReviewRequestMeta,
     media_kind: MediaKind | None = None,
 ) -> bool:
-    sent = _send_event(
-        f'review:{record.job_id}:complete',
-        build_live_scan_message(record,report,meta,media_kind),
-        pdf_job_id=record.job_id,
-    )
-    return sent
+    return False
 
 
 def build_batch_message(
@@ -312,6 +303,13 @@ def send_batch_message(batch: ReviewBatch) -> bool:
 
     if not batch.items or not all(item.status in {'complete', 'failed', 'upload_failed'} for item in batch.items):
         return False
+    # Close the legacy processing outbox quietly. Failures still need attention.
+    needs_attention = any(item.status in {'failed', 'upload_failed'} or any(
+        outcome.evaluation_state != 'evaluated' or not outcome.overall_status
+        for outcome in item.offer_outcomes
+    ) for item in batch.items)
+    if not needs_attention:
+        return True
     complete_job_ids=[
         item.job_id
         for item in batch.items
@@ -345,9 +343,6 @@ def send_batch_message(batch: ReviewBatch) -> bool:
     revision = hashlib.sha256(message.encode()).hexdigest()[:16]
     sent = all([_send_event(f'batch:{batch.batch_id}:{revision}:{index}', part)
                 for index, part in enumerate(_message_parts(message))])
-    if sent and any(item.status == 'complete' for item in batch.items):
-        if not _attach_batch_pdf(batch):
-            _pdf_unavailable(f'batch:{batch.batch_id}:{revision}', build_batch_url(batch.batch_id))
     return sent
 
 
@@ -381,19 +376,16 @@ def _send_event(event_key: str, message: str, *, pdf_job_id: str | None = None) 
                     for index, part in enumerate(parts)])
     if not convex_enabled():
         sent = _send_telegram_message(message, f'event={event_key}')
-        if sent and pdf_job_id:
-            _deliver_review_pdf(event_key, pdf_job_id)
         return sent
     try:
         status = _convex_call('mutation', 'telegramNotifications:enqueue', {
             'eventKey': event_key, 'message': message,
-            **({'pdfJobId': pdf_job_id} if pdf_job_id else {}),
         })
         if status == 'sent':
             return True
         if not telegram_enabled():
             return False
-        delivery = _convex_call('mutation', 'telegramNotifications:claim', {'eventKey': event_key})
+        delivery = _convex_call('mutation', 'telegramNotifications:claim', {'eventKey': event_key, 'protocol': 2})
         return _deliver_event(delivery) if isinstance(delivery, dict) else False
     except Exception as exc:
         logger.error('Telegram event could not be delivered event=%s error_type=%s', event_key, type(exc).__name__)
@@ -403,12 +395,14 @@ def _send_event(event_key: str, message: str, *, pdf_job_id: str | None = None) 
 def _deliver_event(delivery: dict[str, Any]) -> bool:
     from .storage import _convex_call
 
-    sent = _send_telegram_message(delivery['message'], f'event={delivery["eventKey"]}')
-    updated = _convex_call('mutation', 'telegramNotifications:finish', {
+    chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+    message_id = delivery.get('messageId') if delivery.get('chatId') == chat_id else None
+    result = _send_telegram_request(delivery['message'], f'event={delivery["eventKey"]}', message_id=message_id)
+    sent = result is not None
+    _convex_call('mutation', 'telegramNotifications:finish', {
         'eventKey': delivery['eventKey'], 'claimId': delivery['claimId'], 'success': sent,
+        **({'messageId': result, 'chatId': chat_id} if sent else {}),
     })
-    if sent and updated and delivery.get('pdfJobId'):
-        _deliver_review_pdf(delivery['eventKey'], delivery['pdfJobId'])
     return sent
 
 
@@ -422,7 +416,7 @@ def deliver_pending_telegram_notifications(*, limit: int = 5) -> int:
     })
     delivered = 0
     for _ in range(max(1, min(limit, 10))):
-        delivery = _convex_call('mutation', 'telegramNotifications:claim', {})
+        delivery = _convex_call('mutation', 'telegramNotifications:claim', {'protocol': 2})
         if not isinstance(delivery, dict):
             break
         delivered += int(_deliver_event(delivery))
@@ -453,6 +447,8 @@ def send_job_event(record: JobRecord | str, meta: ReviewRequestMeta, event: str,
     # Partner API tenants receive their isolated signed webhooks.
     if meta.api_partner_id or meta.publisher_id:
         return False
+    if event != 'failed' or meta.has_batch:
+        return False
     if isinstance(record, str):
         from .storage import get_status
         record = get_status(record)
@@ -482,24 +478,13 @@ def send_job_event(record: JobRecord | str, meta: ReviewRequestMeta, event: str,
 
 @_best_effort_notification
 def send_review_started(record: JobRecord, meta: ReviewRequestMeta) -> bool:
-    if meta.api_partner_id or meta.publisher_id:
-        return False
-    if not meta.has_batch:
-        return send_job_event(record, meta, 'queued', 'Review queued. Results will follow when processing finishes.')
-    from .storage import get_batch
-    batch = get_batch(meta.batch_id or '')
-    names = ', '.join(profile.display_name for profile in meta.offer_profiles)
-    lines = ['<b>Review batch started</b>']
-    _add_field(lines, 'Client', names, max_chars=300)
-    if batch.source_label:
-        _add_field(lines, 'Source', batch.source_label)
-    lines.append(f'{batch.expected_count} items submitted. A client summary will follow when all items finish.')
-    _add_report_link(lines, build_batch_url(batch.batch_id), 'Open batch progress')
-    return _send_event(f'batch:{batch.batch_id}:started', '\n'.join(lines))
+    return False
 
 
 @_best_effort_notification
 def send_automation_event(automation, run_id: str, status: str, message: str) -> bool:
+    if status != 'failed':
+        return False
     titles = {'no_matches': 'Scheduled review — no new creatives', 'failed': 'Scheduled review could not start'}
     lines = [f'<b>{titles[status]}</b>']
     _add_field(lines, 'Schedule', automation.name)
@@ -600,10 +585,14 @@ def finish_batch_item_and_notify(
 
 
 def _send_telegram_message(text: str, log_context: str) -> bool:
+    return _send_telegram_request(text, log_context) is not None
+
+
+def _send_telegram_request(text: str, log_context: str, *, message_id: int | None = None) -> int | None:
     token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
     chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
     if not token or not chat_id:
-        return False
+        return None
 
     payload: dict[str, Any] = {
         'chat_id': chat_id,
@@ -612,8 +601,10 @@ def _send_telegram_message(text: str, log_context: str) -> bool:
         'disable_web_page_preview': True,
     }
 
+    if message_id is not None:
+        payload['message_id'] = message_id
     message_thread_id = os.getenv('TELEGRAM_MESSAGE_THREAD_ID', '').strip()
-    if message_thread_id:
+    if message_thread_id and message_id is None:
         payload['message_thread_id'] = message_thread_id
 
     last_error: Exception | None = None
@@ -624,13 +615,27 @@ def _send_telegram_message(text: str, log_context: str) -> bool:
                 attempts = attempt
                 try:
                     response = client.post(
-                        f'https://api.telegram.org/bot{token}/sendMessage',
+                        f'https://api.telegram.org/bot{token}/{"editMessageText" if message_id is not None else "sendMessage"}',
                         json=payload,
                     )
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        response.raise_for_status()
+                        raise RuntimeError('Telegram returned an invalid response.') from None
+                    description = str(data.get('description', '')).lower()
+                    if message_id is not None and response.status_code == 400:
+                        if 'message is not modified' in description:
+                            return message_id
+                        if 'message to edit not found' in description or "message can't be edited" in description:
+                            return _send_telegram_request(text, log_context)
                     response.raise_for_status()
-                    if response.json().get('ok') is not True:
+                    if data.get('ok') is not True:
                         raise RuntimeError('Telegram did not acknowledge the notification.')
-                    return True
+                    result_id = data.get('result', {}).get('message_id')
+                    if not isinstance(result_id, int):
+                        raise RuntimeError('Telegram did not return a message identifier.')
+                    return result_id
                 except Exception as exc:
                     last_error = exc
                     if attempt >= TELEGRAM_SEND_ATTEMPTS or not _is_retryable_telegram_error(exc):
@@ -648,7 +653,7 @@ def _send_telegram_message(text: str, log_context: str) -> bool:
         type(last_error).__name__ if last_error is not None else 'UnknownError',
         status_code if status_code is not None else 'unavailable',
     )
-    return False
+    return None
 
 
 def _attach_review_pdf(record: JobRecord, log_context: str) -> bool:

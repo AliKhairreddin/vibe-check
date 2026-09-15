@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel";
 import { syncReviewOfferStats } from "./reviews.ts";
+import { queueReleaseNotifications } from './telegramMilestones.ts';
 
 const scopeArgs = {
   secret: v.string(),
@@ -80,6 +81,7 @@ export const release = mutation({
       throw new Error("Choose offers that were evaluated for these creatives");
     }
     let released = 0;
+    const notifications: { jobId: string; batchId?: string; offerIds: string[] }[] = [];
     const now = Date.now();
     for (const [index, review] of reviews.entries()) {
       const additions = eligible[index].filter(row => row.withheld && offerIds.includes(row.offerId)).map(row => row.offerId);
@@ -91,8 +93,10 @@ export const release = mutation({
         if (additions.includes(stat.offerId)) await ctx.db.patch(stat._id, { withheld: undefined, updatedAt: now });
       }
       await ctx.db.insert("reviewReleaseEvents", { jobId: review.jobId, offerIds: additions, releasedBy: args.publisherId ? `publisher:${args.publisherId}` : args.releasedBy, createdAt: now });
+      notifications.push({ jobId: review.jobId, batchId: review.batchId, offerIds: additions });
       released += additions.length;
     }
+    await queueReleaseNotifications(ctx, notifications);
     return { released, offer_ids: offerIds };
   },
 });
