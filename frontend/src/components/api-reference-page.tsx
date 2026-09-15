@@ -414,10 +414,11 @@ const endpoints: Endpoint[] = [
     method: 'GET',
     path: '/api/v1/reviews',
     title: 'List review history',
-    description: 'Return owned or authorized offer history with overall_status, summary, finding_count, preview findings, and media links.',
+    description: 'Return owned or authorized offer history with vertical, batch_id, overall_status, summary, finding_count, preview findings, and media links. Shared history can select auto or home; omit vertical for both. Keep filters unchanged when following a cursor.',
     scope: 'history:read',
     fields: [
       { name: 'offer_id', label: 'Shared offer ID', location: 'query', placeholder: 'acp', description: 'Optional. Requires shared internal history access for this offer.' },
+      { name: 'vertical', label: 'Insurance category', location: 'query', placeholder: 'home-insurance', description: 'Optional: auto-insurance or home-insurance. Requires offer_id. Omit for both categories; reset the cursor when changing category.' },
       ...paginationFields,
     ],
   },

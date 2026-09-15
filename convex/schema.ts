@@ -339,6 +339,7 @@ export default defineSchema({
     )),
   })
     .index("by_offer_deleted_withheld_status_created", ["offerId", "deletedAt", "withheld", "status", "createdAt"])
+    .index("by_offer_deleted_withheld_vertical_status_created", ["offerId", "deletedAt", "withheld", "vertical", "status", "createdAt"])
     .index("by_offer_id_deleted_at", ["offerId", "deletedAt"])
     .index("by_offer_id_and_vertical_and_deleted_at", [
       "offerId",

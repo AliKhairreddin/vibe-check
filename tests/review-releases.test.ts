@@ -58,7 +58,12 @@ function fixture() {
         withIndex(_name: string, configure?: (index: any) => void) { configure?.(index); return query; },
         order(order: string) { descending = order === 'desc'; return query; },
         async take(n: number) { return rows().slice(0, n); }, async collect() { return rows(); },
-        async paginate(opts: any) { return { page: rows().slice(0, opts.numItems), isDone: true, continueCursor: '' }; },
+        async paginate(opts: any) {
+          const start = Number(opts.cursor ?? 0);
+          const matching = rows();
+          const end = Math.min(start + opts.numItems, matching.length);
+          return { page: matching.slice(start, end), isDone: end >= matching.length, continueCursor: String(end) };
+        },
         async unique() { const result = rows(); assert.ok(result.length < 2); return result[0] ?? null; }, async first() { return rows()[0] ?? null; },
       };
       return query;
@@ -332,4 +337,67 @@ test('an API owner can still inspect a private job, while deleted jobs expose no
   assert.equal(deleted.report_ready, false);
   assert.equal(deleted.summary, null);
   assert.equal(deleted.thumbnail_url, null);
+});
+
+test('shared API category filtering happens before pagination and keeps releases and offer access enforced', async () => {
+  const { ctx, tables, add } = fixture();
+  await ctx.db.insert('apiPartners', { partnerId: 'coveragepro', status: 'active', sharedReviewOfferIds: ['acp'] });
+  const acp = { offerIds: ['acp'], primaryOfferId: 'acp', releasedOfferIds: ['acp'], report: {
+    offer_results: [{ offer_id: 'acp', overall_status: 'green', summary: 'Checked', findings: [] }],
+  } };
+  await add('home-legacy', { ...acp, fileName: 'creative_HOME.mp4', batchId: 'dashboard-batch' });
+  await add('auto-legacy', { ...acp });
+  await add('home-selected', { ...acp, fileName: 'creative_AUTO.mp4', vertical: 'home-insurance', batchId: 'dashboard-batch' });
+  await add('home-private', { ...acp, vertical: 'home-insurance', releasedOfferIds: [] });
+  await add('home-deleted', { ...acp, vertical: 'home-insurance', deletedAt: 100 });
+  await add('home-other-offer', { vertical: 'home-insurance', releasedOfferIds: ['kissterra'] });
+  // A newer auto creative must not consume the first home page.
+  await add('auto-selected', { ...acp, vertical: 'auto-insurance' });
+  const args = { partnerId: 'coveragepro', offerId: 'acp', paginationOpts: { numItems: 1, cursor: null }, vertical: 'home-insurance' };
+  const first = await invoke(listSharedOfferReviews, ctx, args);
+  assert.deepEqual(first.page.map((r: any) => r.review_id), ['home-selected']);
+  assert.equal(first.isDone, false);
+  assert.equal(first.page[0].vertical, 'home-insurance');
+  assert.equal(first.page[0].batch_id, 'dashboard-batch');
+  assert.deepEqual(first.page[0].accessible_offer_ids, ['acp']);
+  assert.equal(first.page[0].result_url, '/api/v1/reviews/home-selected/result?offer_id=acp');
+  const second = await invoke(listSharedOfferReviews, ctx, { ...args, paginationOpts: { numItems: 1, cursor: first.continueCursor } });
+  assert.deepEqual(second.page.map((r: any) => r.review_id), ['home-legacy']);
+  assert.equal(second.isDone, true);
+  assert.equal(second.page[0].vertical, 'home-insurance');
+  const all = await invoke(listSharedOfferReviews, ctx, { ...args, vertical: undefined, paginationOpts: { numItems: 100, cursor: null } });
+  assert.deepEqual(all.page.map((r: any) => r.review_id), ['auto-selected', 'home-selected', 'auto-legacy', 'home-legacy']);
+  const auto = await invoke(listSharedOfferReviews, ctx, { ...args, vertical: 'auto-insurance', paginationOpts: { numItems: 100, cursor: null } });
+  assert.deepEqual(auto.page.map((r: any) => r.review_id), ['auto-selected', 'auto-legacy']);
+  assert.ok(auto.page.every((r: any) => r.vertical === 'auto-insurance' && r.batch_id === null));
+  const detail = await invoke(getAccessibleReview, ctx, { partnerId: 'coveragepro', jobId: 'home-selected' });
+  assert.equal(detail.vertical, 'home-insurance');
+  assert.equal(detail.batch_id, 'dashboard-batch');
+  assert.equal(await invoke(getAccessibleReview, ctx, { partnerId: 'coveragepro', jobId: 'home-private' }), null);
+  await assert.rejects(invoke(listSharedOfferReviews, ctx, { ...args, offerId: 'kissterra' }), /not permitted/);
+  await assert.rejects(invoke(listSharedOfferReviews, ctx, { ...args, secret: 'wrong' }), /Unauthorized/);
+  tables.apiPartners[0].status = 'suspended';
+  await assert.rejects(invoke(listSharedOfferReviews, ctx, args), /not permitted/);
+});
+
+test('shared API returns an empty final page when no released creatives match the category', async () => {
+  const { ctx, add } = fixture();
+  await add('auto', { releasedOfferIds: ['kissterra'] });
+  await add('private-home', { vertical: 'home-insurance' });
+  await ctx.db.insert('apiPartners', { partnerId: 'partner', status: 'active', sharedReviewOfferIds: ['kissterra'] });
+  const result = await invoke(listSharedOfferReviews, ctx, {
+    partnerId: 'partner', offerId: 'kissterra', vertical: 'home-insurance', paginationOpts: { numItems: 50, cursor: null },
+  });
+  assert.deepEqual(result.page, []);
+  assert.equal(result.isDone, true);
+});
+
+test('owned API review metadata uses the saved category and originating API batch', async () => {
+  const { ctx, add } = fixture();
+  await add('owned-home', { fileName: 'creative_AUTO.mp4', vertical: 'home-insurance', apiBatchId: 'batch_api' });
+  await ctx.db.insert('apiPartners', { partnerId: 'owner', status: 'active' });
+  await ctx.db.insert('apiReviewLinks', { jobId: 'owned-home', partnerId: 'owner', status: 'complete', fileName: 'creative_AUTO.mp4', createdAt: 1, updatedAt: 1 });
+  const result = await invoke(getAccessibleReview, ctx, { partnerId: 'owner', jobId: 'owned-home' });
+  assert.equal(result.vertical, 'home-insurance');
+  assert.equal(result.batch_id, 'batch_api');
 });

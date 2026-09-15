@@ -20,6 +20,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import storage
+from .models import ReviewVertical
 
 logger = logging.getLogger(__name__)
 
@@ -788,7 +789,10 @@ def list_api_reviews(
     limit: int,
     cursor: str | None,
     offer_id: str | None = None,
+    vertical: ReviewVertical | None = None,
 ) -> dict[str, Any]:
+    if vertical is not None and not offer_id:
+        raise ValueError('The vertical filter requires a shared offer_id.')
     function_name = 'apiPartners:listSharedOfferReviews' if offer_id else 'apiPartners:listReviews'
     args: dict[str, Any] = {
         'paginationOpts': {'cursor': cursor, 'numItems': max(1, min(limit, 100))},
@@ -796,6 +800,8 @@ def list_api_reviews(
     }
     if offer_id:
         args['offerId'] = offer_id
+    if vertical is not None:
+        args['vertical'] = vertical
     value = _convex_call('query', function_name, args)
     if not isinstance(value, dict):
         raise RuntimeError('Partner API storage returned an invalid review page.')

@@ -49,6 +49,7 @@ from .review_pipeline.models import (
     ReviewAutomationList,
     ReviewHistoryItem,
     ReviewHistoryPage,
+    ReviewVertical,
     ReviewStats,
     ResolveDriveSelection,
     RetryBatchItem,
@@ -2560,7 +2561,14 @@ async def partner_review_history(
     limit:int=50,
     cursor:str|None=None,
     offer_id:str|None=None,
+    vertical:ReviewVertical|None=None,
 ):
+    """List reviews; with offer_id, optionally select auto-insurance or home-insurance.
+
+    Omit vertical to include both categories. Returned reviews include vertical and
+    nullable batch_id; only reviews released to the authorized shared offer are listed.
+    Keep offer_id and vertical unchanged while following a pagination cursor.
+    """
     principal=await require_api_principal(request,'history:read')
     normalized_offer_id=(offer_id or '').strip().lower()
     if offer_id is not None:
@@ -2568,6 +2576,8 @@ async def partner_review_history(
             raise HTTPException(400,'Offer ID is invalid.')
         if normalized_offer_id not in principal.shared_review_offer_ids:
             raise HTTPException(403,'This API partner cannot read shared history for that offer.')
+    if vertical is not None and offer_id is None:
+        raise HTTPException(400,'The vertical filter requires a shared offer_id.')
     try:
         return await asyncio.to_thread(
             list_api_reviews,
@@ -2575,6 +2585,7 @@ async def partner_review_history(
             limit=limit,
             cursor=cursor,
             offer_id=normalized_offer_id or None,
+            **({'vertical':vertical} if vertical is not None else {}),
         )
     except Exception as exc:
         raise partner_storage_error(exc) from None

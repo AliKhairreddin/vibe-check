@@ -181,10 +181,14 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
   --data '{"offer_name":"acp","creatives":[{"asset_id":"asset_12345","creative_name":"Monday Creative","media_url":"https://cdn.example.com/creative.mp4"}]}'`;
   const sharedHistoryExample = `curl '${baseUrl}/reviews?offer_id=acp&limit=50' \\
   -H 'Authorization: Bearer YOUR_API_KEY'`;
+  const homeHistoryExample = `curl '${baseUrl}/reviews?offer_id=acp&vertical=home-insurance&limit=50' \\
+  -H 'Authorization: Bearer YOUR_API_KEY'`;
   const sharedHistoryResponse = `{
   "data": [{
     "review_id": "56b8e68d0c3c4d7b935b6d85055bee31",
     "file_name": "creative.mp4",
+    "vertical": "auto-insurance",
+    "batch_id": null,
     "status": "complete",
     "overall_status": "yellow",
     "summary": "Two claims need additional qualification.",
@@ -336,7 +340,21 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
           </p>
         </div>
         <CodeBlock code={sharedHistoryExample} />
+        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          The same ACP key covers auto and home creatives. Add <code>vertical=auto-insurance</code> or
+          <code> vertical=home-insurance</code> with <code>offer_id=acp</code> to select one category;
+          omit it for both. An empty list means no matching released creatives are available.
+          Follow <code>next_cursor</code> with the same filters while <code>has_more</code> is true.
+          Reset the cursor when changing category.
+        </p>
+        <CodeBlock code={homeHistoryExample} label="Home insurance only" />
         <CodeBlock code={sharedHistoryResponse} label="Example response" />
+        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          Each row includes its <code>vertical</code> and a <code>batch_id</code> for grouping
+          accessible creatives. Standalone reviews have <code>batch_id: null</code>.
+          Open the returned <code>result_url</code> for each creative; batch grouping does not
+          expose private creatives or grant access to internal dashboard batches.
+        </p>
         <div className="grid gap-3 md:grid-cols-3">
           <Card>
             <CardHeader>

@@ -4,6 +4,7 @@ import { type MutationCtx, type QueryCtx, mutation, query } from "./_generated/s
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { assertApiLease } from "./apiJobState.ts";
+import { classifyReviewVertical } from "./reviewVerticals.ts";
 
 const API_SCOPES = new Set([
   "evidence:read",
@@ -181,6 +182,7 @@ function publicReview(
   return {
     access_type: "owned",
     accessible_offer_ids: review?.offerIds ?? [],
+    batch_id: review?.batchId ?? review?.apiBatchId ?? null,
     created_at: link.createdAt,
     creative_name: link.creativeName ?? null,
     external_id: link.externalId ?? null,
@@ -199,6 +201,7 @@ function publicReview(
     status: deleted ? "deleted" : review?.status ?? link.status,
     terminal_at: link.terminalAt ?? null,
     updated_at: Math.max(link.updatedAt, review?.updatedAt ?? 0),
+    vertical: review?.vertical ?? classifyReviewVertical(review?.fileName ?? link.fileName),
   };
 }
 
@@ -220,6 +223,7 @@ function publicSharedReview(
   return {
     access_type: "shared_offer",
     accessible_offer_ids: accessibleOfferIds,
+    batch_id: review.batchId ?? review.apiBatchId ?? null,
     created_at: review.createdAt,
     creative_name: null,
     external_id: null,
@@ -240,6 +244,7 @@ function publicSharedReview(
     status: review.status,
     terminal_at: ["complete", "failed"].includes(review.status) ? review.updatedAt : null,
     updated_at: review.updatedAt,
+    vertical: review.vertical ?? classifyReviewVertical(review.fileName),
   };
 }
 
@@ -1055,6 +1060,7 @@ export const listSharedOfferReviews = query({
     paginationOpts: paginationOptsValidator,
     partnerId: v.string(),
     secret: v.string(),
+    vertical: v.optional(v.union(v.literal("auto-insurance"), v.literal("home-insurance"))),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
@@ -1070,13 +1076,16 @@ export const listSharedOfferReviews = query({
     ) {
       throw new Error("API partner is not permitted to read this offer's shared review history");
     }
-    const result = await ctx.db
-      .query("reviewOfferStats")
-      .withIndex("by_offer_deleted_withheld_status_created", (q) =>
-        q.eq("offerId", args.offerId).eq("deletedAt", undefined).eq("withheld", undefined)
-      )
-      .order("desc")
-      .paginate(args.paginationOpts);
+    // Filter before pagination so unrelated verticals cannot consume the page.
+    // syncReviewOfferStats and its existing backfill maintain the stored vertical.
+    const reviews = args.vertical
+      ? ctx.db.query("reviewOfferStats").withIndex("by_offer_deleted_withheld_vertical_status_created", (q) =>
+          q.eq("offerId", args.offerId).eq("deletedAt", undefined).eq("withheld", undefined).eq("vertical", args.vertical)
+        )
+      : ctx.db.query("reviewOfferStats").withIndex("by_offer_deleted_withheld_status_created", (q) =>
+          q.eq("offerId", args.offerId).eq("deletedAt", undefined).eq("withheld", undefined)
+        );
+    const result = await reviews.order("desc").paginate(args.paginationOpts);
     const page = await Promise.all(result.page.map(async (stat) => {
       const review = await ctx.db
         .query("reviews")

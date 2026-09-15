@@ -138,7 +138,8 @@ def test_partner_list_supplies_a_caller_computed_utc_month_key(monkeypatch):
     assert calls == [('query', 'apiPartners:list', {'monthKey': '2026-08'})]
 
 
-def test_shared_offer_history_uses_offer_scoped_convex_query(monkeypatch):
+@pytest.mark.parametrize('vertical', [None, 'auto-insurance', 'home-insurance'])
+def test_shared_offer_history_uses_offer_scoped_convex_query(monkeypatch, vertical):
     calls = []
     principal = api_principal(shared_review_offer_ids=('acp',))
     monkeypatch.setattr(
@@ -155,11 +156,14 @@ def test_shared_offer_history_uses_offer_scoped_convex_query(monkeypatch):
         limit=25,
         cursor=None,
         offer_id='acp',
+        vertical=vertical,
     )
 
     assert result['data'] == [{'review_id': '1' * 32}]
     assert calls[0][1] == 'apiPartners:listSharedOfferReviews'
     assert calls[0][2]['offerId'] == 'acp'
+    assert calls[0][2].get('vertical') == vertical
+    assert ('vertical' in calls[0][2]) == (vertical is not None)
 
 
 @pytest.mark.parametrize('url', [
@@ -304,6 +308,9 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
     assert '/api/v1/jobs/{job_id}' in schema['paths']
     assert '/api/v1/jobs/{job_id}/result' in schema['paths']
     assert '/api/v1/reviews' in schema['paths']
+    vertical = next(p for p in schema['paths']['/api/v1/reviews']['get']['parameters'] if p['name'] == 'vertical')
+    assert vertical['required'] is False
+    assert vertical['schema']['anyOf'][0]['enum'] == ['auto-insurance', 'home-insurance']
     assert '/api/v1/reviews/{job_id}/media' in schema['paths']
     assert '/api/v1/scans/creative' in schema['paths']
     assert '/api/reviews' not in schema['paths']
@@ -633,6 +640,43 @@ async def test_shared_offer_history_requires_explicit_partner_permission(monkeyp
     }
     assert calls == [{'limit': 50, 'cursor': None, 'offer_id': 'acp'}]
     assert denied.status_code == 403
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('vertical', ['auto-insurance', 'home-insurance'])
+async def test_shared_history_vertical_is_forwarded_with_pagination(monkeypatch, vertical):
+    principal = api_principal(shared_review_offer_ids=('acp',))
+    calls = []
+    row = {'review_id': 'home-review', 'vertical': vertical, 'batch_id': 'dashboard-batch'}
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: principal)
+    monkeypatch.setattr('app.main.list_api_reviews', lambda _principal, **kwargs: calls.append(kwargs) or {
+        'data': [row], 'has_more': True, 'next_cursor': 'next-page',
+    })
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.get('/api/v1/reviews', params={
+            'offer_id': 'ACP', 'vertical': vertical, 'limit': 25, 'cursor': 'previous-page',
+        }, headers={'authorization': 'Bearer vc_live_test-key'})
+    assert response.status_code == 200
+    assert response.json() == {'data': [row], 'has_more': True, 'next_cursor': 'next-page'}
+    assert calls == [{'offer_id': 'acp', 'vertical': vertical, 'limit': 25, 'cursor': 'previous-page'}]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(('params', 'status'), [
+    ({'offer_id': 'acp', 'vertical': 'hcp'}, 422),
+    ({'offer_id': 'acp', 'vertical': 'all'}, 422),
+    ({'offer_id': 'acp', 'vertical': ''}, 422),
+    ({'vertical': 'home-insurance'}, 400),
+    ({'offer_id': 'kissterra', 'vertical': 'home-insurance'}, 403),
+])
+async def test_shared_history_rejects_invalid_or_unauthorized_vertical_requests(monkeypatch, params, status):
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    monkeypatch.setattr('app.main.authenticate_api_token', lambda _token: api_principal(shared_review_offer_ids=('acp',)))
+    monkeypatch.setattr('app.main.list_api_reviews', lambda *_args, **_kwargs: pytest.fail('Invalid request reached storage'))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.get('/api/v1/reviews', params=params, headers={'authorization': 'Bearer vc_live_test-key'})
+    assert response.status_code == status
 
 
 @pytest.mark.anyio

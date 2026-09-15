@@ -100,6 +100,22 @@ curl 'https://api.adchecked.com/api/v1/reviews?offer_id=acp&limit=50' \
   -H 'Authorization: Bearer YOUR_API_KEY'
 ```
 
+The same ACP access covers auto and home creatives. Add `vertical=auto-insurance`
+or `vertical=home-insurance` to select one category; omit `vertical` to return both.
+No new API key or `hcp` offer is needed. For example, to pull home creatives:
+
+```bash
+curl 'https://api.adchecked.com/api/v1/reviews?offer_id=acp&vertical=home-insurance&limit=50' \
+  -H 'Authorization: Bearer YOUR_API_KEY'
+```
+
+`vertical` requires `offer_id` and the account's existing shared-history permission.
+Using it without `offer_id` returns `400`; an unsupported category returns `422`.
+Filtering happens before pagination. Follow `next_cursor` while `has_more` is true,
+keeping `offer_id` and `vertical` unchanged; reset the cursor when changing filters.
+Only creatives released to the selected advertiser are included. If no matching
+creatives are available, the response is `{"data":[],"has_more":false,"next_cursor":null}`.
+
 Each completed row includes a compact, offer-specific result preview:
 
 ```json
@@ -107,6 +123,8 @@ Each completed row includes a compact, offer-specific result preview:
   "access_type": "shared_offer",
   "review_id": "56b8e68d0c3c4d7b935b6d85055bee31",
   "file_name": "creative.mp4",
+  "vertical": "auto-insurance",
+  "batch_id": null,
   "status": "complete",
   "report_ready": true,
   "overall_status": "yellow",
@@ -120,6 +138,15 @@ Each completed row includes a compact, offer-specific result preview:
 ```
 
 `status` describes processing: `complete` means the analysis finished. `overall_status` is the compliance result and is always `green`, `yellow`, or `red` when a result is ready. While a review is processing, `overall_status`, `summary`, and `finding_count` are `null`, and `top_findings` is empty.
+
+`vertical` is the creative's saved insurance category, using the same legacy filename
+classification as the dashboard where necessary. It does not select a different policy.
+`batch_id` is the originating batch ID, or `null` for a standalone review. Use it to
+group the accessible rows in your dashboard; it does not grant access to the batch's
+private creatives or to internal batch endpoints. Both fields also appear in review
+status responses and in the `review` object returned with full results. Shared dashboard
+creatives should use the returned `result_url`; `/jobs/{job_id}` remains limited to
+batches and jobs owned by the API partner.
 
 Returned paths are relative to `https://api.adchecked.com`. Use `summary` and `top_findings` in the list and request `result_url` only when a user opens the full detail view.
 
