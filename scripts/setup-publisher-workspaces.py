@@ -10,12 +10,9 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import secrets
-import subprocess
 import urllib.request
-
-ROOT = Path(__file__).resolve().parents[1]
+from convex_secret import read_backend_secret
 
 
 def main():
@@ -26,11 +23,10 @@ def main():
     args = parser.parse_args()
     secret = os.environ.get('CONVEX_HTTP_SECRET', '').strip()
     if not secret:
-        result = subprocess.run(['pnpm', 'exec', 'convex', 'env', 'get', 'CONVEX_HTTP_SECRET'], cwd=ROOT,
-                                env={**os.environ, 'CONVEX_DEPLOYMENT': args.deployment}, capture_output=True, text=True)
-        if result.returncode:
+        try:
+            secret = read_backend_secret(args.deployment)
+        except RuntimeError:
             raise SystemExit('Could not read CONVEX_HTTP_SECRET. Authenticate the Convex CLI or set the deployment key.')
-        secret = result.stdout.strip()
     if not secret:
         raise SystemExit('CONVEX_HTTP_SECRET is not configured.')
 

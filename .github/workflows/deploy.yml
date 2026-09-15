@@ -186,27 +186,4 @@ jobs:
           retry_wrangler deploy --containers-rollout=none --keep-vars --var "BACKEND_SLOT:$NEXT_BACKEND_SLOT" --var "REVIEW_BACKEND_SHARDS:$CONFIGURED_BACKEND_SHARDS"
 
       - name: Check activated backend
-        run: |
-          python - <<'PY'
-          import os, subprocess, time
-          import httpx
-          secret = subprocess.run(['pnpm', 'exec', 'convex', 'env', 'get', 'CONVEX_HTTP_SECRET'],
-                                  capture_output=True, text=True, check=True).stdout.strip()
-          if not secret:
-              raise RuntimeError('Backend health-check credential is unavailable')
-          for attempt in range(7):
-              try:
-                  response = httpx.get('https://admin.adchecked.com/api/internal/queue-state',
-                                       headers={'x-automation-secret': secret}, timeout=120)
-                  response.raise_for_status()
-                  state = response.json()
-                  assert state['workers'] > 0, 'No live job workers'
-                  assert state['configured_shards'] == int(os.environ['CONFIGURED_BACKEND_SHARDS']), 'Wrong shard configuration'
-                  assert state['ocr'] == {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2}, 'Wrong OCR engine or readiness'
-                  print('Activated backend is healthy; shard and OCR configuration verified.')
-                  break
-              except Exception:
-                  if attempt == 6:
-                      raise
-                  time.sleep(10)
-          PY
+        run: python scripts/check_backend_health.py
