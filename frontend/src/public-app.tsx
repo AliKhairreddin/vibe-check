@@ -1,18 +1,20 @@
 import { useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { CheckCircle2, Link2, ScanSearch } from 'lucide-react';
-import { Button } from './components/ui/button';
+import { ArrowRight, ChevronDown, ChevronUp, ExternalLink, Link2, ScanSearch } from 'lucide-react';
+import { Button, buttonVariants } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Badge } from './components/ui/badge';
 import { OfferResultBadge } from './components/offer-outcomes';
 import { effectiveReviewStatus } from './lib/client-review-status';
 import { PricingPage } from './components/pricing-page';
+import { SharedFindings } from './components/shared-findings';
+import { getClientSession } from './lib/api';
 import { acceptInvite, getInvite, getSharedCollection, getSharedDetail } from './lib/workspace-api';
 
-function PublicShell({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-screen bg-muted/20"><header className="border-b bg-background"><div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-5"><a href="https://adchecked.com" className="flex items-center gap-2 font-semibold"><ScanSearch />AdChecked</a><a href="/login" className="text-sm text-muted-foreground">Sign in</a></div></header><main className="mx-auto max-w-6xl px-5 py-10">{children}</main></div>;
+function PublicShell({ children, reviewHref, signedIn = false }: { children: React.ReactNode; reviewHref?: string; signedIn?: boolean }) {
+  return <div className="min-h-screen bg-muted/20"><header className="border-b bg-background"><div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-5"><a href="https://adchecked.com" className="flex items-center gap-2 font-semibold"><ScanSearch />AdChecked</a><a href={reviewHref ?? "/login"} className="text-sm text-muted-foreground">{signedIn ? "Continue review" : "Sign in"}</a></div></header><main className="mx-auto max-w-6xl px-5 py-10">{children}</main></div>;
 }
 function InvitationPage({ token }: { token: string }) {
   const query = useQuery({ queryKey: ['invitation', token], queryFn: () => getInvite(token), retry: false });
@@ -35,24 +37,51 @@ function InvitationPage({ token }: { token: string }) {
 function SharedCreative({ token, jobId }: { token: string; jobId: string }) {
   const query = useQuery({ queryKey: ['shared-review', token, jobId], queryFn: () => getSharedDetail(token, jobId), retry: false, refetchInterval: 30_000 });
   const [mediaError, setMediaError] = useState(false);
-  if (query.isLoading) return <p className="p-6">Loading creative…</p>;
+  const [expanded, setExpanded] = useState(false);
+  if (query.isLoading) return <p className="rounded-xl border bg-card p-6">Loading creative…</p>;
   if (query.error || !query.data) return <p role="alert" className="rounded-xl border p-6 text-destructive">{query.error?.message ?? 'Creative unavailable'}</p>;
   const { review, report, media_url: mediaUrl, evidence_frames: frames } = query.data;
-  return <article className="overflow-hidden rounded-2xl border bg-card"><div className="border-b p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="break-words text-xl font-semibold">{review.file_name}</h2><p className="mt-1 text-sm text-muted-foreground">{report.offer_name} · {new Date(review.created_at).toLocaleDateString()}</p></div><div className="flex flex-wrap items-center gap-2"><OfferResultBadge status={effectiveReviewStatus(review)} automatedStatus={review.ai_status} clientDecision={review.decision?.decision} />{!review.decision ? <Badge variant="outline">Pending advertiser decision</Badge> : null}</div></div></div>
-    <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"><div>
-      {review.media_kind === 'copy_only' ? <div className="rounded-xl bg-muted p-8 text-center text-sm">Ad copy review</div> : mediaError ? frames[0] ? <img alt="Creative evidence preview" src={frames[0].url} className="max-h-96 w-full rounded-xl object-contain" /> : <p className="rounded-xl bg-muted p-8 text-sm">The original media is unavailable. Review findings appear alongside.</p> : review.media_kind === 'video' ? <video className="max-h-[30rem] w-full rounded-xl bg-black" src={mediaUrl} poster={frames[0]?.url} controls preload="metadata" onError={() => setMediaError(true)} /> : <img className="max-h-[30rem] w-full rounded-xl object-contain" src={mediaUrl} alt={review.file_name} onError={() => setMediaError(true)} />}
-      {review.decision ? <div className="mt-4 rounded-xl border p-4"><p className="text-sm font-semibold">Advertiser decision: {review.decision.decision}</p>{review.decision.feedback_note ? <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{review.decision.feedback_note}</p> : null}</div> : null}
-    </div><div className="grid content-start gap-4"><p className="text-sm leading-7">{report.summary}</p><p className="text-xs text-muted-foreground">AI recommendation: {review.ai_status === 'green' ? 'Ready' : review.ai_status === 'red' ? 'On hold' : 'Needs review'} · {report.findings.length} findings</p>
-      {report.findings.map((finding, index) => <div key={index} className="rounded-xl border p-4"><div className="flex flex-wrap gap-2"><Badge variant="outline">{finding.severity}</Badge><Badge variant="secondary">{finding.source}</Badge>{finding.timestamp_start != null ? <Badge variant="outline">{finding.timestamp_start}s</Badge> : null}</div><p className="mt-3 text-sm font-medium">{finding.evidence}</p><p className="mt-3 text-sm leading-6 text-muted-foreground"><strong className="text-foreground">Policy: </strong>{finding.policy_reason}</p><p className="mt-2 text-sm leading-6 text-muted-foreground"><strong className="text-foreground">Suggested fix: </strong>{finding.suggested_fix}</p></div>)}
-      {!report.findings.length ? <p className="flex items-center gap-2 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800"><CheckCircle2 className="size-5" />No policy issues identified.</p> : null}
-    </div></div>
-    {frames.length ? <div className="border-t p-6"><h3 className="mb-3 text-sm font-semibold">Evidence frames</h3><div className="flex gap-3 overflow-x-auto">{frames.map(frame => <figure key={frame.filename} className="w-40 shrink-0"><a href={frame.url} target="_blank" rel="noreferrer"><img alt={`Evidence at ${frame.timestamp ?? 0} seconds`} src={frame.url} loading="lazy" className="h-40 w-full rounded-lg border object-contain" /></a><figcaption className="mt-1 text-xs text-muted-foreground">{frame.timestamp ?? 0}s</figcaption></figure>)}</div></div> : null}
+  const driveUrl = review.preview.google_drive_url;
+  const detailsId = `findings-${jobId}`;
+  return <article className="min-w-0 overflow-hidden rounded-2xl border bg-card shadow-xs">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-4 sm:px-5">
+      <div className="min-w-0 flex-1"><h2 className="wrap-anywhere text-base font-semibold">{review.file_name}</h2><p className="mt-1 text-xs text-muted-foreground">{report.offer_name} · {new Date(review.created_at).toLocaleDateString()}</p></div>
+      <OfferResultBadge status={effectiveReviewStatus(review)} automatedStatus={review.ai_status} clientDecision={review.decision?.decision} />
+    </div>
+    <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)] sm:gap-5 sm:p-5">
+      <div className="min-w-0">
+        {review.media_kind === 'copy_only' ? <div className="grid h-48 place-items-center rounded-xl bg-muted text-sm text-muted-foreground">Ad copy review</div> : mediaError ? frames[0] ? <img alt="Creative evidence preview" src={frames[0].url} className="h-60 w-full rounded-xl bg-muted object-contain" /> : <p className="grid h-48 place-items-center rounded-xl bg-muted p-5 text-sm text-muted-foreground">The original media is unavailable.</p> : review.media_kind === 'video' ? <video className="h-60 w-full rounded-xl bg-black object-contain" src={mediaUrl} poster={frames[0]?.url} controls playsInline preload="metadata" onError={() => setMediaError(true)} /> : <a href={mediaUrl} target="_blank" rel="noreferrer" aria-label={`Open full image for ${review.file_name}`}><img className="h-60 w-full rounded-xl bg-muted object-contain" src={mediaUrl} alt={review.file_name} onError={() => setMediaError(true)} /></a>}
+        {driveUrl ? <a href={driveUrl} target="_blank" rel="noreferrer" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-3 w-full' })}><ExternalLink />Open in Google Drive</a> : null}
+      </div>
+      <div className="flex min-w-0 flex-col items-start gap-3">
+        <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">AI recommendation: {review.ai_status === 'green' ? 'Ready' : review.ai_status === 'red' ? 'On hold' : 'Needs review'}</Badge><span className="text-xs text-muted-foreground">{report.findings.length} finding{report.findings.length === 1 ? '' : 's'}</span></div>
+        <p className="wrap-anywhere text-sm leading-7">{report.summary}</p>
+        <div className="w-full rounded-lg bg-muted/40 px-3 py-2.5"><p className="text-xs font-medium">{review.decision ? `Advertiser decision: ${review.decision.decision}` : 'Awaiting advertiser decision'}</p>{review.decision?.feedback_note ? <p className="mt-1 whitespace-pre-wrap wrap-anywhere text-sm leading-6 text-muted-foreground">{review.decision.feedback_note}</p> : null}</div>
+        {report.findings.length || frames.length ? <Button variant="outline" size="sm" aria-expanded={expanded} aria-controls={detailsId} className="mt-auto" onClick={() => setExpanded(value => !value)}>{expanded ? <ChevronUp /> : <ChevronDown />}{expanded ? 'Hide details' : report.findings.length ? `View findings (${report.findings.length})` : 'View evidence'}</Button> : null}
+      </div>
+    </div>
+    <div id={detailsId} hidden={!expanded} className="min-w-0 border-t bg-muted/20 p-4 sm:p-5">{expanded ? <SharedFindings findings={report.findings} frames={frames} /> : null}</div>
   </article>;
 }
+
 function SharedPage({ token }: { token: string }) {
   const query = useQuery({ queryKey: ['shared-collection', token], queryFn: () => getSharedCollection(token), retry: false, refetchInterval: 30_000 });
+  const session = useQuery({ queryKey: ['public-client-session'], queryFn: getClientSession, retry: false });
   const [page, setPage] = useState(0);
-  return <PublicShell>{query.isLoading ? <p>Loading shared review…</p> : query.error || !query.data ? <div className="mx-auto max-w-lg rounded-2xl border bg-card p-8 text-center"><Link2 className="mx-auto mb-4" /><h1 className="text-xl font-semibold">Shared link unavailable</h1><p role="alert" className="mt-3 text-sm text-muted-foreground">{query.error?.message ?? 'Ask the sender for a new link.'}</p></div> : <div className="grid gap-6"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shared with you · View only</p><h1 className="mt-2 text-3xl font-semibold">{query.data.title}</h1><p className="mt-2 text-sm text-muted-foreground">{query.data.job_ids.length} creatives · Expires {new Date(query.data.expires_at).toLocaleDateString()} · No login required</p></div>{query.data.job_ids.slice(page * 5, page * 5 + 5).map(jobId => <SharedCreative key={jobId} token={token} jobId={jobId} />)}{query.data.job_ids.length > 5 ? <div className="flex items-center justify-between"><Button variant="outline" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button><span className="text-sm">Page {page + 1} of {Math.ceil(query.data.job_ids.length / 5)}</span><Button variant="outline" disabled={(page + 1) * 5 >= query.data.job_ids.length} onClick={() => setPage(page + 1)}>Next</Button></div> : null}</div>}</PublicShell>;
+  const reviewHref = `/client/shared/${encodeURIComponent(token)}`;
+  const signedIn = Boolean(session.data);
+  function changePage(next: number) {
+    setPage(next);
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  return <PublicShell reviewHref={query.data ? reviewHref : undefined} signedIn={signedIn}>{query.isLoading ? <p>Loading shared review…</p> : query.error || !query.data ? <div className="mx-auto max-w-lg rounded-2xl border bg-card p-8 text-center"><Link2 className="mx-auto mb-4" /><h1 className="text-xl font-semibold">Shared link unavailable</h1><p role="alert" className="mt-3 text-sm text-muted-foreground">{query.error?.message ?? 'Ask the sender for a new link.'}</p></div> : <div className="grid min-w-0 gap-5">
+    <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shared with you · View only</p><h1 className="mt-2 wrap-anywhere text-3xl font-semibold">{query.data.title}</h1><p className="mt-2 text-sm text-muted-foreground">{query.data.job_ids.length} creatives · Expires {new Date(query.data.expires_at).toLocaleDateString()} · No login required</p></div>
+      <aside className="rounded-xl border bg-card p-4"><h2 className="text-sm font-semibold">Ready to review these creatives?</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{signedIn ? 'Open these creatives in your workspace to review and leave feedback.' : 'Sign in to approve, disapprove, or leave feedback.'}</p><a href={reviewHref} className={buttonVariants({ size: 'sm', className: 'mt-3' })}>{signedIn ? 'Continue review' : 'Sign in to review'}<ArrowRight /></a></aside>
+    </div>
+    {query.data.job_ids.slice(page * 5, page * 5 + 5).map(jobId => <SharedCreative key={jobId} token={token} jobId={jobId} />)}
+    {query.data.job_ids.length > 5 ? <nav aria-label="Creative pages" className="flex items-center justify-between gap-2"><Button variant="outline" disabled={page === 0} onClick={() => changePage(page - 1)}>Previous</Button><span className="text-sm">Page {page + 1} of {Math.ceil(query.data.job_ids.length / 5)}</span><Button variant="outline" disabled={(page + 1) * 5 >= query.data.job_ids.length} onClick={() => changePage(page + 1)}>Next</Button></nav> : null}
+  </div>}</PublicShell>;
 }
 export function mountPublicApp(element: HTMLElement) {
   const [kind, token = ''] = window.location.pathname.split('/').filter(Boolean);

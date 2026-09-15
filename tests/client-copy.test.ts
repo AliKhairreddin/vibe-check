@@ -67,7 +67,7 @@ test('keeps decision actions state-aware and supports optional notes', () => {
 });
 
 test('uses neutral client workspace labels and exposes result filtering', () => {
-  assert.match(clientDashboardSource, /<h1[^>]*>Review queue<\/h1>/);
+  assert.match(clientDashboardSource, /<h1[^>]*>\{shared \? shared\.title : 'Review queue'\}<\/h1>/);
   assert.match(clientDashboardSource, /label="Result"/);
   assert.match(clientDashboardSource, /label: 'Green', value: 'green'/);
   assert.match(clientDashboardSource, /label: 'Yellow', value: 'yellow'/);

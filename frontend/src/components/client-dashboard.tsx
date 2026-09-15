@@ -16,7 +16,7 @@ import { WorkspaceProvider, useWorkspace } from './workspace-context';
 import { ShareButton } from './share-controls';
 import { EmailBatchesButton } from './release-email-dialog';
 import { ReleaseButton } from './release-controls';
-import { listPublishers } from '@/lib/workspace-api';
+import { listPublishers, listSharedReviews } from '@/lib/workspace-api';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import {
@@ -159,8 +159,10 @@ type ClientAuthValue = {
 
 const ClientAuthContext = createContext<ClientAuthValue | null>(null);
 
-export function ClientReviewsPage() {
-  return <ClientDashboard />;
+type SharedReviewScope = { token: string; title: string; clientIds: string[] };
+
+export function ClientReviewsPage({ shared }: { shared?: SharedReviewScope }) {
+  return <ClientDashboard shared={shared} />;
 }
 
 export function ClientReviewDetailPage() {
@@ -209,7 +211,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       document.title = 'Creative review · AdChecked';
     } else if (pathname.includes('/batches/')) {
       document.title = 'Batch performance · AdChecked';
-    } else if (pathname === '/client/reviews') {
+    } else if (pathname === '/client/reviews' || pathname.startsWith('/client/shared/')) {
       document.title = 'Review queue · AdChecked';
     } else if (pathname === '/client/uploads') {
       document.title = 'Uploads & progress · AdChecked';
@@ -275,7 +277,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
     setSession(null);
     setError('');
     queryClient.clear();
-    await navigate({ to: '/login', replace: true });
+    if (!pathname.startsWith('/client/shared/')) await navigate({ to: '/login', replace: true });
     setIsSigningOut(false);
   }
 
@@ -343,7 +345,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
   );
 }
 
-function ClientDashboard() {
+function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
   const { session } = useClientAuth();
   const queryClient = useQueryClient();
   const { clientId: selectedClientId, publisherId } = useWorkspace();
@@ -352,19 +354,19 @@ function ClientDashboard() {
     ids: Set<string>;
   } | null>(null);
   const [preferences, setPreferences] = useState<ClientPreferences>(() => readClientPreferences());
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(shared ? [`shared:${shared.token}`] : []));
   const [expandedCreatives, setExpandedCreatives] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [resultFilter, setResultFilter] = useState<ResultFilter>(preferences.defaultResultFilter);
+  const [resultFilter, setResultFilter] = useState<ResultFilter>(shared ? 'all' : preferences.defaultResultFilter);
   const [batchFilter, setBatchFilter] = useState<BatchFilter>('all');
   const [loadBackgroundPortals, setLoadBackgroundPortals] = useState(false);
 
   const queries = useQueries({
     queries: session.portals.map((portal) => ({
-      enabled: portal.client_id === selectedClientId || loadBackgroundPortals,
-      queryKey: ['client', portal.client_id, 'reviews', publisherId],
-      queryFn: () => listClientReviews(portal.client_id, 1000, publisherId),
+      enabled: shared ? portal.client_id === selectedClientId && shared.clientIds.includes(portal.client_id) : portal.client_id === selectedClientId || loadBackgroundPortals,
+      queryKey: ['client', portal.client_id, 'reviews', ...(shared ? ['shared', shared.token] : [publisherId])],
+      queryFn: () => shared ? listSharedReviews(portal.client_id, shared.token) : listClientReviews(portal.client_id, 1000, publisherId),
       refetchInterval: portal.client_id === selectedClientId ? 30_000 : 120_000,
       refetchOnWindowFocus: true,
       staleTime: 30_000,
@@ -374,7 +376,10 @@ function ClientDashboard() {
   const selectedPortal = session.portals[selectedIndex] ?? session.portals[0];
   const selectedQuery = queries[selectedIndex] ?? queries[0];
   const reviews = selectedQuery?.data?.reviews ?? [];
-  const allGroups = useMemo(() => groupReviews(reviews), [reviews]);
+  const allGroups = useMemo<ReviewGroup[]>(() => shared ? reviews.length ? [{
+    id: `shared:${shared.token}`, kind: 'individual', label: shared.title,
+    createdAt: reviews[0].created_at, reviews,
+  }] : [] : groupReviews(reviews), [reviews, shared]);
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const visibleGroups = useMemo(() => allGroups.flatMap((group) => {
     const isChecked = group.reviews.every((review) => Boolean(review.decision));
@@ -510,8 +515,9 @@ function ClientDashboard() {
           <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-sm font-medium text-muted-foreground">Creative decisions</p>
-              <h1 className="font-heading text-3xl font-semibold tracking-tight">Review queue</h1>
-              <p className="mt-1 text-sm text-muted-foreground">{session.role === 'publisher' ? 'Review your batches, release them to your advertiser, then send the batch links by email.' : 'Review each creative, apply your final decision, and inspect every finding.'}</p>
+              <h1 className="font-heading text-3xl font-semibold tracking-tight">{shared ? shared.title : 'Review queue'}</h1>
+              <p className="mt-1 text-sm text-muted-foreground">{shared ? 'The creatives from your shared link, ready to review in your workspace.' : session.role === 'publisher' ? 'Review your batches, release them to your advertiser, then send the batch links by email.' : 'Review each creative, apply your final decision, and inspect every finding.'}</p>
+              {shared ? <div className="mt-2 flex flex-wrap items-center gap-3 text-sm"><Link to="/client/reviews" className="font-medium underline underline-offset-4">Show all creatives</Link><a href={`/share/${encodeURIComponent(shared.token)}`} className="text-muted-foreground underline underline-offset-4">Back to shared preview</a></div> : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <MetricBadge label="total" value={reviews.length} />
@@ -521,8 +527,10 @@ function ClientDashboard() {
             </div>
           </section>
 
+          {shared && selectedQuery?.data && 'unavailable_count' in selectedQuery.data && Number(selectedQuery.data.unavailable_count) > 0 ? <p role="status" className="rounded-lg border p-3 text-sm text-muted-foreground">Some shared creatives are no longer available or are outside your account’s access.</p> : null}
+
           <section className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-4" aria-label="Decision summary">
-            <QueueMetric icon={Files} label="Unique creatives" value={reviews.length} detail={`${allGroups.length} batch${allGroups.length === 1 ? '' : 'es'}`} />
+            <QueueMetric icon={Files} label="Unique creatives" value={reviews.length} detail={shared ? 'From shared link' : `${allGroups.length} batch${allGroups.length === 1 ? '' : 'es'}`} />
             <QueueMetric icon={CheckCircle2} label="Current green" value={statusCounts.green} detail={`${counts.approved} approved`} tone="success" />
             <QueueMetric icon={Clock3} label="Needs decision" value={counts.pending} detail={counts.pending ? 'Waiting for client review' : 'Everything reviewed'} tone="warning" />
             <QueueMetric icon={Sparkles} label="Decision overrides" value={decisionOverrides} detail="Different from AdChecked recommendation" tone="danger" />
@@ -815,8 +823,8 @@ function ClientDashboard() {
             <div className="grid min-h-52 place-items-center rounded-xl border border-dashed bg-card p-6 text-center">
               <div className="grid max-w-sm gap-2">
                 <FileText className="mx-auto size-7 text-muted-foreground" />
-                <p className="font-medium">No creatives match the current filters</p>
-                <p className="text-sm text-muted-foreground">Try changing the status, review state, or search.</p>
+                <p className="font-medium">{shared && !reviews.length ? 'No shared creatives available' : 'No creatives match the current filters'}</p>
+                <p className="text-sm text-muted-foreground">{shared && !reviews.length ? 'These creatives may have been removed or your account may not have access.' : 'Try changing the status, review state, or search.'}</p>
               </div>
             </div>
           )}
@@ -841,7 +849,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
     return window.localStorage.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
   });
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const reviewQueueActive = pathname === '/client/reviews'
+  const reviewQueueActive = pathname === '/client/reviews' || pathname.startsWith('/client/shared/')
     || /^\/client\/[^/]+\/reviews\/[^/]+$/.test(pathname);
   const routeClientId = pathname.match(/^\/client\/([^/]+)\/(?:batches|reviews)\//)?.[1];
   const routePortal = session.portals.find((portal) => portal.client_id === routeClientId);

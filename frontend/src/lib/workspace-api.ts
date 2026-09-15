@@ -1,4 +1,4 @@
-import { requestJson, type ClientSession, type ClientReviewItem, type OfferResult, type ReviewEvidenceFrame } from './api';
+import { requestJson, type ClientSession, type ClientReviewItem, type ClientReviewList, type OfferResult, type ReviewEvidenceFrame } from './api';
 export type Publisher = { managedLogin?: boolean; publisherId: string; name: string; username: string; status: 'invited' | 'active' | 'suspended'; createdAt: number; inviteExpiresAt: number | null };
 export type Invitation = { publisher_id: string; username: string; invite_url: string };
 export type Submission = { released: boolean; jobId: string; publisherId: string; fileName: string; status: string; progress: number; message: string; createdAt: number };
@@ -21,5 +21,7 @@ export const listShares = (clientId?: string) => requestJson<SharedLink[]>(share
 export const revokeShare = (shareId: string, clientId?: string) => requestJson(`${shares(clientId)}/${shareId}`, { method: 'DELETE' });
 export const getSharedCollection = (token: string) => requestJson<{ title: string; expires_at: number; job_ids: string[] }>(`/api/public/shares/${encodeURIComponent(token)}`);
 export const getSharedDetail = (token: string, jobId: string) => requestJson<SharedDetail>(`/api/public/shares/${encodeURIComponent(token)}/reviews/${jobId}`);
+export const getSharedReviewContext = (token: string) => requestJson<{ title: string; client_ids: string[] }>(`/api/client/shared/${encodeURIComponent(token)}`);
+export const listSharedReviews = (clientId: string, token: string) => requestJson<ClientReviewList & { unavailable_count: number }>(`${base(clientId)}/shared/${encodeURIComponent(token)}/reviews`);
 export const getAdminPlans = () => requestJson<(Plan & { name: string })[]>('/api/admin/workspaces');
 export const setAdminPlan = (clientId: string, plan: Plan['plan'], publisherLimit: number, monthlyReviewLimit: number) => requestJson(`/api/admin/workspaces/${clientId}/plan`, json({ plan, publisher_limit: publisherLimit, monthly_review_limit: monthlyReviewLimit }, 'PUT'));

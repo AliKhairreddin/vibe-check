@@ -5,6 +5,7 @@ one-way password/token hashes are persisted; every request rechecks membership.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import logging
 import re
@@ -12,6 +13,7 @@ import secrets
 import time
 import uuid
 from typing import Literal
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -260,6 +262,22 @@ def shared_item(token: str, job_id: str):
     return row, detail
 
 
+def shared_drive_url(detail: dict) -> str | None:
+    """Share the original Drive file, without exposing arbitrary source URLs."""
+    value = detail.get('googleDriveUrl')
+    if not isinstance(value, str):
+        return None
+    try:
+        url = urlsplit(value)
+        is_file = bool(re.fullmatch(r'/file/d/[A-Za-z0-9_-]+/(?:view|preview)', url.path))
+        is_file = is_file or (url.path == '/open' and bool(parse_qs(url.query).get('id')))
+        if url.scheme == 'https' and url.netloc == 'drive.google.com' and is_file:
+            return value
+    except ValueError:
+        pass
+    return None
+
+
 def register(app):
     @app.get('/api/client/{client_id}/publishers')
     def list_publishers(client_id: str, request: Request):
@@ -436,16 +454,51 @@ def register(app):
         row = active_share(token)
         return {'title': row['title'], 'expires_at': row['expiresAt'], 'job_ids': [item['jobId'] for item in row['items']]}
 
+    @app.get('/api/client/shared/{token}')
+    def shared_review_context(token: str, request: Request):
+        from .main import authenticate_client, CLIENT_PORTALS
+        session = authenticate_client(request)
+        row = active_share(token)
+        client_ids = [client_id for client_id in session['portal_ids'] if any(
+            item['offerId'] == CLIENT_PORTALS[client_id]['offer_id'] for item in row['items']
+        )]
+        return {'title': row['title'], 'client_ids': client_ids}
+
+    @app.get('/api/client/{client_id}/shared/{token}/reviews')
+    def shared_client_reviews(client_id: str, token: str, request: Request):
+        from .main import require_client, get_client_review_detail, public_client_review
+        config = require_client(request, client_id)
+        row = active_share(token)
+        items = [item for item in row['items'] if item['offerId'] == config['offer_id']]
+        if not items:
+            raise HTTPException(404, 'These creatives belong to a different workspace.')
+        def selected_review(item):
+            try:
+                require_submission(request, client_id, item['jobId'])
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    return None
+                raise
+            detail = get_client_review_detail(client_id, config['offer_id'], item['jobId'])
+            return public_client_review(detail['review']) if detail else None
+        # Shares contain at most 100 items. Resolve exact IDs in a small pool so
+        # old batches remain reachable without scanning the recent-review list.
+        with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
+            reviews = [review for review in pool.map(selected_review, items) if review is not None]
+        return {'client_id': client_id, 'display_name': config['display_name'], 'reviews': reviews,
+                'unavailable_count': len(items) - len(reviews)}
+
     @app.get('/api/public/shares/{token}/reviews/{job_id}')
     def public_detail(token: str, job_id: str):
         from .main import public_client_review
         row, detail = shared_item(token, job_id)
         report = detail['report']
         # This explicit projection deliberately omits internal overrides, policy
-        # documents, other offers, source URLs and processing metadata.
+        # documents, other offers and processing metadata. Only original Drive
+        # file links are included, using the same revocable share scope as media.
         safe_report = {key: report.get(key) for key in ('offer_name', 'overall_status', 'summary', 'findings', 'source_results')}
         review = public_client_review(detail['review'])
-        review['preview']['google_drive_url'] = None
+        review['preview']['google_drive_url'] = shared_drive_url(detail)
         base = f'/api/public/shares/{token}/reviews/{job_id}'
         return {'review': review, 'report': safe_report, 'media_url': f'{base}/media', 'evidence_frames': [
             {'filename': f['filename'], 'timestamp': f.get('timestamp'), 'url': f'{base}/frames/{f["filename"]}'} for f in detail.get('evidenceFrames', [])

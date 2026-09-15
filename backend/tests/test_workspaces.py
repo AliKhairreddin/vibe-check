@@ -322,6 +322,72 @@ async def test_sharing_checks_ownership_and_public_link_has_no_login_or_internal
         assert 'clientId' not in portal['calls'][-1][1]
 
 
+@pytest.mark.parametrize('url,expected', [
+    ('https://drive.google.com/file/d/creative_123/view?usp=sharing', True),
+    ('https://drive.google.com/open?id=creative_123', True),
+    (None, False),
+    ('private-source', False),
+    ('javascript:alert(1)', False),
+    ('https://drive.google.com.evil.example/file/d/id/view', False),
+    ('https://drive.google.com@evil.example/file/d/id/view', False),
+    ('https://drive.google.com/drive/folders/folder', False),
+])
+def test_shared_original_links_only_expose_drive_files(url, expected):
+    assert workspaces.shared_drive_url({'googleDriveUrl': url}) == (url if expected else None)
+
+
+@pytest.mark.anyio
+async def test_public_share_includes_original_drive_file_and_keeps_internal_data_private(portal, monkeypatch):
+    value = detail()
+    value['googleDriveUrl'] = 'https://drive.google.com/file/d/creative_123/view'
+    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: value)
+    portal['share'] = {'items': [{'jobId': JOB, 'offerId': 'kissterra'}]}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com') as client:
+        response = await client.get(f'/api/public/shares/{TOKEN}/reviews/{JOB}')
+        assert response.status_code == 200
+        assert response.json()['review']['preview']['google_drive_url'] == value['googleDriveUrl']
+        assert 'secret policy' not in response.text and 'Other advertiser' not in response.text
+        portal['share'] = None
+        assert (await client.get(f'/api/public/shares/{TOKEN}/reviews/{JOB}')).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_shared_review_handoff_keeps_exact_selection_and_account_permissions(portal, monkeypatch):
+    portal['share'] = {'title': 'Two selected creatives', 'items': [
+        {'jobId': OTHER, 'offerId': 'kissterra'}, {'jobId': JOB, 'offerId': 'kissterra'},
+        {'jobId': 'd' * 32, 'offerId': 'smart-financial'},
+    ]}
+    def get_detail(client_id, offer_id, job_id):
+        assert client_id == 'kissterra' and offer_id == 'kissterra'
+        value = detail()
+        value['review'].update(jobId=job_id, batchId=f'batch-{job_id}', createdAt=1)
+        return value
+    monkeypatch.setattr(main, 'get_client_review_detail', get_detail)
+    monkeypatch.setattr(main, 'list_client_reviews', lambda *args, **kwargs: pytest.fail('Shared selections must not depend on recent history'))
+    endpoint = f'/api/client/kissterra/shared/{TOKEN}/reviews'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com') as client:
+        assert (await client.get(f'/api/client/shared/{TOKEN}')).status_code == 401
+        assert (await client.get(endpoint)).status_code == 401
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']('client')) as client:
+        context = await client.get(f'/api/client/shared/{TOKEN}')
+        assert context.json() == {'title': 'Two selected creatives', 'client_ids': ['kissterra']}
+        response = await client.get(endpoint)
+        assert response.status_code == 200, response.text
+        assert [item['job_id'] for item in response.json()['reviews']] == [OTHER, JOB]
+        assert response.json()['unavailable_count'] == 0
+        assert (await client.get(f'/api/client/smart-financial/shared/{TOKEN}/reviews')).status_code == 404
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']()) as publisher:
+        response = await publisher.get(endpoint)
+        assert [item['job_id'] for item in response.json()['reviews']] == [JOB]
+        assert response.json()['unavailable_count'] == 1
+        monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: None)
+        response = await publisher.get(endpoint)
+        assert response.json()['reviews'] == [] and response.json()['unavailable_count'] == 2
+        portal['share'] = None
+        assert (await publisher.get(endpoint)).status_code == 404
+        assert (await publisher.get(f'/api/client/shared/{TOKEN}')).status_code == 404
+
+
 @pytest.mark.anyio
 async def test_advertisers_manage_only_their_workspace_and_csrf_is_enforced(portal):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies']('client')) as client:

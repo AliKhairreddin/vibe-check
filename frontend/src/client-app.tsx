@@ -21,6 +21,7 @@ import {
 } from '@/components/client-insights';
 import { PublishersPage, PublisherUploadsPage, ClientSharedLinksPage, ClientPlanPage } from '@/components/publisher-pages';
 import { ClientSettingsPage } from '@/components/client-settings';
+import { SharedReviewQueue } from '@/components/shared-review-queue';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 const queryClient = new QueryClient();
@@ -55,6 +56,11 @@ const clientReviewsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/client/reviews',
   component: ClientReviewsPage,
+});
+const sharedReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/client/shared/$token',
+  component: SharedReviewQueue,
 });
 const publisherUploadsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -112,6 +118,7 @@ const router = createRouter({
     loginRoute,
     clientRoute,
     clientReviewsRoute,
+    sharedReviewRoute,
     publisherUploadsRoute,
     clientSettingsRoute,
     clientVerticalRoute,
