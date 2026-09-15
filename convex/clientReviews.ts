@@ -4,6 +4,7 @@ import { classifyReviewVertical } from "./reviewVerticals.ts";
 import { enqueueLearning } from './learning.ts';
 import { feedbackFields } from './learningTypes.ts';
 import { queueDecisionNotification } from './telegramMilestones.ts';
+import { queueStatusSync } from './lemonmaxx.ts';
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 
@@ -612,6 +613,7 @@ export const decide = mutation({
     }
     await enqueueLearning(ctx, args.offerId, Boolean(existing));
     await queueDecisionNotification(ctx, args.jobId, args.offerId);
+    if (existing?.decision !== args.decision) await queueStatusSync(ctx, args.jobId, args.offerId, args.decision);
     return {
       decidedAt: now,
       decision: args.decision,
@@ -696,6 +698,7 @@ export const clearDecision = mutation({
     await ctx.db.delete(existing._id);
     await enqueueLearning(ctx, args.offerId, true);
     await queueDecisionNotification(ctx, args.jobId, args.offerId);
+    await queueStatusSync(ctx, args.jobId, args.offerId, 'pending');
     return { cleared: true };
   },
 });

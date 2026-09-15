@@ -3,8 +3,12 @@ import { v } from "convex/values";
 import { candidateValidator, feedbackFields, lessonValidator, learningMetricsValidator } from './learningTypes.ts';
 import { emailFields } from './releaseEmailTypes.ts';
 import { deliveryFields, releaseSection } from './telegramMessageTypes.ts';
+import { statusSyncFields } from './lemonmaxxTypes.ts';
 
 export default defineSchema({
+  lemonmaxxStatusSync: defineTable(statusSyncFields)
+    .index('by_partner_id_and_asset_id', ['partnerId', 'assetId'])
+    .index('by_state_and_next_attempt_at', ['state', 'nextAttemptAt']),
   releaseEmails: defineTable(emailFields)
     .index('by_email_id', ['emailId'])
     .index('by_owner_key_and_offer_id', ['ownerKey', 'offerId']),

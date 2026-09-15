@@ -18,6 +18,8 @@ import type * as clientReviews from "../clientReviews.js";
 import type * as crons from "../crons.js";
 import type * as learning from "../learning.js";
 import type * as learningTypes from "../learningTypes.js";
+import type * as lemonmaxx from "../lemonmaxx.js";
+import type * as lemonmaxxTypes from "../lemonmaxxTypes.js";
 import type * as liveScans from "../liveScans.js";
 import type * as offers from "../offers.js";
 import type * as platform from "../platform.js";
@@ -57,6 +59,8 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   learning: typeof learning;
   learningTypes: typeof learningTypes;
+  lemonmaxx: typeof lemonmaxx;
+  lemonmaxxTypes: typeof lemonmaxxTypes;
   liveScans: typeof liveScans;
   offers: typeof offers;
   platform: typeof platform;

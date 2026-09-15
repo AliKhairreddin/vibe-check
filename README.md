@@ -147,6 +147,7 @@ Use [`.env.example`](.env.example) as the source of truth. Important groups incl
 
 - `OPENROUTER_*` for final analysis, vision, speech-to-text, throughput-first provider routing, and per-request ZDR/data-collection enforcement on chat and vision calls;
 - `CONVEX_URL`, `CONVEX_DEPLOYMENT`, and `CONVEX_HTTP_SECRET` for durable state;
+- `LEMONMAXX_PARTNER_ID` and `LEMONMAXX_API_TOKEN` on Convex for [Offer decision status sync](docs/lemonmaxx-status-sync.md);
 - `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID`, and optional named roots in `GOOGLE_DRIVE_ADDITIONAL_FOLDERS_JSON` for folder-scoped import;
 - `TELEGRAM_*` for release, advertiser-completion, and daily-roundup notifications; see [Telegram notifications](docs/telegram-notifications.md) for triggers and the Convex-side schedule;
 - `ADMIN_PASSWORD` for full owner access to protected guideline, internal-rule,
