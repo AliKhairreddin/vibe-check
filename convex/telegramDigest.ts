@@ -42,7 +42,7 @@ export const advanceRun = internalMutation({
     if (run.status === 'emails') {
       // Seed existing delivery records once so the first roundup never labels a
       // previously sent email as unsent. New sends are recorded transactionally.
-      const page = await ctx.db.query('releaseEmails').paginate({ cursor: run.cursor, numItems: 10 });
+      const page = await ctx.db.query('releaseEmails').paginate({ cursor: run.cursor, numItems: 1 });
       for (const email of page.page) await recordEmailDelivery(ctx, email);
       await ctx.db.patch(runId, { status: page.isDone ? 'scanning' : 'emails', cursor: page.isDone ? null : page.continueCursor });
     } else if (run.status === 'scanning') {

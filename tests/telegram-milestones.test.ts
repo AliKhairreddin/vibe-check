@@ -3,7 +3,7 @@ import test from 'node:test';
 import { release } from '../convex/reviewReleases.ts';
 import { decide, clearDecision } from '../convex/clientReviews.ts';
 import { claim, finish, setMessage, enqueue } from '../convex/telegramNotifications.ts';
-import { digestSections, recordEmailDelivery, checkDelivery } from '../convex/telegramMilestones.ts';
+import { digestSections, recordEmailDelivery, checkDelivery, prepareRelease } from '../convex/telegramMilestones.ts';
 import { tick, advanceRun } from '../convex/telegramDigest.ts';
 import { localDate, messageParts } from '../convex/telegramMessageTypes.ts';
 
@@ -66,7 +66,14 @@ function fixture() {
     return items.map(item => item.jobId);
   }
   const posts = () => tables.telegramNotifications ?? [];
-  const releaseBatch = (jobIds: string[], offerIds = ['kissterra']) => invoke(release, ctx, { jobIds, offerIds, confirmed: true, releasedBy: 'admin' });
+  const releaseBatch = async (jobIds: string[], offerIds = ['kissterra']) => {
+    const result = await invoke(release, ctx, { jobIds, offerIds, confirmed: true, releasedBy: 'admin' });
+    while (scheduled.some(args => args.releaseId)) {
+      const [args] = scheduled.splice(scheduled.findIndex(args => args.releaseId), 1);
+      await invoke(prepareRelease, ctx, args);
+    }
+    return result;
+  };
   const decision = (jobId: string, offerId = 'kissterra', value = 'approved') => invoke(decide, ctx, { jobId, offerId, clientId: offerId, decision: value, feedbackReason: 'business_decision' });
   return { ctx, db, tables, scheduled, addBatch, posts, releaseBatch, decision };
 }
@@ -272,4 +279,15 @@ test('long multi-advertiser releases retain stable continuation posts through se
   assert.equal(f.posts().length, count);
   assert.deepEqual(offers.map(offer => f.posts().findIndex((p: any) => p.message.includes(`${offer}&amp;`))), locations);
   assert.ok(f.posts().every((p: any) => p.message.length < 3900));
+});
+
+test('cross-batch releases prepare independently and retrying preparation cannot duplicate summaries', async () => {
+  const f = fixture(); const ids = [];
+  for (let i = 0; i < 20; i++) ids.push((await f.addBatch(`selected-${i}`, 3))[0]);
+  await invoke(release, f.ctx, { jobIds: ids, offerIds: ['kissterra'], confirmed: true, releasedBy: 'admin' });
+  assert.equal(f.posts().length, 0); assert.equal(f.scheduled.length, 20);
+  assert.ok(f.scheduled.every(args => args.items.length === 1));
+  const args = f.scheduled[0]; await invoke(prepareRelease, f.ctx, args); await invoke(prepareRelease, f.ctx, args);
+  assert.equal(f.posts().length, 1); assert.match(f.posts()[0].message, /partial release; 3 evaluated/);
+  assert.equal(f.tables.reviewReleaseEvents.length, 20);
 });

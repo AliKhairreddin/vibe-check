@@ -120,13 +120,26 @@ export async function queueReleaseNotifications(ctx: MutationCtx, additions: { j
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
   for (const [batchId, items] of groups) {
+    await ctx.scheduler.runAfter(0, makeFunctionReference<'mutation'>('telegramMilestones:prepareRelease'), {
+      releaseId, batchId, items: items.map(({ jobId, offerIds }) => ({ jobId, offerIds })),
+    });
+  }
+}
+
+export const prepareRelease = internalMutation({
+  args: { releaseId: v.string(), batchId: v.string(), items: v.array(v.object({ jobId: v.string(), offerIds: v.array(v.string()) })) },
+  returns: v.null(),
+  handler: async (ctx, { releaseId, batchId, items }) => {
+    const eventKey = `release:${releaseId}:${batchId}`;
+    if (await ctx.db.query('telegramReleaseSummaries').withIndex('by_event_key', q => q.eq('eventKey', eventKey)).unique()) return null;
     const state = await batchState(ctx, batchId);
     const sections = new Map<string, Section>();
     for (const item of items) {
+      if (!await internalJob(ctx, item.jobId)) continue;
       for (const offerId of item.offerIds) {
         const stat = await ctx.db.query('reviewOfferStats').withIndex('by_job_id_and_offer_id', q => q.eq('jobId', item.jobId).eq('offerId', offerId)).unique();
         const verdict = color(stat?.resultStatus);
-        if (!stat || !['red', 'yellow', 'green'].includes(verdict ?? '')) continue;
+        if (!stat || stat.withheld || stat.deletedAt !== undefined || stat.status !== 'complete' || !['red', 'yellow', 'green'].includes(verdict ?? '')) continue;
         let section = sections.get(offerId);
         if (!section) {
           const profile = await ctx.db.query('offerProfiles').withIndex('by_offer_id', q => q.eq('offerId', offerId)).unique();
@@ -140,15 +153,16 @@ export async function queueReleaseNotifications(ctx: MutationCtx, additions: { j
         if (decisions.some(d => d.offerId === offerId)) section.reviewed++;
       }
     }
-    if (!sections.size) continue;
-    const summary = { eventKey: `release:${releaseId}:${batchId}`, batchId, title: state?.title ?? 'Selected creatives',
+    if (!sections.size) return null;
+    const summary = { eventKey, batchId, title: state?.title ?? 'Selected creatives',
       sections: [...sections.values()].sort((a, b) => a.name.localeCompare(b.name)), createdAt: Date.now() };
     await ctx.db.insert('telegramReleaseSummaries', summary);
     await renderRelease(ctx, summary);
     // A later partial release reopens an already completed advertiser batch.
     if (state) for (const section of sections.values()) await refreshDecisionMessage(ctx, state, section.offerId);
-  }
-}
+    return null;
+  },
+});
 
 async function refreshDecisionMessage(ctx: MutationCtx, state: NonNullable<Awaited<ReturnType<typeof batchState>>>, offerId: string) {
   const offer = state.offers.find(s => s.offerId === offerId);

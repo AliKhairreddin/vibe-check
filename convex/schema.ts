@@ -60,7 +60,7 @@ export default defineSchema({
     .index('by_status_and_next_attempt_at', ['status', 'nextAttemptAt']),
   telegramReleaseSummaries: defineTable({
     eventKey: v.string(), batchId: v.string(), title: v.string(), sections: v.array(releaseSection), createdAt: v.number(),
-  }).index('by_batch_id', ['batchId']),
+  }).index('by_batch_id', ['batchId']).index('by_event_key', ['eventKey']),
   telegramBatchDeliveries: defineTable(deliveryFields)
     .index('by_batch_id_and_offer_id', ['batchId', 'offerId']).index('by_status_and_updated_at', ['status', 'updatedAt']),
   telegramDigestEntries: defineTable({

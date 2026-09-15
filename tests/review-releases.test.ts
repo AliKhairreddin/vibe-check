@@ -68,7 +68,7 @@ function fixture() {
     async replace(id: string, value: any) { const row = Object.values(tables).flat().find(row => row._id === id); assert.ok(row); const createdAt = row._creationTime; for (const key of Object.keys(row)) delete row[key]; Object.assign(row, value, { _id: id, _creationTime: createdAt }); },
     async delete(id: string) { for (const rows of Object.values(tables)) { const i = rows.findIndex(row => row._id === id); if (i >= 0) rows.splice(i, 1); } },
   };
-  const ctx = { db, storage: { delete: async () => {} } } as any;
+  const ctx = { db, storage: { delete: async () => {} }, scheduler: { runAfter: async () => 'scheduled' } } as any;
   async function add(jobId = 'creative', extra: any = {}) {
     const report = { offer_results: ['kissterra', 'smart-financial'].map(offerId => ({ offer_id: offerId, overall_status: 'green', summary: 'Checked', findings: [] })) };
     const id = await db.insert('reviews', { jobId, fileName: 'creative.mp4', status: 'complete', hasCreative: true, reportReady: true, offerIds: ['kissterra', 'smart-financial'], releasedOfferIds: [], report, createdAt: 1, updatedAt: 1, ...extra });

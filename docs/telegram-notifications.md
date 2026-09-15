@@ -27,6 +27,9 @@ progress at release, and link to the batch filtered to that advertiser. Partial
 releases are labeled. Release is additive: repeating an unchanged release sends
 nothing, and a later release gets its own summary of the newly released creatives.
 Large summaries use bounded continuation posts with stable advertiser groupings.
+The release transaction schedules one durable preparation job per batch. Selecting
+creatives across many batches therefore does not hydrate every batch in the same
+database transaction. Retrying preparation reuses its stable release event key.
 
 ```text
 Batch released · 15 Sept 2026 Auto
