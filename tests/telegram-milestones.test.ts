@@ -5,7 +5,7 @@ import { decide, clearDecision } from '../convex/clientReviews.ts';
 import { claim, finish, setMessage, enqueue } from '../convex/telegramNotifications.ts';
 import { digestSections, recordEmailDelivery, checkDelivery, prepareRelease } from '../convex/telegramMilestones.ts';
 import { tick, advanceRun } from '../convex/telegramDigest.ts';
-import { localDate, messageParts } from '../convex/telegramMessageTypes.ts';
+import { localDate, localDayStart, messageParts } from '../convex/telegramMessageTypes.ts';
 
 const secret = 'milestone-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
@@ -19,11 +19,11 @@ function fixture() {
     query(table: string) {
       const predicates: ((row: any) => boolean)[] = [];
       let indexName = ''; let direction = 1;
-      const index: any = Object.fromEntries(['eq', 'lte', 'lt'].map(op => [op, (key: string, value: any) => {
-        predicates.push(row => op === 'eq' ? row[key] === value : op === 'lte' ? row[key] <= value : row[key] < value); return index;
+      const index: any = Object.fromEntries(['eq', 'gte', 'lte', 'lt'].map(op => [op, (key: string, value: any) => {
+        predicates.push(row => op === 'eq' ? row[key] === value : op === 'gte' ? row[key] >= value : op === 'lte' ? row[key] <= value : row[key] < value); return index;
       }]));
       const rows = () => (tables[table] ?? []).filter(row => predicates.every(p => p(row))).sort((a, b) => {
-        const field = indexName === 'by_day_and_name' ? 'name' : indexName === 'by_started_at' ? 'startedAt' : '_creationTime';
+        const field = indexName === 'by_day_and_name' ? 'name' : indexName === 'by_started_at' ? 'startedAt' : indexName === 'by_created_at' ? 'createdAt' : '_creationTime';
         return (typeof a[field] === 'string' ? a[field].localeCompare(b[field]) : a[field] - b[field]) * direction;
       });
       const query: any = {
@@ -217,6 +217,82 @@ test('roundup is once per local day, resumes pages, groups advertisers and omits
   while (empty.scheduled.length) await invoke(advanceRun, empty.ctx, empty.scheduled.shift());
   assert.deepEqual(empty.posts(), []);
   delete process.env.TELEGRAM_DIGEST_TIME;
+});
+
+test('roundup includes only today’s batches and keeps its window when resumed after midnight', async t => {
+  for (const [timeZone, midnight, evening] of [
+    ['America/Toronto', '2026-09-15T04:00:00Z', '2026-09-15T22:00:00Z'],
+    ['Asia/Kolkata', '2026-09-14T18:30:00Z', '2026-09-15T12:30:00Z'],
+  ]) await t.test(timeZone, async t => {
+    const previousZone = process.env.TELEGRAM_DIGEST_TIMEZONE;
+    const previousTime = process.env.TELEGRAM_DIGEST_TIME;
+    process.env.TELEGRAM_DIGEST_TIMEZONE = timeZone;
+    process.env.TELEGRAM_DIGEST_TIME = '18:00';
+    t.after(() => {
+      if (previousZone === undefined) delete process.env.TELEGRAM_DIGEST_TIMEZONE;
+      else process.env.TELEGRAM_DIGEST_TIMEZONE = previousZone;
+      if (previousTime === undefined) delete process.env.TELEGRAM_DIGEST_TIME;
+      else process.env.TELEGRAM_DIGEST_TIME = previousTime;
+    });
+    const start = Date.parse(midnight);
+    const cutoff = Date.parse(evening);
+    let now = cutoff;
+    t.mock.method(Date, 'now', () => now);
+    const f = fixture();
+    // A missed roundup must not turn today's message into a multi-day backlog.
+    await f.db.insert('telegramDigestRuns', { day: '2026-09-12', startedAt: cutoff - 3 * 86400000,
+      since: start - 3 * 86400000, status: 'complete', cursor: null, part: 0, buffer: [] });
+    for (const [batchId, createdAt] of [
+      ['old-ready', start - 1], ['old-reviewed-today', start - 1],
+      ['today-midnight', start], ['today-reviewed', start + 1],
+      ['today-cutoff', cutoff], ['after-cutoff', cutoff + 1], ['still-processing', start],
+    ] as const) {
+      const ids = await f.addBatch(batchId, 1);
+      f.tables.reviewBatches.find(batch => batch.batchId === batchId).createdAt = createdAt;
+      if (batchId.includes('reviewed')) { await f.releaseBatch(ids); await f.decision(ids[0]); }
+      if (batchId === 'still-processing') f.tables.reviewBatches.find(batch => batch.batchId === batchId).items[0].status = 'processing';
+    }
+    await invoke(tick, f.ctx);
+    const run = f.tables.telegramDigestRuns[1];
+    assert.equal(run.day, '2026-09-15');
+    assert.equal(run.since, start);
+    // Stored bounds must survive retries even after the local date has changed.
+    now += 86400000;
+    while (f.scheduled.length) await invoke(advanceRun, f.ctx, f.scheduled.shift());
+    assert.equal(run.status, 'complete');
+    assert.deepEqual(f.tables.telegramDigestEntries.map(entry => entry.batchId).sort(),
+      ['today-cutoff', 'today-midnight', 'today-reviewed']);
+    const posts = f.posts().filter(post => post.eventKey.startsWith('digest:'));
+    assert.ok(posts.length > 0);
+    assert.match(posts[0].message, /Creative review roundup · 2026-09-15/);
+    assert.match(posts[0].message, /Review completed/);
+    // None of yesterday's outstanding or post-cutoff batches carry over.
+    await invoke(tick, f.ctx);
+    while (f.scheduled.length) await invoke(advanceRun, f.ctx, f.scheduled.shift());
+    assert.equal(f.posts().filter(post => post.eventKey.startsWith('digest:')).length, posts.length);
+  });
+});
+
+test('the first roundup stays quiet when only older outstanding batches exist', async t => {
+  t.mock.method(Date, 'now', () => Date.parse('2026-09-15T23:00:00Z'));
+  const f = fixture();
+  await f.addBatch('old-outstanding');
+  f.tables.reviewBatches[0].createdAt = Date.now() - 7 * 86400000;
+  await invoke(tick, f.ctx);
+  while (f.scheduled.length) await invoke(advanceRun, f.ctx, f.scheduled.shift());
+  assert.equal(f.tables.telegramDigestRuns[0].status, 'complete');
+  assert.deepEqual(f.posts(), []);
+});
+
+test('local day bounds follow DST and configured timezones instead of UTC or a rolling 24 hours', () => {
+  for (const [timeZone, timestamp, expected] of [
+    ['America/Toronto', '2026-03-08T22:00:00Z', '2026-03-08T05:00:00Z'],
+    ['America/Toronto', '2026-11-01T23:00:00Z', '2026-11-01T04:00:00Z'],
+    ['America/Toronto', '2026-09-15T04:00:00Z', '2026-09-15T04:00:00Z'],
+    ['America/Toronto', '2026-09-15T03:59:59.999Z', '2026-09-14T04:00:00Z'],
+    ['Asia/Kolkata', '2026-09-15T12:30:00Z', '2026-09-14T18:30:00Z'],
+    ['Pacific/Kiritimati', '2026-09-15T04:00:00Z', '2026-09-14T10:00:00Z'],
+  ]) assert.equal(localDayStart(Date.parse(timestamp), timeZone), Date.parse(expected), `${timeZone} at ${timestamp}`);
 });
 
 test('legacy queued/start/success messages are suppressed during rolling deployment; failures remain', async () => {

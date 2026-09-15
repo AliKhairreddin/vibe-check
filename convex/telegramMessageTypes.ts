@@ -39,3 +39,16 @@ export function localDate(timestamp: number, timeZone = process.env.TELEGRAM_DIG
   const get = (type: string) => fields.find(field => field.type === type)!.value;
   return { day: `${get('year')}-${get('month')}-${get('day')}`, time: `${get('hour')}:${get('minute')}` };
 }
+
+export function localDayStart(timestamp: number, timeZone = process.env.TELEGRAM_DIGEST_TIMEZONE || 'America/Toronto') {
+  const day = localDate(timestamp, timeZone).day;
+  // Find the date boundary rather than subtracting hours: DST days can be 23 or 25 hours.
+  let before = timestamp - 36 * 60 * 60_000;
+  let start = timestamp;
+  while (start - before > 1) {
+    const middle = Math.floor((before + start) / 2);
+    if (localDate(middle, timeZone).day === day) start = middle;
+    else before = middle;
+  }
+  return start;
+}

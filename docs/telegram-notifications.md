@@ -9,7 +9,7 @@ advertiser and keep AdChecked assessments separate from advertiser decisions.
 | Event | Behavior |
 | --- | --- |
 | A review is queued or a batch starts | Quiet. |
-| A review, live scan, or batch finishes successfully | Quiet. Finished batches appear in the roundup until released. |
+| A review, live scan, or batch finishes successfully | Quiet. Finished batches created today appear in today's roundup. |
 | A batch or selected creatives are released | One summary per batch/release action, grouping the newly released advertisers. |
 | An email is being sent or its sending status changes | Edit the matching release summary. Drafting/previewing sends nothing. |
 | One creative is approved/disapproved | Quiet until that advertiser has decided on all released creatives in the batch. |
@@ -66,14 +66,21 @@ for daylight saving time. Change these **Convex deployment environment variables
 - `TELEGRAM_DIGEST_ENABLED`: set `false` to disable future daily runs.
 - `TELEGRAM_ADMIN_URL`: admin link origin, default `https://admin.adchecked.com`.
 
-The roundup groups finished batches by advertiser, showing assessment totals,
-creatives ready for release, release-email status, advertiser-review progress, and
-reviews completed since the previous roundup. Outstanding work remains visible
-on subsequent days. Old completed batches are omitted. Empty roundups send nothing.
+The roundup includes only finished batches **created that day**, from midnight
+in `TELEGRAM_DIGEST_TIMEZONE` through the roundup's start time. The heading's date
+is the batch-date filter, not just the date the message was generated. Older batches
+are excluded even if they still need release or advertiser review, or were reviewed
+today. Batches created after the roundup starts are outside that day's snapshot
+and do not carry into the next day's roundup.
 
-A durable daily run paginates the batch history, then the advertiser-sorted entries,
-so it does not silently truncate history to a recent page. Continuation posts are
-used only when Telegram's message length requires them. On the first run, existing
+Eligible batches are grouped by advertiser, showing assessment totals, creatives
+ready for release, release-email status, advertiser-review progress, and completed
+reviews. Empty roundups send nothing.
+
+A durable daily run paginates that day's batches, then the advertiser-sorted entries,
+so it does not silently truncate a busy day. The date window is saved when the run
+starts, including across daylight saving changes or retries after midnight.
+Continuation posts are used only when Telegram's message length requires them. On the first run, existing
 email records seed the delivery projection before batches are summarized. This
 prevents already-sent emails from being labeled unsent. Cursor and message writes
 are transactional; scheduler retries resume rather than restart the roundup.

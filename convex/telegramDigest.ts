@@ -3,7 +3,7 @@ import { makeFunctionReference } from 'convex/server';
 import { internalMutation, type MutationCtx } from './_generated/server.js';
 import type { Id } from './_generated/dataModel';
 import { digestSections, recordEmailDelivery } from './telegramMilestones.ts';
-import { localDate, messageParts } from './telegramMessageTypes.ts';
+import { localDate, localDayStart, messageParts } from './telegramMessageTypes.ts';
 import { setMessage } from './telegramNotifications.ts';
 
 const advance = makeFunctionReference<'mutation'>('telegramDigest:advanceRun');
@@ -24,7 +24,7 @@ export const tick = internalMutation({
     if (local.time < time) return null;
     if (await ctx.db.query('telegramDigestRuns').withIndex('by_day', q => q.eq('day', local.day)).unique()) return null;
     const runId = await ctx.db.insert('telegramDigestRuns', {
-      day: local.day, startedAt: now, since: latest?.startedAt ?? now - 86400000,
+      day: local.day, startedAt: now, since: localDayStart(now),
       status: latest ? 'scanning' : 'emails', cursor: null, part: 0, buffer: [],
     });
     await schedule(ctx, runId);
@@ -46,7 +46,7 @@ export const advanceRun = internalMutation({
       for (const email of page.page) await recordEmailDelivery(ctx, email);
       await ctx.db.patch(runId, { status: page.isDone ? 'scanning' : 'emails', cursor: page.isDone ? null : page.continueCursor });
     } else if (run.status === 'scanning') {
-      const page = await ctx.db.query('reviewBatches').withIndex('by_created_at', q => q.lte('createdAt', run.startedAt))
+      const page = await ctx.db.query('reviewBatches').withIndex('by_created_at', q => q.gte('createdAt', run.since).lte('createdAt', run.startedAt))
         .paginate({ cursor: run.cursor, numItems: 1 });
       for (const batch of page.page) {
         for (const entry of await digestSections(ctx, batch.batchId, run.since, run.startedAt)) {
