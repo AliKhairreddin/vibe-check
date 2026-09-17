@@ -176,6 +176,8 @@ Email delivery uses the Cloudflare `RELEASE_EMAIL` binding and `RELEASE_EMAIL_FR
 
 Convex stores email previews, an atomic send claim, and the provider message ID. A preview may be sent within 24 hours. Immediately before claiming, the server rechecks that the links are active and the creatives remain released. Duplicate send requests never call the provider again. Provider timeouts remain `uncertain` (or `sending` if the status write fails); these attempts are not retried automatically because delivery may already have happened. Inspect Cloudflare Email Service and the `release_email_delivery_uncertain` / `release_email_audit_pending` Worker events before preparing another email. Provider acceptance is recorded as sent; it is not an inbox-delivery receipt. The local FastAPI server supports previews but requires the deployed Worker for delivery.
 
+Telegram delivery records update atomically with email state; summary rendering runs in separate scheduled transactions per batch and page. This keeps combined batch emails, stale-send checks, and the daily email backfill within Convex's single-paginated-query limit. Tests enforce that limit. Unexpected email-state failures return HTTP 503 and log `release_email_storage_error` with the operation, email ID and available Convex request ID; use that ID to investigate Convex logs without exposing recipients, credentials or review links.
+
 
 ## API Overview
 

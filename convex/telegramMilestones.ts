@@ -209,7 +209,7 @@ export async function recordEmailDelivery(ctx: MutationCtx, email: Doc<'releaseE
       updatedAt: email.sentAt ?? attemptCreatedAt, sentAt: email.sentAt };
     if (previous) await ctx.db.patch(previous._id, value);
     else await ctx.db.insert('telegramBatchDeliveries', value);
-    await refreshReleasePageHandler(ctx, { batchId: link.batchId, cursor: null });
+    await queueReleaseRefresh(ctx, link.batchId);
     const attentionKey = `email-attention:${email.emailId}:${link.batchId}`;
     if (email.status === 'uncertain') await emailAttention(ctx, attentionKey, link.batchId, email.offerId);
     else if (email.status === 'sent') {
@@ -230,12 +230,20 @@ export const checkDelivery = internalMutation({
     for (const row of rows) {
       // The email claim remains untouched: a timeout must never resend email.
       await ctx.db.patch(row._id, { status: 'uncertain' });
-      await refreshReleasePageHandler(ctx, { batchId: row.batchId, cursor: null });
+      await queueReleaseRefresh(ctx, row.batchId);
       await emailAttention(ctx, `email-attention:${row.emailId}:${row.batchId}`, row.batchId, row.offerId);
     }
     return null;
   },
 });
+
+async function queueReleaseRefresh(ctx: MutationCtx, batchId: string) {
+  // Convex permits one paginated query per transaction. Email claims, finishes,
+  // digest backfills and delivery checks can each touch multiple batches.
+  // Schedule each refresh atomically with its delivery record, then render in
+  // separate transactions so summary pagination cannot roll back email state.
+  await ctx.scheduler.runAfter(0, makeFunctionReference<'mutation'>('telegramMilestones:refreshReleasePage'), { batchId, cursor: null });
+}
 
 async function refreshReleasePageHandler(ctx: MutationCtx, args: { batchId: string; cursor: string | null }) {
   const page = await ctx.db.query('telegramReleaseSummaries').withIndex('by_batch_id', q => q.eq('batchId', args.batchId))

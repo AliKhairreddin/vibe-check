@@ -18,21 +18,40 @@ export function renderReleaseEmail(email: Pick<Email, 'message' | 'signature' | 
   };
 }
 
+class EmailStorageError extends Error {
+  constructor() { super('Could not confirm email send status. Please try again.'); }
+}
+
+function storageFailure(name: string, args: Record<string, unknown>, reason: string, httpStatus?: number, errorMessage?: string) {
+  // Convex errors may include argument values. Log only the correlation ID and
+  // safe metadata, never raw errors, credentials, recipient lists or share URLs.
+  const requestId = errorMessage?.match(/\[Request ID: ([a-f0-9]+)\]/i)?.[1];
+  console.error(JSON.stringify({ event: 'release_email_storage_error', operation: name, emailId: args.emailId, reason, httpStatus, requestId }));
+  return new EmailStorageError();
+}
+
 async function mutation<T>(env: Env, name: string, args: Record<string, unknown>): Promise<T> {
-  const response = await fetch(`${env.CONVEX_URL}/api/mutation`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path: `releaseEmails:${name}`, args: { ...args, secret: env.CONVEX_HTTP_SECRET }, format: 'json' }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!response.ok) throw new Error('Email storage unavailable');
-  const data = await response.json() as { status: string; value?: T; errorMessage?: string };
-  if (data.status !== 'success') {
-    for (const message of ['Email unavailable', 'Preview expired. Create a fresh email preview', 'A selected link is no longer available. Create a fresh email preview', 'A selected creative is no longer released']) {
-      if (data.errorMessage?.includes(message)) throw new Error(message);
-    }
-    throw new Error('Email storage unavailable');
+  let response: Response;
+  try {
+    response = await fetch(`${env.CONVEX_URL}/api/mutation`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: `releaseEmails:${name}`, args: { ...args, secret: env.CONVEX_HTTP_SECRET }, format: 'json' }),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch {
+    throw storageFailure(name, args, 'transport');
   }
-  return data.value as T;
+  let data: { status?: string; value?: T; errorMessage?: string } | null;
+  try { data = await response.json(); }
+  catch { throw storageFailure(name, args, 'invalid_response', response.status); }
+  if (response.ok && data?.status === 'success' && 'value' in data) return data.value as T;
+  const errorMessage = typeof data?.errorMessage === 'string' ? data.errorMessage : undefined;
+  // Convex function failures can use a non-2xx status. Preserve known validation
+  // messages before turning unexpected failures into a service error.
+  for (const message of ['Email unavailable', 'Preview expired. Create a fresh email preview', 'A selected link is no longer available. Create a fresh email preview', 'A selected creative is no longer released']) {
+    if (errorMessage?.includes(message)) throw new Error(message);
+  }
+  throw storageFailure(name, args, data?.status === 'error' ? 'function' : 'http', response.status, errorMessage);
 }
 
 export async function deliverReleaseEmail(env: Env, authorization: { email_id: string; owner_key: string }): Promise<Response> {
@@ -43,7 +62,7 @@ export async function deliverReleaseEmail(env: Env, authorization: { email_id: s
   try {
     claim = await mutation(env, 'claim', { emailId: authorization.email_id, ownerKey: authorization.owner_key, claimId, from: env.RELEASE_EMAIL_FROM });
   } catch (error) {
-    return Response.json({ detail: error instanceof Error ? error.message : 'Could not prepare delivery.' }, { status: 409, headers });
+    return Response.json({ detail: error instanceof Error ? error.message : 'Could not prepare delivery.' }, { status: error instanceof EmailStorageError ? 503 : 409, headers });
   }
   if (!claim.claimed) return Response.json({ email_id: authorization.email_id, status: claim.email.status }, { headers });
   let messageId: string;

@@ -1,20 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getFunctionName } from 'convex/server';
 import { release } from '../convex/reviewReleases.ts';
 import { decide, clearDecision } from '../convex/clientReviews.ts';
 import { claim, finish, setMessage, enqueue } from '../convex/telegramNotifications.ts';
-import { digestSections, recordEmailDelivery, checkDelivery, prepareRelease } from '../convex/telegramMilestones.ts';
+import { digestSections, recordEmailDelivery, checkDelivery, prepareRelease, refreshReleasePage } from '../convex/telegramMilestones.ts';
 import { tick, advanceRun } from '../convex/telegramDigest.ts';
 import { localDate, localDayStart, messageParts } from '../convex/telegramMessageTypes.ts';
 
 const secret = 'milestone-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
-const invoke = (fn: any, ctx: any, args: any = {}) => fn._handler(ctx, { secret, ...args });
+const invoke = (fn: any, ctx: any, args: any = {}) => {
+  ctx.paginationCalls = 0;
+  return fn._handler(ctx, { secret, ...args });
+};
 
 function fixture() {
   const tables: Record<string, any[]> = {};
   let serial = 0;
   const scheduled: any[] = [];
+  const refreshes: any[] = [];
   const db = {
     query(table: string) {
       const predicates: ((row: any) => boolean)[] = [];
@@ -33,6 +38,7 @@ function fixture() {
         async first() { return rows()[0] ?? null; },
         async unique() { assert.ok(rows().length <= 1); return rows()[0] ?? null; },
         async paginate({ cursor, numItems }: any) {
+          assert.equal(++ctx.paginationCalls, 1, 'Convex only supports a single paginated query in each function');
           const start = Number(cursor ?? 0); const end = start + numItems;
           return { page: rows().slice(start, end), isDone: end >= rows().length, continueCursor: String(end) };
         },
@@ -48,7 +54,13 @@ function fixture() {
     async replace(id: string, value: any) { const row = await db.get(id); const created = row._creationTime; for (const key of Object.keys(row)) delete row[key]; Object.assign(row, value, { _id: id, _creationTime: created }); },
     async delete(id: string) { for (const rows of Object.values(tables)) { const i = rows.findIndex(row => row._id === id); if (i >= 0) rows.splice(i, 1); } },
   };
-  const ctx: any = { db, scheduler: { runAfter: async (_delay: number, _fn: any, args: any) => { scheduled.push(args); return 'scheduled'; } } };
+  const ctx: any = { db, paginationCalls: 0, scheduler: { runAfter: async (_delay: number, fn: any, args: any) => {
+    (getFunctionName(fn) === 'telegramMilestones:refreshReleasePage' ? refreshes : scheduled).push(args);
+    return 'scheduled';
+  } } };
+  const flushRefreshes = async () => {
+    while (refreshes.length) await invoke(refreshReleasePage, ctx, refreshes.shift());
+  };
   async function addBatch(batchId = 'batch', count = 3, offers = ['kissterra'], privateResults = true) {
     for (const offerId of offers) if (!(tables.offerProfiles ?? []).some(row => row.offerId === offerId)) {
       await db.insert('offerProfiles', { offerId, displayName: offerId === 'kissterra' ? 'Kissterra' : offerId });
@@ -75,7 +87,7 @@ function fixture() {
     return result;
   };
   const decision = (jobId: string, offerId = 'kissterra', value = 'approved') => invoke(decide, ctx, { jobId, offerId, clientId: offerId, decision: value, feedbackReason: 'business_decision' });
-  return { ctx, db, tables, scheduled, addBatch, posts, releaseBatch, decision };
+  return { ctx, db, tables, scheduled, refreshes, flushRefreshes, addBatch, posts, releaseBatch, decision };
 }
 
 test('release groups advertisers, uses original colors, and repeating release is quiet', async () => {
@@ -151,6 +163,7 @@ test('delivery stores Telegram identifiers and edits the same post when email st
   const email: any = { emailId: 'email', offerId: 'kissterra', status: 'sent', to: ['advertiser@example.com'], cc: [],
     createdAt: Date.now(), sentAt: Date.now(), links: [{ batchId: 'batch', jobIds: ids }] };
   await recordEmailDelivery(f.ctx, email); // races with the original send acknowledgement
+  await f.flushRefreshes();
   assert.equal(post.status, 'claimed');
   await invoke(finish, f.ctx, { eventKey: post.eventKey, claimId: claimed.claimId, success: true, messageId: 123, chatId: '-100' });
   assert.equal(post.status, 'pending'); assert.equal(post.messageId, 123);
@@ -166,8 +179,10 @@ test('email previews are quiet, coverage is checked, and uncertain attempts neve
     createdAt: Date.now(), links: [{ batchId: 'batch', jobIds: [ids[0]] }] };
   await recordEmailDelivery(f.ctx, email); assert.equal(f.tables.telegramBatchDeliveries, undefined);
   await recordEmailDelivery(f.ctx, { ...email, status: 'sent', sentAt: Date.now() });
+  await f.flushRefreshes();
   assert.match(f.posts()[0].message, /Email not sent yet/); // The rest of the release was not sent.
   await recordEmailDelivery(f.ctx, { ...email, status: 'uncertain', links: [{ batchId: 'batch', jobIds: ids }] });
+  await f.flushRefreshes();
   assert.match(f.posts()[0].message, /Email sending unconfirmed/);
   assert.match(f.posts()[1].message, /Email needs attention/);
   await recordEmailDelivery(f.ctx, { ...email, status: 'uncertain', links: [{ batchId: 'batch', jobIds: ids }] });
@@ -181,6 +196,32 @@ test('a stuck email send creates one alert and leaves the original email claim u
   await recordEmailDelivery(f.ctx, email); await invoke(checkDelivery, f.ctx);
   assert.match(f.posts()[1].message, /Email needs attention/); assert.equal(email.status, 'sending');
   await invoke(checkDelivery, f.ctx); assert.equal(f.posts().length, 2);
+});
+
+test('multi-batch stale sends refresh every summary in separate transactions using the latest state', async () => {
+  const f = fixture(); const links = [];
+  for (const batchId of ['home', 'auto']) {
+    const ids = await f.addBatch(batchId); await f.releaseBatch(ids);
+    links.push({ batchId, jobIds: ids });
+  }
+  // More than one page of release summaries must still finish after resuming.
+  const summary = f.tables.telegramReleaseSummaries[0];
+  const { _id, _creationTime, ...fields } = summary;
+  for (let i = 0; i < 21; i++) await f.db.insert('telegramReleaseSummaries', { ...fields, eventKey: `release:extra:${i}` });
+  const email: any = { emailId: 'combined', offerId: 'kissterra', status: 'sending', to: ['advertiser@example.com'], cc: [],
+    createdAt: Date.now() - 900000, links };
+  await recordEmailDelivery(f.ctx, email);
+  await invoke(checkDelivery, f.ctx);
+  assert.equal(f.ctx.paginationCalls, 0);
+  assert.ok(f.tables.telegramBatchDeliveries.every((row: any) => row.status === 'uncertain'));
+  assert.equal(f.refreshes.length, 4);
+  // A confirmation can arrive before queued "sending" or "uncertain" refreshes.
+  await recordEmailDelivery(f.ctx, { ...email, status: 'sent', sentAt: Date.now() });
+  await f.flushRefreshes();
+  const releases = f.posts().filter((post: any) => post.eventKey.startsWith('release:'));
+  assert.equal(releases.length, 23);
+  assert.ok(releases.every((post: any) => /Email sent · advertiser@example.com/.test(post.message)));
+  assert.ok(f.posts().filter((post: any) => post.eventKey.startsWith('email-attention:')).every((post: any) => /Email sending confirmed/.test(post.message)));
 });
 
 test('roundup separates ready, partial decisions, completed activity and unavailable results', async () => {
@@ -339,6 +380,7 @@ test('late callbacks from older emails cannot replace a newer attempt', async ()
     createdAt: 100, sendingAt: 200, sentAt: 300, links: [{ batchId: 'batch', jobIds: ids }] };
   await recordEmailDelivery(f.ctx, email);
   await recordEmailDelivery(f.ctx, { ...email, emailId: 'old', sendingAt: 150, status: 'uncertain', to: ['old@example.com'] });
+  await f.flushRefreshes();
   assert.match(f.posts()[0].message, /new@example.com/); assert.equal(f.posts().length, 1);
 });
 
@@ -352,6 +394,7 @@ test('long multi-advertiser releases retain stable continuation posts through se
   for (const offerId of offers) await recordEmailDelivery(f.ctx, { emailId: offerId, offerId, status: 'sent',
     to: ['x'.repeat(70) + '@example.com', 'other@example.com'], cc: [], createdAt: 100, sentAt: 200,
     links: [{ batchId: 'large', jobIds: ids }] } as any);
+  await f.flushRefreshes();
   assert.equal(f.posts().length, count);
   assert.deepEqual(offers.map(offer => f.posts().findIndex((p: any) => p.message.includes(`${offer}&amp;`))), locations);
   assert.ok(f.posts().every((p: any) => p.message.length < 3900));
