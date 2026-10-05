@@ -1,6 +1,8 @@
 import { hasLocalWork, planPartnerDispatch, type ShardHeartbeat } from "./scaling";
 import { Container } from "@cloudflare/containers";
 import { deliverReleaseEmail, emailRoute } from './release-emails';
+import { fetchReviewRead, recordEdgeRead } from './review-reads';
+import { drainInternalResponse, readInternalJson } from './internal-responses';
 import {
   ADMIN_HOST,
   API_HOST,
@@ -341,8 +343,7 @@ async function dispatchPartnerJobs(env: Env): Promise<void> {
       new URL("/api/internal/partner-jobs", ADMIN_ORIGIN),
       { method: "POST", headers: { "x-automation-secret": env.CONVEX_HTTP_SECRET } },
     ));
-    if (!drained.ok) throw new Error(`Partner queue drain failed: ${drained.status}`);
-    await drained.body?.cancel();
+    await drainInternalResponse(drained, 'Partner queue drain');
   }));
   console.log(JSON.stringify({ event: "partner_queue_dispatch", shards: selected.length, configuredShards: count, pending: result.value.pending,
     failed: results.filter(result => result.status === "rejected").length }));
@@ -452,10 +453,7 @@ export class ReviewBackend extends Container<Env> {
         "http://localhost/api/internal/queue-state",
         { headers },
       );
-      if (!response.ok) {
-        throw new Error(`Queue state returned ${response.status}`);
-      }
-      const state = await response.json() as { active?: number; pending?: number; background?: number };
+      const state = await readInternalJson<{ active?: number; pending?: number; background?: number }>(response, 'Queue state');
       if (hasLocalWork(state)) {
         this.renewActivityTimeout();
         console.log(JSON.stringify({
@@ -537,7 +535,13 @@ export default {
         headers.set('x-release-email-transport', env.CONVEX_HTTP_SECRET);
         request = new Request(request, { headers });
       }
-      let response = await fetchBackend(env, request);
+      const edgeRead = await fetchReviewRead(request, env);
+      if (edgeRead && edgeRead.status !== 401) {
+        ctx.waitUntil(recordEdgeRead(env).catch(() => {
+          console.warn(JSON.stringify({ event: 'edge_traffic_recording_failed' }));
+        }));
+      }
+      let response = edgeRead ?? await fetchBackend(env, request);
       if (response.ok && releaseEmailRoute === 'options' && request.method === 'GET') {
         const data = await response.json() as Record<string, unknown>;
         response = Response.json({ ...data, sender: env.RELEASE_EMAIL_FROM, sending_enabled: Boolean(env.RELEASE_EMAIL_FROM && env.RELEASE_EMAIL) }, { headers: { 'cache-control': 'no-store' } });
@@ -560,7 +564,10 @@ export default {
         const { success } = await env.ADMIN_AUTH_RATE_LIMITER.limit({
           key: authRateLimitKey(request, surface),
         });
-        if (!success) return secureResponse(rateLimitedResponse(), surface);
+        if (!success) {
+          await response.body?.cancel();
+          return secureResponse(rateLimitedResponse(), surface);
+        }
       }
       return secureResponse(response, surface);
     }
@@ -635,17 +642,12 @@ export default {
         new URL("/api/internal/review-recovery", baseUrl),
         { method: "POST", headers },
       ));
-      if (!recoveryResponse.ok) {
-        throw new Error(
-          `Review recovery failed with status ${recoveryResponse.status}`,
-        );
-      }
-      const recoveryResult = await recoveryResponse.clone().json() as {
+      const recoveryResult = await readInternalJson<{
         already_draining?: boolean;
         drained?: boolean;
         queue?: { active?: number; pending?: number };
         recovered?: { failed?: number; requeued?: number };
-      };
+      }>(recoveryResponse, 'Review recovery');
       console.log(JSON.stringify({
         event: "review_recovery_tick",
         alreadyDraining: recoveryResult.already_draining ?? false,
@@ -656,9 +658,7 @@ export default {
         requeued: recoveryResult.recovered?.requeued ?? 0,
       }));
       const response = await backend.fetch(request);
-      if (!response.ok) {
-        throw new Error(`Automation tick failed with status ${response.status}`);
-      }
+      await drainInternalResponse(response, 'Automation tick');
     })());
   },
 } satisfies ExportedHandler<Env>;

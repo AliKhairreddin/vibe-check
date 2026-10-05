@@ -45,6 +45,8 @@ export default defineSchema({
     memoryBytes: v.optional(v.number()), memoryLimitBytes: v.optional(v.number()),
   }).index('by_instance_id', ['instanceId']).index('by_updated_at', ['updatedAt']),
   platformTrafficHours: defineTable({ hour: v.number(), requests: v.number(), errors: v.number() }).index('by_hour', ['hour']),
+  platformEdgeTrafficHours: defineTable({ hour: v.number(), shard: v.number(), requests: v.number() })
+    .index('by_hour_and_shard', ['hour', 'shard']),
   telegramNotifications: defineTable({
     eventKey: v.string(),
     message: v.string(),

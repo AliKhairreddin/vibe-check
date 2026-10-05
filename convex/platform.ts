@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server.js';
 import { attributeInternalReview, DIGITAL_NUDGE_CLIENTS } from './publisherOwnership.ts';
+import { combineTrafficHours } from './platformTraffic.ts';
 
 function authorize(secret: string) {
   if (!process.env.CONVEX_HTTP_SECRET || secret !== process.env.CONVEX_HTTP_SECRET) throw new Error('Unauthorized');
@@ -31,13 +32,15 @@ export const overview = query({
   args: { secret: v.string() }, returns: v.any(), handler: async (ctx, args) => {
     authorize(args.secret);
     const now = Date.now();
-    const [instances, traffic, publishers, stats, timings] = await Promise.all([
+    const [instances, backendTraffic, edgeTraffic, publishers, stats, timings] = await Promise.all([
       ctx.db.query('platformInstances').withIndex('by_updated_at', q => q.gte('updatedAt', now - 86400000)).order('desc').take(200),
       ctx.db.query('platformTrafficHours').withIndex('by_hour', q => q.gte('hour', now - 86400000)).take(25),
+      ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard', q => q.gte('hour', now - 86400000)).take(25 * 16),
       ctx.db.query('publishers').take(1000),
       ctx.db.query('reviewOfferStats').withIndex('by_created_at').order('desc').take(1000),
       ctx.db.query('reviewProcessingMetrics').withIndex('by_started_at').order('desc').take(200),
     ]);
+    const traffic = combineTrafficHours(backendTraffic, edgeTraffic.map(row => ({ ...row, errors: 0 })));
     // Old rows remain readable during the resumable migration. Once projected,
     // ownership needs no per-result database lookup on every dashboard refresh.
     const visible = await Promise.all(stats.filter(stat => stat.deletedAt === undefined).map(async stat => {
@@ -57,6 +60,25 @@ export const overview = query({
       reviews: { sampled: recentReviews.length, complete: recentReviews.filter(r => r.status === 'complete' && r.deletedAt === undefined).length, failed: recentReviews.filter(r => r.status === 'failed' && r.deletedAt === undefined).length, pending: recentReviews.filter(r => !['complete', 'failed'].includes(r.status) && r.deletedAt === undefined).length },
       processing: { sampleSize: timings.length, medianMs: percentile(durations, .5), p95Ms: percentile(durations, .95), p95QueueWaitMs: percentile(waits, .95), failed: timings.filter(row => !row.completed).length },
     };
+  },
+});
+
+export const recordEdgeRead = mutation({
+  args: { secret: v.string(), shard: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    authorize(args.secret);
+    if (!Number.isInteger(args.shard) || args.shard < 0 || args.shard >= 16) throw new Error('Invalid traffic shard');
+    const now = Date.now();
+    const hour = Math.floor(now / 3600000) * 3600000;
+    const row = await ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard',
+      q => q.eq('hour', hour).eq('shard', args.shard)).unique();
+    if (row) await ctx.db.patch(row._id, { requests: row.requests + 1 });
+    else await ctx.db.insert('platformEdgeTrafficHours', { hour, shard: args.shard, requests: 1 });
+    const expired = await ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard',
+      q => q.lt('hour', now - 7 * 86400000)).take(1);
+    for (const old of expired) await ctx.db.delete(old._id);
+    return null;
   },
 });
 

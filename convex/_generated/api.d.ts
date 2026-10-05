@@ -23,6 +23,7 @@ import type * as lemonmaxxTypes from "../lemonmaxxTypes.js";
 import type * as liveScans from "../liveScans.js";
 import type * as offers from "../offers.js";
 import type * as platform from "../platform.js";
+import type * as platformTraffic from "../platformTraffic.js";
 import type * as publisherOwnership from "../publisherOwnership.js";
 import type * as releaseEmailTypes from "../releaseEmailTypes.js";
 import type * as releaseEmails from "../releaseEmails.js";
@@ -64,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   liveScans: typeof liveScans;
   offers: typeof offers;
   platform: typeof platform;
+  platformTraffic: typeof platformTraffic;
   publisherOwnership: typeof publisherOwnership;
   releaseEmailTypes: typeof releaseEmailTypes;
   releaseEmails: typeof releaseEmails;

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { acceptInvite, claimSubmission, createShare, getShare, invitePublisher, revokeShare, setupDigitalNudge, digitalNudgeMemberships, setPlan, releaseUnstartedSubmission } from '../convex/workspaces.ts';
 import { attributeInternalReview } from '../convex/publisherOwnership.ts';
-import { recordHeartbeat, overview, backfillPublisherStats } from '../convex/platform.ts';
+import { recordHeartbeat, recordEdgeRead, overview, backfillPublisherStats } from '../convex/platform.ts';
 import { syncReviewOfferStats } from '../convex/reviews.ts';
 import { apiRequestAllowed, isClientPagePath, isAdminPagePath } from '../worker/routing.ts';
 
@@ -43,6 +43,21 @@ function fixture() {
 async function seedPublisher(ctx: any, clientId = 'kissterra', publisherId = 'banana') {
   await ctx.db.insert('publishers', { clientId, publisherId, username: publisherId, name: 'Banana', status: 'active', authVersion: 1, createdAt: Date.now() });
 }
+
+test('edge traffic preserves platform totals without registering a container and expires old counters', async () => {
+  const { ctx, tables } = fixture();
+  const hour = Math.floor(Date.now() / 3600000) * 3600000;
+  await ctx.db.insert('platformTrafficHours', { hour, requests: 4, errors: 1 });
+  await ctx.db.insert('platformEdgeTrafficHours', { hour: hour - 8 * 86400000, shard: 0, requests: 9 });
+  for (const shard of [0, 0, 3, 15]) await invoke(recordEdgeRead, ctx, { shard });
+  const result = await invoke(overview, ctx);
+  assert.deepEqual(result.traffic, [{ hour, requests: 8, errors: 1 }]);
+  assert.deepEqual(result.instances, []);
+  assert.equal(tables.platformEdgeTrafficHours.length, 3);
+  await assert.rejects(invoke(recordEdgeRead, ctx, { shard: 0, secret: 'wrong' }), /Unauthorized/);
+  for (const shard of [-1, 0.5, 16]) await assert.rejects(invoke(recordEdgeRead, ctx, { shard }), /Invalid/);
+  assert.deepEqual((await invoke(overview, ctx)).traffic, result.traffic);
+});
 
 test('invitations are single use, expire, and reject cross-advertiser resets', async () => {
   const { ctx, tables } = fixture();
