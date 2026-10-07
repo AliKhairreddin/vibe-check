@@ -1031,7 +1031,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
               <p className="truncate text-muted-foreground" title="Oren Even">Oren Even</p>
             ) : null}
             {session.role !== 'publisher' && (routePortal?.client_id ?? clientId) === 'lead-economy' ? (
-              <p className="truncate text-muted-foreground" title="Lilia Shamray">Lilia Shamray</p>
+              <p className="truncate text-muted-foreground" title="Lilia and Alyssa">Lilia and Alyssa</p>
             ) : null}
           </div>
         </SidebarFooter>
