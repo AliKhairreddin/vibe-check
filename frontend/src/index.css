@@ -149,3 +149,9 @@
     @apply bg-primary text-primary-foreground;
   }
 }
+
+/* Keep the session identity visible without covering the real application shell. */
+html[data-demo='true'] { --demo-banner-height: 80px; }
+.demo-banner-host { position: sticky; top: 0; z-index: 30; }
+html[data-demo='true'] [data-slot='sidebar-container'] { top: var(--demo-banner-height); height: calc(100svh - var(--demo-banner-height)); }
+html[data-demo='true'] [data-slot='sidebar-wrapper'] { min-height: calc(100svh - var(--demo-banner-height)); }

@@ -17,6 +17,7 @@ import { useState } from 'react';
 
 const CLIENT_LOGIN_URL = 'https://app.adchecked.com/login';
 const ADMIN_LOGIN_URL = 'https://admin.adchecked.com/login';
+const EXPLORE_DEMO_URL = 'https://app.adchecked.com/demo';
 const DEMO_EMAIL_URL = 'mailto:hello@adchecked.com?subject=AdChecked%20demo';
 
 function Brand({ inverse = false }: { inverse?: boolean }) {
@@ -55,8 +56,8 @@ function MarketingApp() {
             <a className="rounded-full px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-950/5 hover:text-zinc-950" href={CLIENT_LOGIN_URL}>
               Sign in
             </a>
-            <a className="inline-flex items-center gap-2 rounded-full bg-zinc-950 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800" href={DEMO_EMAIL_URL}>
-              Request a demo <ArrowRight className="size-4" />
+            <a className="inline-flex items-center gap-2 rounded-full bg-zinc-950 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800" href={EXPLORE_DEMO_URL}>
+              Explore the demo <ArrowRight className="size-4" />
             </a>
           </div>
           <button
@@ -76,8 +77,8 @@ function MarketingApp() {
             <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href="#security" onClick={() => setMenuOpen(false)}>Security</a>
             <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href="/pricing">Pricing</a>
             <a className="rounded-xl px-3 py-3 hover:bg-zinc-100" href={CLIENT_LOGIN_URL}>Sign in</a>
-            <a className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-4 py-3 text-white" href={DEMO_EMAIL_URL}>
-              Request a demo <ArrowRight className="size-4" />
+            <a className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-4 py-3 text-white" href={EXPLORE_DEMO_URL}>
+              Explore the demo <ArrowRight className="size-4" />
             </a>
           </nav>
         ) : null}
@@ -95,8 +96,8 @@ function MarketingApp() {
                 AdChecked reviews video, imagery, audio, on-screen text, and copy against the policies that govern each offer—then gives your team evidence it can act on.
               </p>
               <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-                <a className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-zinc-950 px-6 text-sm font-semibold text-white shadow-lg shadow-zinc-950/12 transition hover:-translate-y-0.5 hover:bg-zinc-800" href={DEMO_EMAIL_URL}>
-                  Request a demo <ArrowRight className="size-4" />
+                <a className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-zinc-950 px-6 text-sm font-semibold text-white shadow-lg shadow-zinc-950/12 transition hover:-translate-y-0.5 hover:bg-zinc-800" href={EXPLORE_DEMO_URL}>
+                  Explore the demo <ArrowRight className="size-4" />
                 </a>
                 <a className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-zinc-950/12 bg-white px-6 text-sm font-semibold text-zinc-800 shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-950/25" href={CLIENT_LOGIN_URL}>
                   Open workspace

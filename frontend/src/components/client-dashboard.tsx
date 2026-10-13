@@ -1,3 +1,5 @@
+import { localStore, sessionStore } from '@/lib/browser-storage';
+import { appPathname } from '@/lib/demo';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select } from '@/components/ui/select';
 import {
@@ -175,7 +177,7 @@ export const KissterraReviewDetailPage = ClientReviewDetailPage;
 export function ClientPortalGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [session, setSession] = useState<ClientSession | null>(null);
@@ -190,7 +192,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       .then((nextSession) => {
         if (!active) return;
         setSession(nextSession);
-        if (window.location.pathname === '/login' || window.location.pathname === '/') {
+        if (appPathname(window.location.pathname) === '/login' || appPathname(window.location.pathname) === '/') {
           void navigate({ to: '/client', replace: true });
         }
       })
@@ -252,7 +254,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
         });
       }
       setSession(nextSession);
-      if (window.location.pathname === '/login' || window.location.pathname === '/') {
+      if (appPathname(window.location.pathname) === '/login' || appPathname(window.location.pathname) === '/') {
         await navigate({ to: '/client', replace: true });
       }
     } catch (reason) {
@@ -272,7 +274,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       setIsSigningOut(false);
       return;
     }
-    window.sessionStorage.removeItem(SELECTED_CLIENT_KEY);
+    sessionStore.removeItem(SELECTED_CLIENT_KEY);
     setPassword('');
     setSession(null);
     setError('');
@@ -325,6 +327,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
                 {isSigningIn ? 'Signing in' : 'Sign in'}
               </Button>
             </form>
+            <a href="/demo" className="mt-4 flex justify-center rounded-lg border px-4 py-3 text-sm font-medium hover:bg-muted">Explore the demo</a>
             {error ? (
               <Alert variant="destructive" className="mt-4">
                 <AlertCircle />
@@ -406,7 +409,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
 
   useEffect(() => {
     if (!selectedPortal) return;
-    window.sessionStorage.setItem(SELECTED_CLIENT_KEY, selectedPortal.client_id);
+    sessionStore.setItem(SELECTED_CLIENT_KEY, selectedPortal.client_id);
   }, [selectedPortal]);
 
   useEffect(() => {
@@ -846,9 +849,9 @@ export function ClientPortalFrame({ children, workspaceName }: {
   const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) });
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
-    return window.localStorage.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
+    return localStore.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
   });
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
   const reviewQueueActive = pathname === '/client/reviews' || pathname.startsWith('/client/shared/')
     || /^\/client\/[^/]+\/reviews\/[^/]+$/.test(pathname);
   const routeClientId = pathname.match(/^\/client\/([^/]+)\/(?:batches|reviews)\//)?.[1];
@@ -862,7 +865,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
     : resolvedWorkspaceName;
 
   useEffect(() => {
-    window.localStorage.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
+    localStore.setItem(CLIENT_SIDEBAR_OPEN_KEY, String(sidebarOpen));
   }, [sidebarOpen]);
 
   return (
@@ -1300,7 +1303,7 @@ function ClientReviewDetail() {
     <ClientPortalFrame>
       <div className="grid gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => window.sessionStorage.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to reviews</Link>
+          <Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => sessionStore.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to reviews</Link>
           <div className="flex flex-wrap gap-2"><ShareButton jobIds={[jobId]} clientId={clientId} />{session.role !== 'publisher' ? <DecisionControl clientId={clientId} review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} /> : <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge>}</div>
         </div>
 

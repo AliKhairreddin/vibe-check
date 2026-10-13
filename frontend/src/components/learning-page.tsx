@@ -1,3 +1,4 @@
+import { isDemo, pageUrl } from '@/lib/demo';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BrainCircuit, History, Pause, Play, RefreshCw, RotateCcw, ShieldCheck } from 'lucide-react';
@@ -16,7 +17,7 @@ const error = (value: unknown) => value instanceof Error ? value.message : Strin
 
 export function LearningPage() {
   const queryClient = useQueryClient();
-  const [offerId, setOfferId] = useState(() => new URLSearchParams(window.location.search).get('offer') ?? 'acp');
+  const [offerId, setOfferId] = useState(() => new URLSearchParams(window.location.search).get('offer') ?? (isDemo() ? 'harbor-auto' : 'acp'));
   const [requestedVersion] = useState(() => Number(new URLSearchParams(window.location.search).get('version')) || undefined);
   const [before, setBefore] = useState<number | undefined>(requestedVersion ? requestedVersion + 1 : undefined);
   const [restore, setRestore] = useState<LearningVersion | null>(null);
@@ -30,7 +31,7 @@ export function LearningPage() {
   });
   const selectOffer = (id: string) => {
     setOfferId(id); setBefore(undefined); setRestore(null); action.reset();
-    window.history.replaceState(null, '', `/learning?offer=${encodeURIComponent(id)}`);
+    window.history.replaceState(null, '', pageUrl(`/learning?offer=${encodeURIComponent(id)}`));
   };
   const active = value?.state?.enabled && value.current?.guidelineVersion === value.profile?.version ? value.current?.lessons ?? [] : [];
   return <div className="mx-auto grid w-full min-w-0 max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:px-8">

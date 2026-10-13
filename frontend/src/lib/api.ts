@@ -1,3 +1,4 @@
+import { apiUrl, demoRequest, isDemo, leaveDemo } from './demo';
 export type ReviewVertical = 'auto-insurance' | 'home-insurance';
 
 export type Status = {
@@ -597,7 +598,7 @@ function requestHeaders(headers?: HeadersInit): Headers {
 }
 
 export function fetchWithAdminAccess(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  return fetch(input, { ...init, headers: requestHeaders(init?.headers) });
+  return fetch(demoRequest(input), { ...init, headers: requestHeaders(init?.headers) });
 }
 
 function clientHeaders(headers?: HeadersInit) {
@@ -638,7 +639,7 @@ function parseJson<T>(body: string): T {
 }
 
 export async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, { ...init, headers: requestHeaders(init?.headers) });
+  const response = await fetch(demoRequest(input), { ...init, headers: requestHeaders(init?.headers) });
   const body = await response.text();
   if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
   return parseJson<T>(body);
@@ -665,6 +666,15 @@ export async function createReview(
   apiBase = '/api'
 ): Promise<Status> {
   const creative = form.get('creative');
+  if (isDemo()) {
+    const body: Record<string, unknown> = {};
+    form.forEach((value, key) => { if (typeof value === 'string') body[key] = value; });
+    if (typeof body.offer_ids === 'string') { const ids = body.offer_ids; try { body.offer_ids = JSON.parse(ids); } catch { body.offer_ids = ids.split(','); } }
+    if (creative instanceof File) { body.file_name = creative.name; body.has_creative = true; }
+    const result = await requestJson<Status>(`${apiBase}/reviews`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    onUploadProgress?.(100);
+    return result;
+  }
   const shardKey = reviewShardKey(form);
   if (onUploadProgress && creative instanceof File && creative.size > CHUNKED_UPLOAD_THRESHOLD) {
     return createChunkedReview(form, creative, onUploadProgress, shardKey, apiBase);
@@ -869,6 +879,7 @@ export async function getAdminSession(): Promise<AdminSession> {
 }
 
 export async function clearAdminSession(): Promise<void> {
+  if (isDemo()) return leaveDemo();
   await requestJson<{ signed_out: boolean }>('/api/admin/session', {
     method: 'DELETE',
     keepalive: true,
@@ -1121,6 +1132,7 @@ export function getClientSession(): Promise<ClientSession> {
 }
 
 export async function clearClientSession(): Promise<void> {
+  if (isDemo()) return leaveDemo();
   await requestJson<{ signed_out: boolean }>('/api/client/session', {
     method: 'DELETE',
     keepalive: true,
@@ -1182,7 +1194,7 @@ export async function fetchClientReviewImage(
   const cached = clientReviewImageCache.get(cacheKey);
   if (cached) return cached;
   const request = fetch(
-    `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}${suffix}`,
+    apiUrl(`/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}${suffix}`),
     { headers: clientHeaders() }
   ).then(async (response) => {
     if (!response.ok) {
@@ -1233,7 +1245,7 @@ export async function fetchClientBatchPdf(
 }
 
 async function fetchClientPdf(reportPath: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(reportPath, { headers: clientHeaders() });
+  const response = await fetch(apiUrl(reportPath), { headers: clientHeaders() });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(apiErrorMessage(body, response.status));

@@ -1,3 +1,4 @@
+import { apiUrl } from '@/lib/demo';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ExternalLink, FileImage, LoaderCircle, Maximize2, Play, X } from 'lucide-react';
@@ -373,13 +374,13 @@ function inferMediaKind(fileName?: string): Exclude<CreativeMediaKind, 'copy_onl
 }
 
 function creativeMediaUrl(clientId: string | undefined, jobId: string) {
-  return clientId
+  return apiUrl(clientId
     ? `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/media`
-    : `/api/reviews/${encodeURIComponent(jobId)}/media`;
+    : `/api/reviews/${encodeURIComponent(jobId)}/media`);
 }
 
 function creativeThumbnailUrl(clientId: string | undefined, jobId: string) {
-  return clientId
+  return apiUrl(clientId
     ? `/api/client/${encodeURIComponent(clientId)}/reviews/${encodeURIComponent(jobId)}/thumbnail`
-    : `/api/reviews/${encodeURIComponent(jobId)}/thumbnail`;
+    : `/api/reviews/${encodeURIComponent(jobId)}/thumbnail`);
 }

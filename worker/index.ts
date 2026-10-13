@@ -1,3 +1,4 @@
+import { handleDemoApi } from './demo';
 import { hasLocalWork, planPartnerDispatch, type ShardHeartbeat } from "./scaling";
 import { Container } from "@cloudflare/containers";
 import { deliverReleaseEmail, emailRoute } from './release-emails';
@@ -505,6 +506,17 @@ export default {
         redirectResponse(new URL(`${url.pathname}${url.search}`, ADMIN_ORIGIN)),
         surface,
       );
+    }
+
+    // Demo routes terminate here: no customer reads, container calls, or email transport.
+    if (url.pathname.startsWith('/api/demo/')) {
+      if (surface !== 'client' && surface !== 'admin') return secureResponse(notFoundResponse(), surface);
+      return secureResponse((await handleDemoApi(request, env))!, surface);
+    }
+    if (url.pathname === '/demo' || url.pathname.startsWith('/demo/')) {
+      if (surface === 'public') return secureResponse(redirectResponse(new URL('/demo', CLIENT_ORIGIN)), surface);
+      if ((surface === 'client' || surface === 'admin') && request.method === 'GET') return secureResponse(await env.ASSETS.fetch(request), surface);
+      return secureResponse(notFoundResponse(), surface);
     }
 
     if (url.pathname.startsWith("/api/")) {

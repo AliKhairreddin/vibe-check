@@ -1,3 +1,4 @@
+import { pageUrl } from '@/lib/demo';
 import { useState } from 'react';
 import {
   ArrowRight,
@@ -433,7 +434,7 @@ export function ApiDocsPage({ embedded = false }: { embedded?: boolean }) {
             <div className="flex items-center gap-2 font-heading text-lg font-semibold"><Code2 /> Ready to test?</div>
             <p className="mt-1 text-sm text-muted-foreground">Start with one direct public MP4, JPG, PNG, or WebP URL and use the returned job_id.</p>
           </div>
-          <Button nativeButton={false} render={<a href="/developers/api?view=reference" />}>
+          <Button nativeButton={false} render={<a href={pageUrl("/developers/api?view=reference")} />}>
             Open API reference <ArrowRight />
           </Button>
         </div>

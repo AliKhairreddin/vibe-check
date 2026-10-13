@@ -1,3 +1,4 @@
+import { isDemo } from '@/lib/demo';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -1138,6 +1139,7 @@ export function ApiReferencePage({ embedded = false }: { embedded?: boolean }) {
         }
       }
 
+      if (isDemo()) throw new Error('Live API calls are disabled in the demo. No request was sent.');
       const response = await fetch(requestPath, { method: endpoint.method, headers, body });
       const elapsedMs = Math.round(performance.now() - started);
       const contentType = response.headers.get('content-type') ?? '';

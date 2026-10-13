@@ -1,3 +1,4 @@
+import { isDemo } from '@/lib/demo';
 import { selectedControlClassName } from '@/lib/control-styles';
 import { Popover } from '@base-ui/react/popover';
 import { Check, ShieldCheck } from 'lucide-react';
@@ -56,7 +57,7 @@ export function getOfferColumns(
   catalog: Pick<OfferCatalogItem, 'offer_id' | 'display_name'>[] = [],
   outcomeGroups: Array<OfferOutcome[] | undefined> = []
 ): OfferColumn[] {
-  const columns = new Map(CANONICAL_OFFERS.map((offer) => [offer.offer_id, offer]));
+  const columns = new Map((isDemo() ? [] : CANONICAL_OFFERS).map((offer) => [offer.offer_id, offer]));
 
   for (const outcomes of outcomeGroups) {
     for (const outcome of outcomes ?? []) {

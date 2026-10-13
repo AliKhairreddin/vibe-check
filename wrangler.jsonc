@@ -21,6 +21,7 @@
     }
   ],
   "ratelimits": [
+    { "name": "DEMO_RATE_LIMITER", "namespace_id": "31003", "simple": { "limit": 240, "period": 60 } },
     {
       "name": "AUTH_RATE_LIMITER",
       "namespace_id": "31001",

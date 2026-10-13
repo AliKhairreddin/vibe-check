@@ -222,6 +222,7 @@ function AdminLoginCard({ compact = false }: { compact?: boolean }) {
             {isChecking ? 'Checking access' : 'Open admin console'}
           </Button>
         </form>
+        <a href="/demo" className="mt-4 flex justify-center rounded-lg border px-4 py-3 text-sm font-medium hover:bg-muted">Explore the demo</a>
         {error ? (
           <Alert variant="destructive" className="mt-4">
             <AlertCircle />

@@ -1,3 +1,4 @@
+import { isDemo } from '@/lib/demo';
 import { useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -36,9 +37,9 @@ function ShareLinkControl({ jobIds, clientId, offerId, label, size = 'sm', disab
     <Dialog.Portal>
       <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/45" onClick={event => event.stopPropagation()} />
       <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 grid w-[calc(100%_-_2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-popover p-5 text-popover-foreground shadow-xl" onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Enter') event.stopPropagation(); }}>
-        <Dialog.Title className="font-semibold">Shareable link</Dialog.Title>
+        <Dialog.Title className="font-semibold">{isDemo() ? 'Simulated sharing' : 'Shareable link'}</Dialog.Title>
         <Dialog.Description className="text-sm text-muted-foreground">
-          {jobIds.length} completed creative{jobIds.length === 1 ? '' : 's'} in one link. Anyone with this link can view these reviews for 30 days. Revoke it in Shared links.
+          {isDemo() ? 'This private demo shortcut only works in your session. Nothing is published or shared with another visitor.' : `${jobIds.length} completed creative${jobIds.length === 1 ? '' : 's'} in one link. Anyone with this link can view these reviews for 30 days. Revoke it in Shared links.`}
         </Dialog.Description>
         {mutation.isPending ? <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle className="size-4 animate-spin" />Creating link…</p> : null}
         {url ? <div className="grid gap-2">
@@ -58,7 +59,7 @@ export function SharedLinksPanel({ clientId }: { clientId?: string }) {
   const query = useQuery({ queryKey: ['shares', clientId ?? 'admin'], queryFn: () => listShares(clientId) });
   const mutation = useMutation({ mutationFn: (id: string) => revokeShare(id, clientId), onSuccess: () => { void cache.invalidateQueries({ queryKey: ['shares'] }); } });
   return <div className="grid gap-4">
-    <div><h1 className="text-2xl font-semibold tracking-tight">Shared links</h1><p className="mt-1 text-sm text-muted-foreground">Public links show live review results. Revoking a link immediately ends access. Most recent 100 links.</p></div>
+    <div><h1 className="text-2xl font-semibold tracking-tight">Shared links</h1><p className="mt-1 text-sm text-muted-foreground">{isDemo() ? 'Simulated links remain private to this demo. Nothing is published.' : 'Public links show live review results. Revoking a link immediately ends access. Most recent 100 links.'}</p></div>
     {query.isLoading ? <p>Loading shared links…</p> : query.error ? <p role="alert" className="text-destructive">{query.error.message}</p> : !query.data?.length ? <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">No shared links yet. Open a creative or select several creatives to share.</div> : query.data.map(link => {
       const active = !link.revokedAt && link.expiresAt > Date.now();
       return <div key={link.shareId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">

@@ -19,6 +19,10 @@ The system is intentionally hybrid:
 - durable job records make batch progress and final reports recoverable;
 - uncertain or ambiguous source matches fail safely instead of guessing.
 
+## Interactive demo
+
+[Explore the demo](https://app.adchecked.com/demo) without signing up. Choose a publisher, advertiser, administrator, or employee experience with private fictional data. Edits persist for 24 hours; external actions and AI processing are simulated. See [demo isolation, lifecycle, and limits](docs/demo-workspaces.md).
+
 ## What It Does
 
 - Accepts MP4, JPG, PNG, WebP, or one copy-only review per non-empty input line.

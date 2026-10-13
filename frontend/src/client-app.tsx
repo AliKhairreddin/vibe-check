@@ -1,3 +1,4 @@
+import { demoBasepath } from '@/lib/demo';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -110,6 +111,7 @@ const sharesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/clien
 const planRoute = createRoute({ getParentRoute: () => rootRoute, path: '/client/plan', component: ClientPlanPage });
 
 const router = createRouter({
+  basepath: demoBasepath(),
   routeTree: rootRoute.addChildren([
     publishersRoute,
     sharesRoute,

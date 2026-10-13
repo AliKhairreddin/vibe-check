@@ -1,3 +1,5 @@
+import { localStore } from '@/lib/browser-storage';
+import { demoBasepath, appPathname, apiUrl, isDemo, pageUrl } from '@/lib/demo';
 import { Checkbox } from '@/components/ui/checkbox';
 import { selectedControlClassName } from '@/lib/control-styles';
 import { ReleaseButton } from '@/components/release-controls';
@@ -249,7 +251,7 @@ const RESULT_META: Record<OverallStatus, {
 function loadActiveBatch(): BatchItem[] {
   if (typeof window === 'undefined') return [];
   try {
-    const saved = window.localStorage.getItem(ACTIVE_BATCH_KEY);
+    const saved = localStore.getItem(ACTIVE_BATCH_KEY);
     const parsed = saved ? JSON.parse(saved) : [];
     if (!Array.isArray(parsed)) return [];
     return parsed.flatMap((value) => {
@@ -279,11 +281,11 @@ function AppShell() {
   const { theme, toggleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
-    return window.localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false';
+    return localStore.getItem(SIDEBAR_OPEN_KEY) !== 'false';
   });
 
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
+    localStore.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
   }, [sidebarOpen]);
 
   return (
@@ -298,7 +300,7 @@ function AppShell() {
 }
 
 function AppContent() {
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
   const isWideLayout = pathname.startsWith('/batches/')
     || pathname === '/history'
     || pathname === '/developers/api';
@@ -397,7 +399,7 @@ function AppSidebar({
             <SidebarGroupContent>
               <SidebarMenu>
                 {canManageSettings ? <ShellLink to="/" label="Platform overview" icon={<LayoutDashboard />} /> : null}
-                <ShellLink to={canManageSettings ? '/publisher' : '/'} label="Digital Nudge" icon={<Users />} />
+                <ShellLink to={canManageSettings ? '/publisher' : '/'} label={isDemo() ? "Northstar Studio" : "Digital Nudge"} icon={<Users />} />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -584,10 +586,10 @@ function ReviewWorkspace() {
     if (typeof window === 'undefined') return;
     const persisted = batchItems.filter((item) => item.jobId);
     if (persisted.length) {
-      window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(persisted));
+      localStore.setItem(ACTIVE_BATCH_KEY, JSON.stringify(persisted));
       return;
     }
-    window.localStorage.removeItem(ACTIVE_BATCH_KEY);
+    localStore.removeItem(ACTIVE_BATCH_KEY);
   }, [batchItems]);
 
   const submittedItems = batchItems.filter(
@@ -1420,8 +1422,8 @@ function HistoryCard({
       try {
         const deleted = new Set(deletedIds);
         const active = loadActiveBatch().filter((item) => !item.jobId || !deleted.has(item.jobId));
-        if (active.length) window.localStorage.setItem(ACTIVE_BATCH_KEY, JSON.stringify(active));
-        else window.localStorage.removeItem(ACTIVE_BATCH_KEY);
+        if (active.length) localStore.setItem(ACTIVE_BATCH_KEY, JSON.stringify(active));
+        else localStore.removeItem(ACTIVE_BATCH_KEY);
       } catch {
         // History removal still succeeded if local progress cleanup is unavailable.
       }
@@ -2814,7 +2816,7 @@ function ReportPage() {
           {Boolean(activeOffer.learning_version) ? <details className="rounded-md border p-3 text-sm">
             <summary className="cursor-pointer font-medium">Learning applied · revision {activeOffer.learning_version}</summary>
             <p className="mt-2 text-muted-foreground">Base guidelines v{activeOffer.guideline_version}. {activeOffer.applied_learning?.length ? `${activeOffer.applied_learning.length} learned clarification(s) applied to this creative.` : 'No learned clarification changed this result.'}</p>
-            <a className="mt-2 inline-block font-medium underline underline-offset-4" href={`/learning?offer=${encodeURIComponent(activeOffer.offer_id)}&version=${activeOffer.learning_version}`}>View guideline history and evidence</a>
+            <a className="mt-2 inline-block font-medium underline underline-offset-4" href={pageUrl(`/learning?offer=${encodeURIComponent(activeOffer.offer_id)}&version=${activeOffer.learning_version}`)}>View guideline history and evidence</a>
           </details> : null}
           {activeOutcome?.client_decision && activeOutcome.automated_status ? (
             <Alert>
@@ -2891,14 +2893,14 @@ function ReportPage() {
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
             <PdfDownloadMenu
-              baseHref={`/api/reviews/${jobId}/report.pdf`}
+              baseHref={apiUrl(`/api/reviews/${jobId}/report.pdf`)}
               offers={detailedResults.map((result) => ({
                 offer_id: result.offer_id,
                 offer_name: result.offer_name,
               }))}
             />
             <AuthenticatedDownloadButton
-              href={`/api/reviews/${jobId}/report.json`}
+              href={apiUrl(`/api/reviews/${jobId}/report.json`)}
               fallbackName={`${jobId}-adchecked-report.json`}
               label="Download JSON"
             />
@@ -3089,7 +3091,7 @@ function BatchPage() {
             <ShareButton jobIds={batchShareIds} offerId={selectedOfferId === 'all' ? undefined : selectedOfferId} label="Share batch" />
             {batchComplete ? (
               <PdfDownloadMenu
-                baseHref={`/api/batches/${query.data.batch_id}/report.pdf`}
+                baseHref={apiUrl(`/api/batches/${query.data.batch_id}/report.pdf`)}
                 contentLabel={`All ${query.data.expected_count} creative${query.data.expected_count === 1 ? '' : 's'}`}
                 offers={pdfOffers}
                 size="sm"
@@ -3439,7 +3441,7 @@ function RuntimeSettingsPanel() {
   function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextModel = model.trim() || DEFAULT_OPENROUTER_MODEL;
-    window.localStorage.setItem(OPENROUTER_MODEL_KEY, nextModel);
+    localStore.setItem(OPENROUTER_MODEL_KEY, nextModel);
     setModel(nextModel);
     setSaved(true);
   }
@@ -3911,7 +3913,7 @@ function buildBatchReviewContext(
 
 function loadOpenRouterModel() {
   if (typeof window === 'undefined') return DEFAULT_OPENROUTER_MODEL;
-  return window.localStorage.getItem(OPENROUTER_MODEL_KEY)?.trim() || DEFAULT_OPENROUTER_MODEL;
+  return localStore.getItem(OPENROUTER_MODEL_KEY)?.trim() || DEFAULT_OPENROUTER_MODEL;
 }
 
 async function runWithConcurrency<T>(
@@ -4183,6 +4185,7 @@ const developerApiReferenceRoute = createRoute({
 const sharesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/shares', component: SharedLinksPanel });
 
 const router = createRouter({
+  basepath: demoBasepath(),
   routeTree: rootRoute.addChildren([
     indexRoute,
     loginRoute,

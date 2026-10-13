@@ -6,6 +6,12 @@ async function startApplication() {
   const root = document.getElementById('root');
   if (!root) throw new Error('Application root is missing.');
 
+  if (window.location.pathname === '/demo' || window.location.pathname.startsWith('/demo/')) {
+    const { mountDemoApp } = await import('./demo-app');
+    await mountDemoApp(root);
+    return;
+  }
+
   if (/^\/(?:share|invite)\/[^/]+\/?$/.test(window.location.pathname) || window.location.pathname === '/pricing') {
     const { mountPublicApp } = await import('./public-app');
     mountPublicApp(root);

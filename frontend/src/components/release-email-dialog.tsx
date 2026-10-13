@@ -1,3 +1,4 @@
+import { isDemo } from '@/lib/demo';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -68,9 +69,9 @@ function ComposerLoader(props: ComposerProps) {
 function Composer({ base, offerId, initialBatchIds, options, setBusy, setLocked, close, recent }: ComposerProps & { recent: Email[] }) {
   const cache = useQueryClient();
   const lastSent = recent.find(email => email.status === 'sent');
-  const [to, setTo] = useState(lastSent?.to.join(', ') ?? '');
+  const [to, setTo] = useState(lastSent?.to.join(', ') ?? (isDemo() ? 'reviewer@demo.example' : ''));
   const [cc, setCc] = useState(lastSent?.cc.join(', ') ?? '');
-  const [replyTo, setReplyTo] = useState(lastSent?.replyTo ?? '');
+  const [replyTo, setReplyTo] = useState(lastSent?.replyTo ?? (isDemo() ? 'publisher@demo.example' : ''));
   const [subject, setSubject] = useState(`Creatives for approval — ${date(Date.now())}`);
   const [message, setMessage] = useState('Dear Team,\n\nPlease find the creative batches below for your review and approval.');
   const [signature, setSignature] = useState(lastSent?.signature ?? 'Regards,\nCreative Team');
@@ -117,7 +118,7 @@ function Composer({ base, offerId, initialBatchIds, options, setBusy, setLocked,
   useEffect(() => { setLocked(Boolean(draft) || prepare.isPending || send.isPending); }, [draft, prepare.isPending, send.isPending, setLocked]);
   const status = sendResult?.status;
   if (status) return <div className="grid gap-4">
-    <div role="status" className="rounded-lg border bg-muted/30 p-4"><p className="flex items-center gap-2 font-medium">{status === 'sent' ? <CheckCircle2 className="size-5 text-emerald-600" /> : <Mail className="size-5" />}{status === 'sent' ? 'Email sent' : status === 'sending' ? 'Email is being sent' : 'Delivery needs checking'}</p><p className="mt-2 text-sm leading-6 text-muted-foreground">{status === 'sent' ? `Submitted to the email provider for ${draft?.to.join(', ')} with ${draft?.links.length} batch links.` : 'This email has already had a send attempt. Check with the recipient or ask an administrator to inspect delivery before creating another email.'}{sendResult.audit_pending ? ' The delivery record is still awaiting an update.' : ''}</p></div>
+    <div role="status" className="rounded-lg border bg-muted/30 p-4"><p className="flex items-center gap-2 font-medium">{status === 'sent' ? <CheckCircle2 className="size-5 text-emerald-600" /> : <Mail className="size-5" />}{status === 'sent' ? (isDemo() ? 'Email simulation complete' : 'Email sent') : status === 'sending' ? 'Email is being sent' : 'Delivery needs checking'}</p><p className="mt-2 text-sm leading-6 text-muted-foreground">{status === 'sent' ? (isDemo() ? 'No email was sent. This simulated delivery is saved only in your demo workspace.' : `Submitted to the email provider for ${draft?.to.join(', ')} with ${draft?.links.length} batch links.`) : 'This email has already had a send attempt. Check with the recipient or ask an administrator to inspect delivery before creating another email.'}{sendResult.audit_pending ? ' The delivery record is still awaiting an update.' : ''}</p></div>
     <Button className="justify-self-end" onClick={close}>Done</Button>
   </div>;
   if (draft) return <div className="grid min-w-0 gap-4">
@@ -132,12 +133,12 @@ function Composer({ base, offerId, initialBatchIds, options, setBusy, setLocked,
       <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{draft.message}</p>
       <div className="grid gap-3">{draft.links.map(link => <a key={link.batchId} href={link.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-start gap-2 text-primary underline underline-offset-4"><span className="min-w-0 [overflow-wrap:anywhere]">{link.label} Link <span className="text-muted-foreground">({link.jobIds.length} creatives)</span></span><ExternalLink className="mt-1 size-3.5 shrink-0" /></a>)}</div>
       <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{draft.signature}</p>
-      <p className="text-xs leading-5 text-muted-foreground">These review links are valid for 30 days. Anyone with a link can view the selected advertiser’s results.</p>
+      <p className="text-xs leading-5 text-muted-foreground">{isDemo() ? 'These placeholder links are simulated and provide no access outside your private demo.' : 'These review links are valid for 30 days. Anyone with a link can view the selected advertiser’s results.'}</p>
     </div>
     <p className="text-xs text-muted-foreground">Links expire {date(draft.expiresAt)}. You can revoke them in Shared links.</p>
     {!options.sending_enabled ? <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Email sending needs to be configured before you can send.</p> : null}
     {send.error ? <p role="alert" className="text-sm text-destructive">{send.error.message} You can check again safely; the same email will not be sent twice.</p> : null}
-    <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" disabled={send.isPending || Boolean(send.error)} onClick={() => { setDraft(null); requestId.current = null; }}>Edit email</Button><Button disabled={!options.sending_enabled || send.isPending} onClick={() => send.mutate()}>{send.isPending ? <LoaderCircle className="animate-spin" /> : <Mail />}{send.isPending ? 'Sending…' : send.error ? 'Check send status' : 'Send email'}</Button></div>
+    <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" disabled={send.isPending || Boolean(send.error)} onClick={() => { setDraft(null); requestId.current = null; }}>Edit email</Button><Button disabled={!options.sending_enabled || send.isPending} onClick={() => send.mutate()}>{send.isPending ? <LoaderCircle className="animate-spin" /> : <Mail />}{send.isPending ? 'Sending…' : send.error ? 'Check send status' : isDemo() ? 'Simulate send' : 'Send email'}</Button></div>
   </div>;
 
   const visible = available.filter(batch => `${batch.title} ${batch.label} ${date(batch.createdAt)}`.toLowerCase().includes(search.toLowerCase()));

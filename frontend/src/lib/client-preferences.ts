@@ -1,3 +1,4 @@
+import { localStore } from '@/lib/browser-storage';
 import type { OverallStatus } from '@/lib/api';
 
 export type ClientReviewDensity = 'comfortable' | 'compact';
@@ -23,7 +24,7 @@ export const DEFAULT_CLIENT_PREFERENCES: ClientPreferences = {
 export function readClientPreferences(): ClientPreferences {
   if (typeof window === 'undefined') return DEFAULT_CLIENT_PREFERENCES;
   try {
-    const value = JSON.parse(window.localStorage.getItem(CLIENT_PREFERENCES_KEY) ?? '{}') as Partial<ClientPreferences>;
+    const value = JSON.parse(localStore.getItem(CLIENT_PREFERENCES_KEY) ?? '{}') as Partial<ClientPreferences>;
     return {
       autoExpandNewestBatch: typeof value.autoExpandNewestBatch === 'boolean'
         ? value.autoExpandNewestBatch
@@ -47,10 +48,10 @@ export function readClientPreferences(): ClientPreferences {
 }
 
 export function saveClientPreferences(preferences: ClientPreferences) {
-  window.localStorage.setItem(CLIENT_PREFERENCES_KEY, JSON.stringify(preferences));
+  localStore.setItem(CLIENT_PREFERENCES_KEY, JSON.stringify(preferences));
 }
 
 export function resetClientPreferences() {
-  window.localStorage.removeItem(CLIENT_PREFERENCES_KEY);
+  localStore.removeItem(CLIENT_PREFERENCES_KEY);
   return DEFAULT_CLIENT_PREFERENCES;
 }

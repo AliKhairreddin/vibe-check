@@ -6,6 +6,15 @@ import { deliveryFields, releaseSection } from './telegramMessageTypes.ts';
 import { statusSyncFields } from './lemonmaxxTypes.ts';
 
 export default defineSchema({
+  // Demo data never enters production tables or their notification/AI queues.
+  // One bounded snapshot owns every record, so expiry cannot leave orphan data.
+  demoWorkspaces: defineTable({
+    tokenHash: v.string(), role: v.union(v.literal('owner'), v.literal('employee'), v.literal('advertiser'), v.literal('publisher')),
+    createdAt: v.number(), expiresAt: v.number(), state: v.any(),
+    windowStart: v.number(), requests: v.number(), writes: v.number(),
+  }).index('by_token_hash', ['tokenHash']).index('by_expires_at', ['expiresAt']),
+  demoLimits: defineTable({ key: v.string(), count: v.number(), expiresAt: v.number() })
+    .index('by_key', ['key']).index('by_expires_at', ['expiresAt']),
   lemonmaxxStatusSync: defineTable(statusSyncFields)
     .index('by_partner_id_and_asset_id', ['partnerId', 'assetId'])
     .index('by_state_and_next_attempt_at', ['state', 'nextAttemptAt']),
