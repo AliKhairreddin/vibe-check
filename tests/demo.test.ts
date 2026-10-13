@@ -112,6 +112,12 @@ test('edge demo boundary uses HttpOnly capabilities, blocks CSRF and never falls
     assert.match(cookie, /__Host-adchecked_demo=[a-f0-9]{64}; Path=\/; Secure; HttpOnly; SameSite=Strict; Max-Age=86400/);
     assert.equal((await edge('/api/demo/proxy/api/reviews', 'GET', undefined, cookie))?.status, 200);
     assert.equal((await edge('/api/demo/proxy/api/release-emails/x/send', 'POST', {}, cookie))?.status, 404);
+    const logout = await handleDemoApi(new Request('https://app.adchecked.com/api/demo/session', {
+      method: 'DELETE', headers: { origin: 'https://app.adchecked.com', cookie }, body: new Uint8Array(),
+    }), env);
+    assert.equal(logout?.status, 200); // Cloudflare exposes a stream even for an empty body.
+    assert.match(logout!.headers.get('set-cookie')!, /Max-Age=0/);
+    assert.equal(f.tables.demoWorkspaces.length, 0);
     globalThis.fetch = async () => { throw new Error('offline'); };
     assert.equal((await edge('/api/demo/proxy/api/reviews', 'GET', undefined, cookie))?.status, 503);
     assert.equal((await edge('/api/demo/proxy/api/reviews', 'GET', undefined, ''))?.status, 401);

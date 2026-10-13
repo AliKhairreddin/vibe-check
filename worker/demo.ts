@@ -12,7 +12,6 @@ function setCookie(response: Response, token: string, maxAge = DEMO_TTL_MS / 100
 }
 async function boundedJson(request: Request): Promise<Record<string, unknown>> {
   if (!request.body) return {};
-  if (!request.headers.get('content-type')?.startsWith('application/json')) throw new Error('Use JSON for demo requests. Uploads are simulated.');
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
@@ -23,6 +22,9 @@ async function boundedJson(request: Request): Promise<Record<string, unknown>> {
     if (length > 50000) { await reader.cancel(); throw new Error('Demo requests must be smaller than 50 KB.'); }
     chunks.push(value);
   }
+  // Cloudflare can expose an empty stream for bodyless DELETE/POST requests.
+  if (length === 0) return {};
+  if (!request.headers.get('content-type')?.startsWith('application/json')) throw new Error('Use JSON for demo requests. Uploads are simulated.');
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
