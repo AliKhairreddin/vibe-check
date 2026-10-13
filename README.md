@@ -270,3 +270,7 @@ Pushes to `main` trigger `.github/workflows/deploy.yml`, which verifies the repo
 - Long audio can exceed upstream transcription timeouts; short advertising creatives are the intended path.
 - Vision review sees capped, resized samples rather than every frame.
 - Review quality still depends on the supplied policy context and selected models.
+
+### Advertiser subscriptions
+
+New advertiser workspaces use Stripe Managed Payments; the four existing advertiser workspaces retain free access. See [billing setup and operations](docs/billing.md) for live account configuration, catalog provisioning, webhook synchronization, and deployment checks.

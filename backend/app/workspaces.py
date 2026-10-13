@@ -403,14 +403,21 @@ def register(app):
     @app.get('/api/admin/workspaces')
     def admin_workspaces(request: Request):
         from .main import require_settings_admin, CLIENT_PORTALS
+        from . import billing
         require_settings_admin(request)
-        return [{'name': config['display_name'], **call('getPlan', {'clientId': client_id})} for client_id, config in CLIENT_PORTALS.items()]
+        accounts = billing.call('advertiserAccounts', 'list', {}) if storage.convex_enabled() else []
+        directory = [(client_id, config['display_name']) for client_id, config in CLIENT_PORTALS.items()] + [(row['clientId'], row['name']) for row in accounts]
+        return [{'name': name, **call('getPlan', {'clientId': client_id}), 'billing': billing.call('billing', 'status', {'clientId': client_id})} for client_id, name in directory]
 
     @app.put('/api/admin/workspaces/{client_id}/plan')
     def set_plan(client_id: str, payload: PlanInput, request: Request):
         from .main import require_settings_admin, client_portal
+        from . import billing
         require_settings_admin(request)
         client_portal(client_id)
+        state = billing.call('billing', 'status', {'clientId': client_id})
+        if state['accessMode'] == 'subscription' and payload.plan != 'enterprise':
+            raise HTTPException(409, 'Stripe manages paid plan allowances. Use Stripe to change the subscription.')
         limits = {'pilot': (5, 250), 'starter': (5, 250), 'growth': (25, 1000), 'enterprise': (payload.publisher_limit, payload.monthly_review_limit)}
         publishers, reviews = limits[payload.plan]
         call('setPlan', {'clientId': client_id, 'plan': payload.plan, 'publisherLimit': publishers, 'monthlyReviewLimit': reviews}, mutation=True)

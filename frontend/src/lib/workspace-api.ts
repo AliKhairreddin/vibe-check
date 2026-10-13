@@ -14,8 +14,8 @@ export const invitePublisher = (clientId: string, publisherId: string) => reques
 export const suspendPublisher = (clientId: string, publisherId: string) => requestJson(`${base(clientId)}/publishers/${publisherId}`, { method: 'DELETE' });
 export const listSubmissions = (clientId: string, publisherId?: string) => requestJson<Submission[]>(`${base(clientId)}/submissions${publisherId && publisherId !== 'all' ? `?publisher_id=${encodeURIComponent(publisherId)}` : ''}`);
 export const getPlan = (clientId: string) => requestJson<Plan>(`${base(clientId)}/plan`);
-export const getInvite = (token: string) => requestJson<{ name: string; advertiser: string; username: string }>(`/api/client/invitations/${encodeURIComponent(token)}`);
-export const acceptInvite = (token: string, password: string) => requestJson<ClientSession>('/api/client/invitations/accept', json({ token, password }));
+export const getInvite = (token: string, advertiser = false) => requestJson<{ name: string; advertiser: string; username: string }>(`/api/client/${advertiser ? 'advertiser-invitations' : 'invitations'}/${encodeURIComponent(token)}`);
+export const acceptInvite = (token: string, password: string, advertiser = false) => requestJson<ClientSession>(`/api/client/${advertiser ? 'advertiser-invitations' : 'invitations'}/accept`, json({ token, password }));
 export const createShare = (jobIds: string[], clientId?: string, offerId?: string) => requestJson<{ share_id: string; url: string }>(shares(clientId), json({ job_ids: jobIds, title: jobIds.length === 1 ? 'Creative review' : `${jobIds.length} creative reviews`, offer_id: offerId, expires_in_days: 30 }));
 export const listShares = (clientId?: string) => requestJson<SharedLink[]>(shares(clientId));
 export const revokeShare = (shareId: string, clientId?: string) => requestJson(`${shares(clientId)}/${shareId}`, { method: 'DELETE' });
@@ -23,5 +23,12 @@ export const getSharedCollection = (token: string) => requestJson<{ title: strin
 export const getSharedDetail = (token: string, jobId: string) => requestJson<SharedDetail>(`/api/public/shares/${encodeURIComponent(token)}/reviews/${jobId}`);
 export const getSharedReviewContext = (token: string) => requestJson<{ title: string; client_ids: string[] }>(`/api/client/shared/${encodeURIComponent(token)}`);
 export const listSharedReviews = (clientId: string, token: string) => requestJson<ClientReviewList & { unavailable_count: number }>(`${base(clientId)}/shared/${encodeURIComponent(token)}/reviews`);
-export const getAdminPlans = () => requestJson<(Plan & { name: string })[]>('/api/admin/workspaces');
+export type BillingStatus = { accessMode: 'grandfathered' | 'subscription'; allowed: boolean; status: string; paidThrough: number | null; cancelAtPeriodEnd: boolean; syncedAt: number | null; syncError: boolean; isTest: boolean; checkoutReady: boolean; hasCustomer: boolean; plans: { plan: string; interval: string }[] };
+export const getBilling = (clientId: string) => requestJson<BillingStatus>(`${base(clientId)}/billing`);
+export const startCheckout = (clientId: string, plan: 'starter' | 'growth', interval: 'month' | 'year') => requestJson<{ url: string }>(`${base(clientId)}/billing/checkout`, json({ plan, interval }));
+export const openBillingPortal = (clientId: string) => requestJson<{ url: string }>(`${base(clientId)}/billing/portal`, json({}));
+export const refreshBilling = (clientId: string) => requestJson(`${base(clientId)}/billing/refresh`, json({}));
+export const createAdvertiser = (clientId: string, category: string) => requestJson<{ username: string; invite_url: string }>('/api/admin/advertiser-workspaces', json({ client_id: clientId, category }));
+export const resetAdvertiserInvite = (clientId: string) => requestJson<{ username: string; invite_url: string }>(`/api/admin/advertiser-workspaces/${encodeURIComponent(clientId)}/invite`, json({}));
+export const getAdminPlans = () => requestJson<(Plan & { name: string; billing?: BillingStatus })[]>('/api/admin/workspaces');
 export const setAdminPlan = (clientId: string, plan: Plan['plan'], publisherLimit: number, monthlyReviewLimit: number) => requestJson(`/api/admin/workspaces/${clientId}/plan`, json({ plan, publisher_limit: publisherLimit, monthly_review_limit: monthlyReviewLimit }, 'PUT'));

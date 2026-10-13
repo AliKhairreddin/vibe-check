@@ -77,6 +77,9 @@ jobs:
       - name: Initialize publisher workspaces
         run: python scripts/setup-publisher-workspaces.py
 
+      - name: Preserve existing free advertiser access
+        run: pnpm exec convex run billing:grandfatherExisting '{}'
+
       - name: Check Docker
         run: docker version
 

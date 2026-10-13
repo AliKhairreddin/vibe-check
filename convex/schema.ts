@@ -6,6 +6,25 @@ import { deliveryFields, releaseSection } from './telegramMessageTypes.ts';
 import { statusSyncFields } from './lemonmaxxTypes.ts';
 
 export default defineSchema({
+  advertiserAccounts: defineTable({
+    clientId: v.string(), name: v.string(), category: v.string(), username: v.string(),
+    status: v.union(v.literal('invited'), v.literal('active'), v.literal('suspended')),
+    passwordHash: v.optional(v.string()), inviteHash: v.optional(v.string()),
+    inviteExpiresAt: v.optional(v.number()), authVersion: v.number(), createdAt: v.number(),
+  }).index('by_client_id', ['clientId']).index('by_username', ['username']).index('by_invite_hash', ['inviteHash']),
+  billingWorkspaces: defineTable({
+    clientId: v.string(), accessMode: v.union(v.literal('grandfathered'), v.literal('subscription')),
+    isTest: v.boolean(), customerGeneration: v.optional(v.number()), createdAt: v.number(), customerId: v.optional(v.string()),
+    subscriptionId: v.optional(v.string()), status: v.string(), priceId: v.optional(v.string()),
+    paidThrough: v.optional(v.number()), cancelAtPeriodEnd: v.optional(v.boolean()),
+    syncedAt: v.optional(v.number()), requestedSyncAt: v.optional(v.number()), nextSyncAt: v.number(), syncError: v.optional(v.boolean()),
+    syncLease: v.optional(v.string()), syncLeaseUntil: v.optional(v.number()), revision: v.number(),
+    checkoutAttempt: v.optional(v.string()), checkoutPrice: v.optional(v.string()),
+    checkoutExpiresAt: v.optional(v.number()), checkoutId: v.optional(v.string()),
+    checkoutUrl: v.optional(v.string()), checkoutLeaseUntil: v.optional(v.number()),
+  }).index('by_client_id', ['clientId']).index('by_customer_id', ['customerId']).index('by_next_sync_at', ['nextSyncAt']),
+  billingEvents: defineTable({ eventId: v.string(), createdAt: v.number() })
+    .index('by_event_id', ['eventId']).index('by_created_at', ['createdAt']),
   // Demo data never enters production tables or their notification/AI queues.
   // One bounded snapshot owns every record, so expiry cannot leave orphan data.
   demoWorkspaces: defineTable({

@@ -194,6 +194,7 @@ test('new projections preserve publisher ownership and keep API jobs unowned', a
   const { ctx, tables } = fixture();
   await invoke(setupDigitalNudge, ctx);
   await seedPublisher(ctx, 'custom-advertiser', 'custom-publisher');
+  await ctx.db.insert('billingWorkspaces', { clientId: 'custom-advertiser', accessMode: 'subscription', status: 'active', paidThrough: Date.now() + 86400000 });
   await invoke(claimSubmission, ctx, { clientId: 'custom-advertiser', publisherId: 'custom-publisher', jobId: 'publisher-job' });
   await ctx.db.insert('apiReviewLinks', { jobId: 'api-job', partnerId: 'partner' });
   for (const [jobId, offerId, owner] of [

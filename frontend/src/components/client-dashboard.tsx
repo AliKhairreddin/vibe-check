@@ -1,4 +1,5 @@
 import { localStore, sessionStore } from '@/lib/browser-storage';
+import { BillingGate } from './billing-panel';
 import { appPathname } from '@/lib/demo';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select } from '@/components/ui/select';
@@ -343,7 +344,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
 
   return (
     <ClientAuthContext.Provider value={{ error, isSigningOut, logout, session }}>
-      <WorkspaceProvider session={session}>{children}</WorkspaceProvider>
+      <WorkspaceProvider session={session}><BillingGate session={session} logout={logout}>{children}</BillingGate></WorkspaceProvider>
     </ClientAuthContext.Provider>
   );
 }

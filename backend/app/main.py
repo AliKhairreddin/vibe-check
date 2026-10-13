@@ -825,7 +825,10 @@ async def partner_accessible_report(
 def client_portal(client_id:str)->dict[str, str]:
     config=CLIENT_PORTALS.get(client_id)
     if config is None:
-        raise HTTPException(404, 'Workspace not found.')
+        row=billing.account(clientId=client_id)
+        if not row:
+            raise HTTPException(404, 'Workspace not found.')
+        return {'display_name':row['name'], 'category':row['category'], 'offer_id':row['clientId']}
     return config
 
 
@@ -834,6 +837,7 @@ def public_client_portal(client_id:str, config:dict[str, str])->dict[str, str]:
         'category':config['category'],
         'client_id':client_id,
         'display_name':config['display_name'],
+        **({'billing_required':True} if client_id not in CLIENT_PORTALS else {}),
     }
 
 
@@ -911,7 +915,7 @@ def current_client_credential_fingerprint(session:dict)->str:
         return ''
     config=CLIENT_PORTALS.get(str(portal_ids[0]))
     if config is None:
-        return ''
+        return billing.fingerprint(session)
     return credential_fingerprint(username,os.getenv(config['password_env'],''))
 
 
@@ -1010,6 +1014,9 @@ def authenticate_client_credentials(username:str,password:str)->dict:
                 'username':expected_username,
                 'portal_ids':[client_id],
             }
+    advertiser=billing.authenticate(username, password)
+    if advertiser:
+        return advertiser
     publisher=workspaces.authenticate_publisher(username, password)
     if publisher:
         return publisher
@@ -1029,7 +1036,7 @@ def client_cookie_session(request:Request)->dict|None:
     if (
         not isinstance(portal_ids,list)
         or not portal_ids
-        or any(not isinstance(client_id,str) or client_id not in CLIENT_PORTALS for client_id in portal_ids)
+        or any(not isinstance(client_id,str) or (client_id not in CLIENT_PORTALS and not billing.account(clientId=client_id)) for client_id in portal_ids)
         or not isinstance(username,str)
         or role not in {'admin','client','publisher'}
     ):
@@ -1056,7 +1063,7 @@ def authenticate_client(request:Request)->dict:
 def public_client_session(session:dict)->dict:
     return {
         'portals':[
-            public_client_portal(client_id, CLIENT_PORTALS[client_id])
+            public_client_portal(client_id, client_portal(client_id))
             for client_id in session['portal_ids']
         ],
         'role':session['role'],
@@ -1066,11 +1073,11 @@ def public_client_session(session:dict)->dict:
 
 
 def require_client(request:Request, client_id:str)->dict[str, str]:
-    config=client_portal(client_id)
     session=authenticate_client(request)
     if client_id not in session['portal_ids']:
         raise HTTPException(404, 'Workspace not found.')
-    return config
+    billing.require_access(client_id)
+    return client_portal(client_id)
 
 
 def require_automation_secret(request:Request)->None:
@@ -4047,6 +4054,8 @@ def frame(job_id:str, filename:str):
 def review_media(job_id:str, request:Request):
     return review_media_response(job_id, request)
 
+from . import billing
+billing.register(app)
 workspaces.register(app)
 release_emails.register(app)
 platform_monitoring.register(app)

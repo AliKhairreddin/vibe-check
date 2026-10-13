@@ -399,6 +399,8 @@ async def test_advertisers_manage_only_their_workspace_and_csrf_is_enforced(port
 
 @pytest.mark.anyio
 async def test_admin_plans_use_owner_permission(portal, monkeypatch):
+    from app import billing
+    monkeypatch.setattr(billing, 'call', lambda *args, **kwargs: {'accessMode': 'grandfathered', 'allowed': True, 'status': 'exempt'})
     monkeypatch.setenv('ADMIN_PASSWORD', 'owner-password')
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='http://testserver') as client:
         response = await client.get('/api/admin/workspaces', headers={'x-app-password': 'operator-only', 'x-admin-password': 'owner-password'})

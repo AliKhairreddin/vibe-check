@@ -1,5 +1,6 @@
 import { v } from 'convex/values';
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server.js';
+import { requireBillingAccess } from './billing.ts';
 
 function authorize(secret: string) {
   if (!process.env.CONVEX_HTTP_SECRET || secret !== process.env.CONVEX_HTTP_SECRET) throw new Error('Unauthorized');
@@ -61,6 +62,8 @@ export const invitePublisher = mutation({
   args: { ...secret, clientId: v.string(), publisherId: v.string(), name: v.string(), username: v.string(), inviteHash: v.string() }, returns: v.null(),
   handler: async (ctx, args) => {
     authorize(args.secret);
+    await requireBillingAccess(ctx, args.clientId);
+    if (await ctx.db.query('advertiserAccounts').withIndex('by_username', q => q.eq('username', args.username)).unique()) throw new Error('Username already exists');
     const existing = await publisher(ctx, args.publisherId);
     if (existing?.organizationId) throw new Error('This login is managed by the publisher organization');
     if (existing && existing.clientId !== args.clientId) throw new Error('Publisher unavailable');
@@ -103,6 +106,7 @@ export const suspendPublisher = mutation({
 export const claimSubmission = mutation({
   args: { ...secret, clientId: v.string(), publisherId: v.string(), jobId: v.string() }, returns: v.null(), handler: async (ctx, args) => {
     authorize(args.secret);
+    await requireBillingAccess(ctx, args.clientId);
     const row = await publisher(ctx, args.publisherId);
     if (!row || row.clientId !== args.clientId || row.status !== 'active') throw new Error('Publisher unavailable');
     const existing = await ctx.db.query('publisherSubmissions').withIndex('by_client_id_and_job_id', q => q.eq('clientId', args.clientId).eq('jobId', args.jobId)).unique();
