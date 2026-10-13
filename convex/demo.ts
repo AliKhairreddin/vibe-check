@@ -84,10 +84,11 @@ export const cleanup = internalMutation({
   args: {}, returns: v.null(),
   handler: async ctx => {
     const now = Date.now();
-    const workspaces = await ctx.db.query('demoWorkspaces').withIndex('by_expires_at', q => q.lte('expiresAt', now)).take(100);
+    // Ten 650 KB snapshots leave ample room below Convex's 16 MiB read limit.
+    const workspaces = await ctx.db.query('demoWorkspaces').withIndex('by_expires_at', q => q.lte('expiresAt', now)).take(10);
     const limits = await ctx.db.query('demoLimits').withIndex('by_expires_at', q => q.lte('expiresAt', now)).take(500);
     for (const row of [...workspaces, ...limits]) await ctx.db.delete(row._id);
-    if (workspaces.length === 100 || limits.length === 500) await ctx.scheduler.runAfter(0, makeFunctionReference<'mutation'>('demo:cleanup'), {});
+    if (workspaces.length === 10 || limits.length === 500) await ctx.scheduler.runAfter(0, makeFunctionReference<'mutation'>('demo:cleanup'), {});
     return null;
   },
 });

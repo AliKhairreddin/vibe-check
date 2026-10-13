@@ -90,6 +90,19 @@ test('expired sessions fail closed and delete all associated records; cleanup is
   assert.equal(f.tables.demoLimits.length, 0);
 });
 
+test('fallback cleanup drains large snapshots in bounded batches with continuation', async () => {
+  const f = demoFixture(); await start(f.ctx);
+  const source = f.tables.demoWorkspaces[0];
+  f.tables.demoWorkspaces.length = 0;
+  for (let i = 0; i < 11; i++) f.tables.demoWorkspaces.push({ ...source, _id: `expired-${i}`, expiresAt: Date.now() - 1, state: { padding: 'x'.repeat(649000) } });
+  await (cleanup as any)._handler(f.ctx, {});
+  assert.equal(f.tables.demoWorkspaces.length, 1);
+  assert.equal(f.scheduled.length, 2); // Expiry plus continuation of the bounded sweep.
+  await (cleanup as any)._handler(f.ctx, {});
+  assert.equal(f.tables.demoWorkspaces.length, 0);
+  assert.equal(f.scheduled.length, 2);
+});
+
 test('edge demo boundary uses HttpOnly capabilities, blocks CSRF and never falls back on errors', async () => {
   const f = demoFixture();
   const original = globalThis.fetch;

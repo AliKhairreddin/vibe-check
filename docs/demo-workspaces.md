@@ -20,7 +20,8 @@ creates a new independent dataset.
   workspace. Unknown operations are denied. No production table is read or written.
 - `demoWorkspaces` holds a bounded snapshot of all sample records and edits. A scheduled
   internal mutation deletes it at the 24-hour deadline; a five-minute indexed sweep
-  provides recovery and removes expired rate-limit records in bounded batches. Expired
+  provides recovery in batches of ten workspaces (below transaction read limits even
+  for full snapshots) and removes expired rate-limit records in bounded batches. Expired
   sessions are rejected on every request even before cleanup runs. There are no demo
   files, external objects, or child records to orphan. Signing out deletes the snapshot.
 - Browser preferences and active batches use separate, expiring session storage in demo
