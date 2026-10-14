@@ -75,3 +75,25 @@ async def test_legacy_advertisers_and_storage_failures(provision, policies, monk
         monkeypatch.setattr(advertiser_guidelines.storage, 'convex_enabled', lambda: False)
         assert (await browser.put(path, json={**INPUT, 'expected_version': 2})).status_code == 503
         assert provision['profiles'] == before
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('client_id', ['lead-economy', 'kissterra', 'smart-financial'])
+async def test_existing_advertisers_open_the_same_saved_policy_and_exceptions(provision, policies, monkeypatch, client_id):
+    config = main.CLIENT_PORTALS[client_id]
+    monkeypatch.setenv(config['password_env'], 'legacy-password')
+    existing = {'official_guidelines': 'The current official requirements.', 'enabled': True,
+                'internal_overrides': INPUT['internal_overrides'], 'version': 7}
+    provision['profiles'][config['offer_id']] = copy.deepcopy(existing)
+    before = copy.deepcopy(provision['profiles'])
+    async with client() as browser:
+        assert (await browser.post('/api/client/session', json={'username': config['username_default'], 'password': 'legacy-password'})).status_code == 200
+        response = await browser.get(f'/api/client/{client_id}/guidelines')
+        assert response.status_code == 200
+        assert response.json()['official_guidelines'] == existing['official_guidelines']
+        assert response.json()['internal_overrides'] == existing['internal_overrides']
+        assert response.json()['version'] == 7
+        assert policies[-1] == ('query', 'offers:get', {'offerId': config['offer_id']})
+        assert provision['profiles'] == before
+        foreign = 'kissterra' if client_id != 'kissterra' else 'lead-economy'
+        assert (await browser.get(f'/api/client/{foreign}/guidelines')).status_code == 404
