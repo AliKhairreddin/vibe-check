@@ -1,4 +1,4 @@
-import { type MutationCtx, mutation, query } from "./_generated/server";
+import { type MutationCtx, mutation, query } from "./_generated/server.js";
 import { getConvexSize, v } from "convex/values";
 import { enqueueLearning } from './learning.ts';
 
@@ -338,6 +338,49 @@ export const disable = mutation({
     };
     assertProfileDocumentSize(profile);
     await ctx.db.replace(existing._id, storedProfile(profile));
+    await ensureRevision(ctx, profile);
+    await enqueueLearning(ctx, offerId, true);
+    return publicProfile(profile);
+  },
+});
+
+// Called through the authenticated backend. The route resolves offerId from the
+// signed-in advertiser; this mutation cannot rename offers or change another default.
+export const saveGuidelines = mutation({
+  args: {
+    secret: v.string(), offerId: v.string(), expectedVersion: v.number(),
+    officialGuidelines: v.string(), internalOverrides: v.array(internalOverrideValidator),
+    enabled: v.boolean(),
+  },
+  returns: v.object({
+    offer_id: v.string(), display_name: v.string(), official_guidelines: v.string(),
+    internal_overrides: v.array(v.object({
+      override_id: v.string(), title: v.string(), guidance: v.string(),
+      rationale: v.string(), enabled: v.boolean(),
+    })),
+    enabled: v.boolean(), is_default: v.boolean(), version: v.number(),
+    created_at: v.number(), updated_at: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const offerId = normalizeOfferId(args.offerId);
+    const existing = await ctx.db.query('offerProfiles')
+      .withIndex('by_offer_id', q => q.eq('offerId', offerId)).unique();
+    if (!existing) throw new Error('Offer profile not found.');
+    if (args.expectedVersion !== existing.version) {
+      throw new Error('Guidelines changed since you opened them.');
+    }
+    const officialGuidelines = optionalText(args.officialGuidelines, 'Official guidelines', MAX_GUIDELINES_LENGTH);
+    if (args.enabled && !officialGuidelines) throw new Error('Enabled offers must include official guidelines.');
+    const profile: OfferProfile = {
+      ...storedProfile(existing), officialGuidelines,
+      internalOverrides: normalizeOverrides(args.internalOverrides), enabled: args.enabled,
+      isDefault: existing.isDefault && args.enabled,
+      version: existing.version + 1, updatedAt: Date.now(),
+    };
+    assertProfileDocumentSize(profile);
+    await ensureRevision(ctx, existing);
+    await ctx.db.patch(existing._id, storedProfile(profile));
     await ensureRevision(ctx, profile);
     await enqueueLearning(ctx, offerId, true);
     return publicProfile(profile);

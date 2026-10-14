@@ -138,7 +138,8 @@ def register(app):
         row = account(inviteHash=workspaces.token_hash(token))
         if not row or row['status'] != 'invited' or row.get('inviteExpiresAt', 0) <= time.time() * 1000:
             raise HTTPException(404, 'Invitation expired or already used. Contact AdChecked for a new link.')
-        return {'name': row['name'], 'advertiser': row['name'], 'username': row['username']}
+        state = call('billing', 'status', {'clientId': row['clientId']})
+        return {'name': row.get('contactName') or row['name'], 'advertiser': row['name'], 'username': row['username'], 'complimentary': state.get('accessMode') == 'complimentary'}
 
     @app.post('/api/client/advertiser-invitations/accept')
     def accept(payload: workspaces.InviteInput, request: Request):

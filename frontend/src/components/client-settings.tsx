@@ -4,7 +4,6 @@ import { useState, type ReactNode } from 'react';
 import { CheckCircle2, LayoutGrid, List, RotateCcw, Save, Settings2 } from 'lucide-react';
 
 import { Link } from '@tanstack/react-router';
-import { useWorkspace } from './workspace-context';
 import { ClientPortalFrame, useClientAuth } from '@/components/client-dashboard';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -21,8 +20,7 @@ import { cn } from '@/lib/utils';
 
 export function ClientSettingsPage() {
   const { session } = useClientAuth();
-  const { clientId } = useWorkspace();
-  const canSetup = session.role === 'client' && session.portals.find(p => p.client_id === clientId)?.self_serve;
+  const canSetup = session.role === 'client';
   const [preferences, setPreferences] = useState<ClientPreferences>(() => readClientPreferences());
   const [saved, setSaved] = useState(false);
 
@@ -52,7 +50,7 @@ export function ClientSettingsPage() {
           </p>
         </section>
 
-        {canSetup ? <Link to="/client/setup" className="w-fit text-sm font-medium underline underline-offset-4">Edit workspace review guidelines</Link> : null}
+        {canSetup ? <Link to="/client/guidelines" className="w-fit text-sm font-medium underline underline-offset-4">Edit workspace review guidelines</Link> : null}
 
         {saved ? (
           <Alert className="border-emerald-600/25 bg-emerald-500/5">

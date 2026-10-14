@@ -57,6 +57,29 @@ export function runDemoRequest(state: DemoState, role: DemoRole, path: string, m
     if (!ids.length || ids.some(id => !state.offers.some(o => o.offer_id === id && o.enabled && o.official_guidelines))) fail(400, 'Choose enabled demo offers with saved guidelines.');
     return [...new Set(ids)];
   };
+  if (clientMatch && route === '/api/guidelines') {
+    requireMethod(method, ['GET', 'PUT']);
+    if (role !== 'advertiser') fail(403, 'Only the advertiser can manage guidelines.');
+    const offer = state.offers.find(o => o.offer_id === DEMO_OFFER)!;
+    if (method === 'GET') return offer;
+    if (body.expected_version !== offer.version) fail(409, 'Guidelines changed since you opened them. Copy your edits before loading the saved version.');
+    if (Object.keys(body).some(key => !['expected_version', 'official_guidelines', 'internal_overrides', 'enabled'].includes(key))) fail(400, 'Only your policy and internal rules can be changed.');
+    if (typeof body.official_guidelines !== 'string' || body.official_guidelines.length > 12000 || typeof body.enabled !== 'boolean'
+      || !Array.isArray(body.internal_overrides) || body.internal_overrides.length > 10) fail(400, 'The demo supports 12,000 guideline characters and ten rules.');
+    const guidelines = body.official_guidelines.trim();
+    if (body.enabled && !guidelines) fail(400, 'Add official guidelines before enabling reviews.');
+    const ids = new Set<string>();
+    const rules = body.internal_overrides.map(object).map(rule => {
+      const id = text(rule.override_id, 80), title = text(rule.title, 160), guidance = text(rule.guidance, 2000);
+      if (!/^[a-z0-9_-]{1,80}$/.test(id) || ids.has(id) || !title || !guidance) fail(400, 'Each rule needs a unique ID, title, and guidance.');
+      ids.add(id);
+      return { override_id: id, title, guidance, rationale: text(rule.rationale, 2000), enabled: rule.enabled === true };
+    });
+    Object.assign(offer, { official_guidelines: guidelines, internal_overrides: rules, enabled: body.enabled,
+      is_default: offer.is_default && body.enabled, version: offer.version + 1, updated_at: now });
+    note(`Saved ${offer.display_name} policy version ${offer.version}.`);
+    return offer;
+  }
   if (route === '/api/offers/catalog' || route === '/api/offers') {
     requireMethod(method, ['GET']);
     if (route === '/api/offers') ownerOnly();

@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server.js';
+import { internalMutation, mutation, query } from './_generated/server.js';
 import { isGrandfathered } from './billingPolicy.ts';
 
 function authorize(secret: string) {
@@ -56,5 +56,40 @@ export const acceptInvite = mutation({
     const patch = { status: 'active' as const, passwordHash: args.passwordHash, inviteHash: undefined, inviteExpiresAt: undefined, authVersion: row.authVersion + 1 };
     await ctx.db.patch(row._id, patch);
     return { ...row, ...patch };
+  },
+});
+
+// Operator-only provisioning. Public signup and paid invitations cannot request
+// complimentary access. A blank, isolated policy lets the advertiser supply it.
+export const createComplimentary = internalMutation({
+  args: { clientId: v.string(), name: v.string(), contactName: v.string(), inviteHash: v.string() },
+  returns: v.object({ clientId: v.string(), username: v.string(), inviteExpiresAt: v.number() }),
+  handler: async (ctx, args) => {
+    if (isGrandfathered(args.clientId) || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(args.clientId)
+      || !args.name.trim() || args.name.length > 100 || !args.contactName.trim() || args.contactName.length > 160
+      || !/^[a-f0-9]{64}$/.test(args.inviteHash)) throw new Error('Invalid complimentary workspace');
+    const username = `advertiser.${args.clientId}`;
+    // Refuse to replace any existing customer, policy, or access allocation.
+    const conflicts = await Promise.all([
+      ctx.db.query('advertiserAccounts').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).unique(),
+      ctx.db.query('advertiserAccounts').withIndex('by_username', q => q.eq('username', username)).unique(),
+      ctx.db.query('offerProfiles').withIndex('by_offer_id', q => q.eq('offerId', args.clientId)).unique(),
+      ctx.db.query('billingWorkspaces').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).unique(),
+      ctx.db.query('advertiserPlans').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).unique(),
+      ctx.db.query('publishers').withIndex('by_username', q => q.eq('username', username)).unique(),
+    ]);
+    if (conflicts.some(Boolean)) throw new Error('Workspace already exists or username is in use');
+    const now = Date.now();
+    const inviteExpiresAt = now + 7 * 86400000;
+    await ctx.db.insert('advertiserAccounts', { clientId: args.clientId, name: args.name.trim(), contactName: args.contactName.trim(), category: 'Advertising', username,
+      status: 'invited', selfServe: true, inviteHash: args.inviteHash, inviteExpiresAt, authVersion: 1, createdAt: now });
+    const profile = { offerId: args.clientId, displayName: args.name.trim(), officialGuidelines: '', internalOverrides: [],
+      enabled: false, isDefault: false, version: 1, createdAt: now, updatedAt: now };
+    await ctx.db.insert('offerProfiles', profile);
+    await ctx.db.insert('offerProfileRevisions', profile);
+    await ctx.db.insert('billingWorkspaces', { clientId: args.clientId, accessMode: 'complimentary', isTest: false,
+      createdAt: now, status: 'exempt', nextSyncAt: Number.MAX_SAFE_INTEGER, revision: 0 });
+    await ctx.db.insert('advertiserPlans', { clientId: args.clientId, plan: 'pilot', publisherLimit: 5, monthlyReviewLimit: 250, updatedAt: now });
+    return { clientId: args.clientId, username, inviteExpiresAt };
   },
 });

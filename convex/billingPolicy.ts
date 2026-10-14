@@ -24,6 +24,7 @@ export function billingReady(isTest: boolean) {
 
 export function accessAllowed(row: { accessMode: string; status: string; paidThrough?: number } | null, clientId: string, now = Date.now()) {
   if (isGrandfathered(clientId)) return true;
+  if (row?.accessMode === 'complimentary' && row.status === 'exempt') return true;
   return row?.accessMode === 'subscription' && row.status === 'active' && (row.paidThrough ?? 0) > now;
 }
 

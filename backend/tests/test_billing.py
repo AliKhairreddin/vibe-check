@@ -32,7 +32,7 @@ def accounts(monkeypatch):
             row.pop('inviteHash')
             return row
         if module == 'billing' and function == 'status':
-            return {'allowed': state['allowed'], 'accessMode': 'subscription', 'status': 'active' if state['allowed'] else 'none'}
+            return {'allowed': state['allowed'], 'accessMode': state.get('accessMode', 'subscription'), 'status': 'active' if state['allowed'] else 'none'}
         if module == 'stripeBilling':
             return {'url': 'https://checkout.stripe.com/owned-session'}
         if module == 'billing' and function == 'requestSync':
@@ -97,3 +97,19 @@ async def test_publishers_cannot_manage_billing(accounts, monkeypatch):
         for endpoint, payload in [('checkout', {'plan': 'starter', 'interval': 'month'}), ('portal', {}), ('refresh', {})]:
             assert (await client.post(f'/api/client/new-advertiser/billing/{endpoint}', json=payload)).status_code == 403
         assert (await client.get('/api/client/new-advertiser/billing')).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_complimentary_invitation_names_contact_and_explains_free_access(accounts):
+    token = 'x' * 43
+    accounts['row'].update(status='invited', inviteHash=workspaces.token_hash(token), inviteExpiresAt=int(time.time() * 1000) + 60000,
+                           name='Rezono', contactName='Nilu Yusupova')
+    accounts.update(allowed=True, accessMode='complimentary')
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', headers={'origin': 'https://app.adchecked.com'}) as client:
+        response = await client.get(f'/api/client/advertiser-invitations/{token}')
+        assert response.status_code == 200
+        assert response.json() == {'name': 'Nilu Yusupova', 'advertiser': 'Rezono', 'username': accounts['row']['username'], 'complimentary': True}
+        accepted = await client.post('/api/client/advertiser-invitations/accept', json={'token': token, 'password': 'private-test-password'})
+        assert accepted.status_code == 200
+        assert (await client.get('/api/client/new-advertiser/check')).status_code == 200
+        assert all(module != 'stripeBilling' for module, _, _, _ in accounts['calls'])

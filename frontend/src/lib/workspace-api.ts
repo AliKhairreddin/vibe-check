@@ -1,4 +1,4 @@
-import { requestJson, type ClientSession, type ClientReviewItem, type ClientReviewList, type OfferResult, type ReviewEvidenceFrame } from './api';
+import { requestJson, type OfferProfile, type ClientSession, type ClientReviewItem, type ClientReviewList, type OfferResult, type ReviewEvidenceFrame } from './api';
 export type Publisher = { managedLogin?: boolean; publisherId: string; name: string; username: string; status: 'invited' | 'active' | 'suspended'; createdAt: number; inviteExpiresAt: number | null };
 export type Invitation = { publisher_id: string; username: string; invite_url: string };
 export type Submission = { released: boolean; jobId: string; publisherId: string; fileName: string; status: string; progress: number; message: string; createdAt: number };
@@ -14,7 +14,7 @@ export const invitePublisher = (clientId: string, publisherId: string) => reques
 export const suspendPublisher = (clientId: string, publisherId: string) => requestJson(`${base(clientId)}/publishers/${publisherId}`, { method: 'DELETE' });
 export const listSubmissions = (clientId: string, publisherId?: string) => requestJson<Submission[]>(`${base(clientId)}/submissions${publisherId && publisherId !== 'all' ? `?publisher_id=${encodeURIComponent(publisherId)}` : ''}`);
 export const getPlan = (clientId: string) => requestJson<Plan>(`${base(clientId)}/plan`);
-export const getInvite = (token: string, advertiser = false) => requestJson<{ name: string; advertiser: string; username: string }>(`/api/client/${advertiser ? 'advertiser-invitations' : 'invitations'}/${encodeURIComponent(token)}`);
+export const getInvite = (token: string, advertiser = false) => requestJson<{ name: string; advertiser: string; username: string; complimentary?: boolean }>(`/api/client/${advertiser ? 'advertiser-invitations' : 'invitations'}/${encodeURIComponent(token)}`);
 export const acceptInvite = (token: string, password: string, advertiser = false) => requestJson<ClientSession>(`/api/client/${advertiser ? 'advertiser-invitations' : 'invitations'}/accept`, json({ token, password }));
 export const createShare = (jobIds: string[], clientId?: string, offerId?: string) => requestJson<{ share_id: string; url: string }>(shares(clientId), json({ job_ids: jobIds, title: jobIds.length === 1 ? 'Creative review' : `${jobIds.length} creative reviews`, offer_id: offerId, expires_in_days: 30 }));
 export const listShares = (clientId?: string) => requestJson<SharedLink[]>(shares(clientId));
@@ -23,7 +23,7 @@ export const getSharedCollection = (token: string) => requestJson<{ title: strin
 export const getSharedDetail = (token: string, jobId: string) => requestJson<SharedDetail>(`/api/public/shares/${encodeURIComponent(token)}/reviews/${jobId}`);
 export const getSharedReviewContext = (token: string) => requestJson<{ title: string; client_ids: string[] }>(`/api/client/shared/${encodeURIComponent(token)}`);
 export const listSharedReviews = (clientId: string, token: string) => requestJson<ClientReviewList & { unavailable_count: number }>(`${base(clientId)}/shared/${encodeURIComponent(token)}/reviews`);
-export type BillingStatus = { accessMode: 'grandfathered' | 'subscription'; allowed: boolean; status: string; paidThrough: number | null; cancelAtPeriodEnd: boolean; syncedAt: number | null; syncError: boolean; isTest: boolean; checkoutReady: boolean; hasCustomer: boolean; plans: { plan: string; interval: string }[] };
+export type BillingStatus = { accessMode: 'grandfathered' | 'complimentary' | 'subscription'; allowed: boolean; status: string; paidThrough: number | null; cancelAtPeriodEnd: boolean; syncedAt: number | null; syncError: boolean; isTest: boolean; checkoutReady: boolean; hasCustomer: boolean; plans: { plan: string; interval: string }[] };
 export const getBilling = (clientId: string) => requestJson<BillingStatus>(`${base(clientId)}/billing`);
 export const startCheckout = (clientId: string, plan: 'starter' | 'growth', interval: 'month' | 'year') => requestJson<{ url: string }>(`${base(clientId)}/billing/checkout`, json({ plan, interval }));
 export const openBillingPortal = (clientId: string) => requestJson<{ url: string }>(`${base(clientId)}/billing/portal`, json({}));
@@ -36,3 +36,7 @@ export const setAdminPlan = (clientId: string, plan: Plan['plan'], publisherLimi
 export type WorkspaceSetup = { name: string; official_guidelines: string; configured: boolean };
 export const getWorkspaceSetup = (clientId: string) => requestJson<WorkspaceSetup>(`${base(clientId)}/setup`);
 export const saveWorkspaceSetup = (clientId: string, official_guidelines: string) => requestJson<WorkspaceSetup>(`${base(clientId)}/setup`, json({ official_guidelines }, 'PUT'));
+
+export type WorkspaceGuidelinesInput = Pick<OfferProfile, 'official_guidelines' | 'internal_overrides' | 'enabled'> & { expected_version: number };
+export const getWorkspaceGuidelines = (clientId: string) => requestJson<OfferProfile>(`${base(clientId)}/guidelines`);
+export const saveWorkspaceGuidelines = (clientId: string, policy: WorkspaceGuidelinesInput) => requestJson<OfferProfile>(`${base(clientId)}/guidelines`, json(policy, 'PUT'));

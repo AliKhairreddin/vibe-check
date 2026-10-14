@@ -114,7 +114,8 @@ const planRoute = createRoute({ getParentRoute: () => rootRoute, path: '/client/
 const router = createRouter({
   basepath: demoBasepath(),
   routeTree: rootRoute.addChildren([
-    createRoute({ getParentRoute: () => rootRoute, path: '/client/setup', component: WorkspaceSetupPage }),
+    createRoute({ getParentRoute: () => rootRoute, path: '/client/setup', beforeLoad: () => { throw redirect({ to: '/client/guidelines' }); } }),
+    createRoute({ getParentRoute: () => rootRoute, path: '/client/guidelines', component: WorkspaceSetupPage }),
     publishersRoute,
     sharesRoute,
     planRoute,

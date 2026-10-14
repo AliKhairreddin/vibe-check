@@ -4059,6 +4059,8 @@ from . import billing
 billing.register(app)
 from . import signup
 signup.register(app)
+from . import advertiser_guidelines
+advertiser_guidelines.register(app)
 workspaces.register(app)
 release_emails.register(app)
 platform_monitoring.register(app)

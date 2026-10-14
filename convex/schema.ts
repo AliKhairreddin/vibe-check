@@ -10,13 +10,13 @@ export default defineSchema({
     clientId: v.string(), name: v.string(), category: v.string(), username: v.string(),
     status: v.union(v.literal('invited'), v.literal('active'), v.literal('suspended')),
     passwordHash: v.optional(v.string()), inviteHash: v.optional(v.string()),
-    selfServe: v.optional(v.boolean()),
+    selfServe: v.optional(v.boolean()), contactName: v.optional(v.string()),
     inviteExpiresAt: v.optional(v.number()), authVersion: v.number(), createdAt: v.number(),
   }).index('by_client_id', ['clientId']).index('by_username', ['username']).index('by_invite_hash', ['inviteHash']),
   signupLimits: defineTable({ key: v.string(), count: v.number(), expiresAt: v.number() })
     .index('by_key', ['key']),
   billingWorkspaces: defineTable({
-    clientId: v.string(), accessMode: v.union(v.literal('grandfathered'), v.literal('subscription')),
+    clientId: v.string(), accessMode: v.union(v.literal('grandfathered'), v.literal('complimentary'), v.literal('subscription')),
     isTest: v.boolean(), customerGeneration: v.optional(v.number()), createdAt: v.number(), customerId: v.optional(v.string()),
     subscriptionId: v.optional(v.string()), status: v.string(), priceId: v.optional(v.string()),
     paidThrough: v.optional(v.number()), cancelAtPeriodEnd: v.optional(v.boolean()),

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import Stripe from 'stripe';
 import { accessAllowed, billingReady, subscriptionSnapshot } from '../convex/billingPolicy.ts';
-import { beginCheckout, claimSync, completeSync, grandfatherExisting, receiveEvent, requestSync, requireBillingAccess } from '../convex/billing.ts';
-import { create, acceptInvite, resetInvite } from '../convex/advertiserAccounts.ts';
+import { beginCheckout, claimSync, completeSync, grandfatherExisting, receiveEvent, requestSync, requireBillingAccess, status as billingStatus } from '../convex/billing.ts';
+import { create, acceptInvite, resetInvite, createComplimentary } from '../convex/advertiserAccounts.ts';
 import { claimSubmission } from '../convex/workspaces.ts';
 import http from '../convex/http.ts';
 
@@ -180,4 +180,42 @@ test('manual refresh remains bounded when Stripe is failing', async () => {
   await invoke(requestSync, ctx, { secret: 'billing-test-secret', clientId: 'new-advertiser' });
   await invoke(requestSync, ctx, { secret: 'billing-test-secret', clientId: 'new-advertiser' });
   assert.equal(scheduled.length, 1);
+});
+
+
+test('operator-created complimentary advertisers have isolated free access without billing or seeded policies', async () => {
+  const { ctx, tables, scheduled } = fixture();
+  const args = { clientId: 'rezono', name: 'Rezono', contactName: 'Nilu Yusupova', inviteHash: 'a'.repeat(64) };
+  const invitation = await invoke(createComplimentary, ctx, args);
+  assert.equal(invitation.username, 'advertiser.rezono');
+  assert.equal(tables.advertiserAccounts[0].contactName, 'Nilu Yusupova');
+  assert.equal(tables.advertiserAccounts[0].status, 'invited');
+  assert.equal(tables.offerProfiles[0].officialGuidelines, '');
+  assert.equal(tables.offerProfiles[0].enabled, false);
+  assert.equal(tables.offerProfiles[0].isDefault, false);
+  assert.equal(tables.offerProfileRevisions.length, 1);
+  assert.equal(tables.advertiserPlans[0].publisherLimit, 5);
+  assert.equal(tables.billingWorkspaces[0].customerId, undefined);
+  const status = await invoke(billingStatus, ctx, { secret: 'billing-test-secret', clientId: 'rezono' });
+  assert.equal(status.accessMode, 'complimentary'); assert.equal(status.allowed, true); assert.equal(status.checkoutReady, false);
+  assert.equal(accessAllowed(null, 'some-other-new-workspace'), false);
+  await requireBillingAccess(ctx as any, 'rezono');
+  await assert.rejects(invoke(beginCheckout, ctx, { clientId: 'rezono', priceId: 'price_starter', attempt: 'one' }), /does not need/);
+  await assert.rejects(invoke(createComplimentary, ctx, args), /already exists/);
+  assert.equal(tables.advertiserAccounts.length, 1);
+  await invoke(acceptInvite, ctx, { secret: 'billing-test-secret', inviteHash: args.inviteHash, passwordHash: 'hashed-password' });
+  assert.equal(tables.advertiserAccounts[0].status, 'active');
+  assert.equal(accessAllowed(tables.billingWorkspaces[0], 'rezono'), true);
+  await ctx.db.insert('publishers', { clientId: 'rezono', publisherId: 'pub', status: 'active' });
+  await invoke(claimSubmission, ctx, { secret: 'billing-test-secret', clientId: 'rezono', publisherId: 'pub', jobId: 'new' });
+  assert.equal(tables.publisherSubmissions.length, 1);
+  // Provider activity must not alter an explicitly complimentary allocation.
+  Object.assign(tables.billingWorkspaces[0], { customerId: 'cus_old', nextSyncAt: 0, syncLease: 'stale' });
+  const before = structuredClone(tables.billingWorkspaces[0]);
+  await invoke(receiveEvent, ctx, { eventId: 'evt_old', customerId: 'cus_old', livemode: true, deleted: true });
+  await invoke(requestSync, ctx, { secret: 'billing-test-secret', clientId: 'rezono' });
+  assert.equal(await invoke(claimSync, ctx, { clientId: 'rezono', lease: 'lease' }), null);
+  await invoke(completeSync, ctx, { clientId: 'rezono', lease: 'stale', revision: 0, snapshot: subscriptionSnapshot([], false) });
+  assert.deepEqual(tables.billingWorkspaces[0], before);
+  assert.equal(scheduled.length, 0);
 });

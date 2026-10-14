@@ -151,3 +151,19 @@ test('email and automation simulations persist without dispatching an external a
   assert.equal(run.body.queued_count, 0);
   assert.equal(f.scheduled.length, 1); // Only the expiry job; never email, AI, or Drive work.
 });
+
+
+test('advertiser guidelines are scoped, versioned, and unavailable to publishers in the demo', async () => {
+  const f = demoFixture(); await start(f.ctx, a, 'advertiser');
+  const route = '/api/client/harbor-auto/guidelines';
+  const original = (await call(f.ctx, route)).body;
+  const input = { official_guidelines: 'Our private policy.', internal_overrides: [{ override_id: 'exception', title: 'Exception', guidance: 'Permit a qualified claim.', rationale: '', enabled: true }], enabled: true, expected_version: original.version };
+  assert.equal((await call(f.ctx, route, 'PUT', { ...input, offer_id: 'other' })).status, 400);
+  const saved = await call(f.ctx, route, 'PUT', input);
+  assert.equal(saved.status, 200); assert.equal(saved.body.version, original.version + 1);
+  assert.equal((await call(f.ctx, route, 'PUT', input)).status, 409);
+  assert.equal((await call(f.ctx, '/api/client/other/guidelines')).status, 403);
+  await call(f.ctx, '/role', 'PUT', { role: 'publisher' });
+  assert.equal((await call(f.ctx, route)).status, 403);
+  assert.equal((await call(f.ctx, route, 'PUT', input)).status, 403);
+});

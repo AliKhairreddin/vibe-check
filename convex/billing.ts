@@ -19,11 +19,11 @@ export const status = query({
     authorizeBilling(args.secret);
     const row = await billingRow(ctx, args.clientId);
     const grandfathered = isGrandfathered(args.clientId);
-    return { accessMode: grandfathered ? 'grandfathered' : 'subscription', allowed: accessAllowed(row, args.clientId),
+    return { accessMode: grandfathered ? 'grandfathered' : row?.accessMode === 'complimentary' ? 'complimentary' : 'subscription', allowed: accessAllowed(row, args.clientId),
       status: grandfathered ? 'exempt' : row?.status ?? 'none', paidThrough: row?.paidThrough ?? null,
       cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false, syncedAt: row?.syncedAt ?? null,
       syncError: row?.syncError ?? false, isTest: row?.isTest ?? false,
-      checkoutReady: !grandfathered && !!row && billingReady(row.isTest),
+      checkoutReady: !grandfathered && row?.accessMode === 'subscription' && billingReady(row.isTest),
       hasCustomer: !!row?.customerId,
       plans: configuredPrices().map(({ plan, interval }) => ({ plan, interval })),
     };
@@ -81,7 +81,7 @@ export const requestSync = mutation({
   args: { secret: v.string(), clientId: v.string() }, returns: v.null(), handler: async (ctx, args) => {
     authorizeBilling(args.secret);
     const row = await billingRow(ctx, args.clientId);
-    if (row?.customerId && !isGrandfathered(args.clientId) && Date.now() - Math.max(row.syncedAt ?? 0, row.requestedSyncAt ?? 0) > 60000) {
+    if (row?.customerId && row.accessMode === 'subscription' && !isGrandfathered(args.clientId) && Date.now() - Math.max(row.syncedAt ?? 0, row.requestedSyncAt ?? 0) > 60000) {
       await ctx.db.patch(row._id, { nextSyncAt: Date.now(), requestedSyncAt: Date.now() });
       await ctx.scheduler.runAfter(0, sync, { clientId: args.clientId });
     }
@@ -92,7 +92,7 @@ export const receiveEvent = internalMutation({
   args: { eventId: v.string(), customerId: v.string(), livemode: v.boolean(), deleted: v.boolean() }, returns: v.null(), handler: async (ctx, args) => {
     if (await ctx.db.query('billingEvents').withIndex('by_event_id', q => q.eq('eventId', args.eventId)).unique()) return null;
     const row = await ctx.db.query('billingWorkspaces').withIndex('by_customer_id', q => q.eq('customerId', args.customerId)).unique();
-    if (!row || row.isTest === args.livemode || isGrandfathered(row.clientId)) return null;
+    if (!row || row.accessMode !== 'subscription' || row.isTest === args.livemode || isGrandfathered(row.clientId)) return null;
     await ctx.db.insert('billingEvents', { eventId: args.eventId, createdAt: Date.now() });
     if (args.deleted) {
       // Provider deletion revokes access and removes provider identifiers locally.
@@ -107,7 +107,7 @@ export const receiveEvent = internalMutation({
 export const claimSync = internalMutation({
   args: { clientId: v.string(), lease: v.string() }, returns: v.any(), handler: async (ctx, args) => {
     const row = await billingRow(ctx, args.clientId);
-    if (!row?.customerId || isGrandfathered(args.clientId) || !billingReady(row.isTest) || (row.syncLeaseUntil ?? 0) > Date.now() || row.nextSyncAt > Date.now()) return null;
+    if (!row?.customerId || row.accessMode !== 'subscription' || isGrandfathered(args.clientId) || !billingReady(row.isTest) || (row.syncLeaseUntil ?? 0) > Date.now() || row.nextSyncAt > Date.now()) return null;
     await ctx.db.patch(row._id, { syncLease: args.lease, syncLeaseUntil: Date.now() + 90000 });
     return row;
   },
@@ -117,7 +117,7 @@ export const completeSync = internalMutation({
     status: v.string(), subscriptionId: v.optional(v.string()), priceId: v.optional(v.string()), paidThrough: v.number(), cancelAtPeriodEnd: v.boolean(), plan: v.optional(paidPlan),
   })) }, returns: v.null(), handler: async (ctx, args) => {
     const row = await billingRow(ctx, args.clientId);
-    if (!row || row.syncLease !== args.lease || isGrandfathered(args.clientId)) return null;
+    if (!row || row.accessMode !== 'subscription' || row.syncLease !== args.lease || isGrandfathered(args.clientId)) return null;
     const changed = row.revision !== args.revision;
     const snapshot = args.snapshot;
     // A concurrent event means the read may be stale. Do not apply it.
@@ -141,7 +141,7 @@ export const recover = internalMutation({
   args: {}, returns: v.null(), handler: async ctx => {
     const due = await ctx.db.query('billingWorkspaces').withIndex('by_next_sync_at', q => q.lte('nextSyncAt', Date.now())).take(25);
     for (const row of due) {
-      if (row.customerId && billingReady(row.isTest) && (row.syncLeaseUntil ?? 0) <= Date.now()) await ctx.scheduler.runAfter(0, sync, { clientId: row.clientId });
+      if (row.accessMode === 'subscription' && row.customerId && billingReady(row.isTest) && (row.syncLeaseUntil ?? 0) <= Date.now()) await ctx.scheduler.runAfter(0, sync, { clientId: row.clientId });
     }
     const old = await ctx.db.query('billingEvents').withIndex('by_created_at', q => q.lt('createdAt', Date.now() - 30 * 86400000)).take(100);
     for (const row of old) await ctx.db.delete(row._id);

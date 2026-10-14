@@ -271,6 +271,12 @@ Pushes to `main` trigger `.github/workflows/deploy.yml`, which verifies the repo
 - Vision review sees capped, resized samples rather than every frame.
 - Review quality still depends on the supplied policy context and selected models.
 
+### Advertiser guidelines
+
+Advertisers manage **Guidelines** in their own portal at `/client/guidelines`, also linked from Settings and Publishers. It is available before payment. The old `/client/setup` link redirects here. Official text supports up to 200,000 characters and `.txt` / `.md` import. Advertisers can add, disable, or remove their own internal rules; enabled rules take precedence for their specific issue. Publishers cannot read or edit this management endpoint and their submissions automatically use the advertiser's saved offer policy.
+
+The signed session resolves the offer; the browser cannot change offer identity, workspace name, or platform default. Saving is atomic and checks the loaded version to reject stale edits, records immutable policy revisions, and revalidates learned clarifications. Existing reports retain their original policy version. Each self-serve workspace starts with a separate blank policy. Pausing the policy prevents new reviews until it is enabled again.
+
 ### Advertiser subscriptions
 
 New advertiser workspaces use Stripe Managed Payments; the four existing advertiser workspaces retain free access. See [billing setup and operations](docs/billing.md) for live account configuration, catalog provisioning, webhook synchronization, and deployment checks.

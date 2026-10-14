@@ -219,8 +219,8 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       document.title = 'Review queue · AdChecked';
     } else if (pathname === '/client/uploads') {
       document.title = 'Uploads & progress · AdChecked';
-    } else if (pathname === '/client/setup') {
-      document.title = 'Workspace setup · AdChecked';
+    } else if (pathname === '/client/guidelines') {
+      document.title = 'Guidelines · AdChecked';
     } else if (pathname === '/client/settings') {
       document.title = 'Settings · AdChecked';
     } else if (pathname === '/client/publishers') {
@@ -911,8 +911,8 @@ export function ClientPortalFrame({ children, workspaceName }: {
   const navigate = useNavigate();
   const { clientId, publisherId, setClientId, setPublisherId } = useWorkspace();
   const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
-  const selfServe = session.role === 'client' && session.portals.find(p => p.client_id === clientId)?.self_serve;
-  const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) && pathname !== '/client/setup' });
+  const canManageGuidelines = session.role === 'client';
+  const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) && pathname !== '/client/guidelines' && pathname !== '/client/setup' });
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
     return localStore.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
@@ -1061,7 +1061,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
         <SidebarFooter className="gap-3 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
           <nav aria-label="Account navigation">
             <SidebarMenu>
-              {selfServe ? <SidebarMenuItem><SidebarMenuButton aria-current={pathname === '/client/setup' ? 'page' : undefined} isActive={pathname === '/client/setup'} tooltip="Workspace setup" onClick={() => void navigate({ to: '/client/setup' })}><Settings2 /><span>Workspace setup</span></SidebarMenuButton></SidebarMenuItem> : null}
+              {canManageGuidelines ? <SidebarMenuItem><SidebarMenuButton aria-current={pathname === '/client/guidelines' ? 'page' : undefined} isActive={pathname === '/client/guidelines'} tooltip="Guidelines" onClick={() => void navigate({ to: '/client/guidelines' })}><Settings2 /><span>Guidelines</span></SidebarMenuButton></SidebarMenuItem> : null}
               {session.role !== 'publisher' ? (
                 <SidebarMenuItem>
                   <SidebarMenuButton aria-current={pathname === '/client/plan' ? 'page' : undefined} isActive={pathname === '/client/plan'} tooltip="Plan & usage" onClick={() => void navigate({ to: '/client/plan' })}>
