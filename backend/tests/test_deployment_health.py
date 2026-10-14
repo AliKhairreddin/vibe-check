@@ -52,7 +52,22 @@ def test_health_check_verifies_workers_shards_and_ocr(monkeypatch):
     monkeypatch.setattr(check_backend_health.time, 'sleep', lambda _: None)
     state = {'workers': 5, 'configured_shards': 40, 'ocr': {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2}}
     monkeypatch.setattr(check_backend_health.httpx, 'get', lambda *a, **kw: SimpleNamespace(raise_for_status=lambda: None, json=lambda: state))
+    calls = []
+    def signup_probe(url, **kwargs):
+        calls.append((url, kwargs))
+        return SimpleNamespace(status_code=422, json=lambda: {'detail': [{'type': 'missing', 'loc': ['body', field]} for field in ('workspace_name', 'email', 'password')]})
+    monkeypatch.setattr(check_backend_health.httpx, 'post', signup_probe)
     check_backend_health.check_backend_health()
+    assert len(calls) == 1
+    assert calls[0][0] == 'https://app.adchecked.com/api/client/signup'
+    assert calls[0][1]['json'] == {}
+    assert calls[0][1]['headers'] == {'origin': 'https://app.adchecked.com'}
+    monkeypatch.setattr(check_backend_health.httpx, 'post', lambda *a, **kw: SimpleNamespace(status_code=404))
+    with pytest.raises(RuntimeError, match='current signup route'):
+        check_backend_health.check_backend_health()
+    monkeypatch.setattr(check_backend_health.httpx, 'post', lambda *a, **kw: SimpleNamespace(status_code=422, json=lambda: {'detail': []}))
+    with pytest.raises(RuntimeError, match='unexpected signup schema'):
+        check_backend_health.check_backend_health()
     state['configured_shards'] = 10
     with pytest.raises(RuntimeError, match='Wrong shard configuration'):
         check_backend_health.check_backend_health()
