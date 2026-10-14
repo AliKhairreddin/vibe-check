@@ -1,6 +1,6 @@
 import { localStore, sessionStore } from '@/lib/browser-storage';
 import { BillingGate } from './billing-panel';
-import { appPathname } from '@/lib/demo';
+import { appPathname, isDemo } from '@/lib/demo';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select } from '@/components/ui/select';
 import {
@@ -194,7 +194,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
         if (!active) return;
         setSession(nextSession);
         if (appPathname(window.location.pathname) === '/login' || appPathname(window.location.pathname) === '/') {
-          void navigate({ to: '/client', replace: true });
+          if (!resumeSelectedPlan()) void navigate({ to: '/client', replace: true });
         }
       })
       .catch(() => undefined)
@@ -218,6 +218,8 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       document.title = 'Review queue · AdChecked';
     } else if (pathname === '/client/uploads') {
       document.title = 'Uploads & progress · AdChecked';
+    } else if (pathname === '/client/setup') {
+      document.title = 'Workspace setup · AdChecked';
     } else if (pathname === '/client/settings') {
       document.title = 'Settings · AdChecked';
     } else if (pathname === '/client/publishers') {
@@ -232,6 +234,15 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       document.title = 'Overview · AdChecked';
     }
   }, [isCheckingSession, pathname, session]);
+
+  function resumeSelectedPlan() {
+    if (isDemo()) return false;
+    const params = new URLSearchParams(window.location.search);
+    const plan = params.get('plan');
+    if (plan !== 'starter' && plan !== 'growth') return false;
+    window.location.assign(`/signup?plan=${plan}&interval=${params.get('interval') === 'year' ? 'year' : 'month'}`);
+    return true;
+  }
 
   async function unlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -256,7 +267,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
       }
       setSession(nextSession);
       if (appPathname(window.location.pathname) === '/login' || appPathname(window.location.pathname) === '/') {
-        await navigate({ to: '/client', replace: true });
+        if (!resumeSelectedPlan()) await navigate({ to: '/client', replace: true });
       }
     } catch (reason) {
       setError(errorMessage(reason));
@@ -302,7 +313,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
           <CardContent>
             <form className="grid gap-4" onSubmit={unlock}>
               <div className="grid gap-2">
-                <Label htmlFor="client-username">Username</Label>
+                <Label htmlFor="client-username">Email or username</Label>
                 <Input
                   id="client-username"
                   value={username}
@@ -328,6 +339,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
                 {isSigningIn ? 'Signing in' : 'Sign in'}
               </Button>
             </form>
+            <a href="/signup" className="mt-4 flex justify-center text-sm font-medium underline underline-offset-4">Create your account</a>
             <a href="/demo" className="mt-4 flex justify-center rounded-lg border px-4 py-3 text-sm font-medium hover:bg-muted">Explore the demo</a>
             {error ? (
               <Alert variant="destructive" className="mt-4">
@@ -847,12 +859,13 @@ export function ClientPortalFrame({ children, workspaceName }: {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const { clientId, publisherId, setClientId, setPublisherId } = useWorkspace();
-  const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) });
+  const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
+  const selfServe = session.role === 'client' && session.portals.find(p => p.client_id === clientId)?.self_serve;
+  const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) && pathname !== '/client/setup' });
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
     return localStore.getItem(CLIENT_SIDEBAR_OPEN_KEY) !== 'false';
   });
-  const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
   const reviewQueueActive = pathname === '/client/reviews' || pathname.startsWith('/client/shared/')
     || /^\/client\/[^/]+\/reviews\/[^/]+$/.test(pathname);
   const routeClientId = pathname.match(/^\/client\/([^/]+)\/(?:batches|reviews)\//)?.[1];
@@ -997,6 +1010,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
         <SidebarFooter className="gap-3 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
           <nav aria-label="Account navigation">
             <SidebarMenu>
+              {selfServe ? <SidebarMenuItem><SidebarMenuButton aria-current={pathname === '/client/setup' ? 'page' : undefined} isActive={pathname === '/client/setup'} tooltip="Workspace setup" onClick={() => void navigate({ to: '/client/setup' })}><Settings2 /><span>Workspace setup</span></SidebarMenuButton></SidebarMenuItem> : null}
               {session.role !== 'publisher' ? (
                 <SidebarMenuItem>
                   <SidebarMenuButton aria-current={pathname === '/client/plan' ? 'page' : undefined} isActive={pathname === '/client/plan'} tooltip="Plan & usage" onClick={() => void navigate({ to: '/client/plan' })}>

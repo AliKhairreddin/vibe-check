@@ -21,6 +21,7 @@ import {
   ClientVerticalPage,
 } from '@/components/client-insights';
 import { PublishersPage, PublisherUploadsPage, ClientSharedLinksPage, ClientPlanPage } from '@/components/publisher-pages';
+import { WorkspaceSetupPage } from '@/components/workspace-setup';
 import { ClientSettingsPage } from '@/components/client-settings';
 import { SharedReviewQueue } from '@/components/shared-review-queue';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -113,6 +114,7 @@ const planRoute = createRoute({ getParentRoute: () => rootRoute, path: '/client/
 const router = createRouter({
   basepath: demoBasepath(),
   routeTree: rootRoute.addChildren([
+    createRoute({ getParentRoute: () => rootRoute, path: '/client/setup', component: WorkspaceSetupPage }),
     publishersRoute,
     sharesRoute,
     planRoute,

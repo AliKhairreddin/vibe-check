@@ -78,6 +78,7 @@ export function isStaticAssetPath(pathname: string): boolean {
 export function isClientPagePath(pathname: string): boolean {
   return pathname === '/'
     || pathname === '/login'
+    || pathname === '/signup'
     || pathname.startsWith('/share/')
     || pathname.startsWith('/invite/')
     || pathname === '/client'

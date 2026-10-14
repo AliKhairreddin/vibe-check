@@ -1,4 +1,5 @@
 import { handleDemoApi } from './demo';
+import { prepareSignup } from './signup';
 import { hasLocalWork, planPartnerDispatch, type ShardHeartbeat } from "./scaling";
 import { Container } from "@cloudflare/containers";
 import { deliverReleaseEmail, emailRoute } from './release-emails';
@@ -477,7 +478,7 @@ export class ReviewBackend extends Container<Env> {
 }
 
 export default {
-  async fetch(request, env, ctx): Promise<Response> {
+  async fetch(request: Request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const surface = hostSurface(url.hostname);
     if (surface === "unknown") return secureResponse(unsupportedHostResponse(), surface);
@@ -494,6 +495,10 @@ export default {
     }
 
     const legacyDocumentationView = legacyPartnerDocumentationView(url.pathname);
+
+    if (url.pathname === '/signup' && (surface === 'public' || surface === 'admin')) {
+      return secureResponse(redirectResponse(new URL('/signup' + url.search, CLIENT_ORIGIN)), surface);
+    }
 
     if (legacyDocumentationView) {
       const destination = new URL("/developers/api", ADMIN_ORIGIN);
@@ -524,7 +529,7 @@ export default {
         return secureResponse(notFoundResponse(), surface);
       }
       const isClientSignIn = surface === "client" && (
-        (url.pathname === "/api/client/session" || url.pathname === "/api/client/invitations/accept") && request.method === "POST"
+        ['/api/client/session', '/api/client/signup', '/api/client/invitations/accept', '/api/client/advertiser-invitations/accept'].includes(url.pathname) && request.method === "POST"
       );
       const isAdminSignIn = surface === "admin"
         && isAdminSessionPath(url.pathname)
@@ -539,6 +544,11 @@ export default {
           key: authRateLimitKey(request, surface),
         });
         if (!success) return secureResponse(rateLimitedResponse(), surface);
+      }
+      if (url.pathname === '/api/client/signup') {
+        const prepared = await prepareSignup(request, env.CONVEX_HTTP_SECRET);
+        if (prepared instanceof Response) return secureResponse(prepared, surface);
+        request = prepared;
       }
       const backendStartedAt = Date.now();
       const releaseEmailRoute = emailRoute(url.pathname);

@@ -279,6 +279,7 @@ export type ClientReviewList = {
 };
 
 export type ClientPortalSummary = {
+  self_serve?: boolean;
   billing_required?: boolean;
   category: string;
   client_id: string;

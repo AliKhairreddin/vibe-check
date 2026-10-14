@@ -828,7 +828,7 @@ def client_portal(client_id:str)->dict[str, str]:
         row=billing.account(clientId=client_id)
         if not row:
             raise HTTPException(404, 'Workspace not found.')
-        return {'display_name':row['name'], 'category':row['category'], 'offer_id':row['clientId']}
+        return {'display_name':row['name'], 'category':row['category'], 'offer_id':row['clientId'], 'self_serve':row.get('selfServe', False)}
     return config
 
 
@@ -838,6 +838,7 @@ def public_client_portal(client_id:str, config:dict[str, str])->dict[str, str]:
         'client_id':client_id,
         'display_name':config['display_name'],
         **({'billing_required':True} if client_id not in CLIENT_PORTALS else {}),
+        **({'self_serve':True} if config.get('self_serve') else {}),
     }
 
 
@@ -4056,6 +4057,8 @@ def review_media(job_id:str, request:Request):
 
 from . import billing
 billing.register(app)
+from . import signup
+signup.register(app)
 workspaces.register(app)
 release_emails.register(app)
 platform_monitoring.register(app)

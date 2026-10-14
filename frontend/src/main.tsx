@@ -6,6 +6,12 @@ async function startApplication() {
   const root = document.getElementById('root');
   if (!root) throw new Error('Application root is missing.');
 
+  if (window.location.pathname === '/signup') {
+    const { mountSignupApp } = await import('./signup-app');
+    mountSignupApp(root);
+    return;
+  }
+
   if (window.location.pathname === '/demo' || window.location.pathname.startsWith('/demo/')) {
     const { mountDemoApp } = await import('./demo-app');
     await mountDemoApp(root);

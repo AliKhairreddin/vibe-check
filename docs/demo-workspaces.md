@@ -44,9 +44,28 @@ but enabling a schedule never registers background execution; manual checks simu
 results. Live integration calls, real API keys, payments, and consequential operations
 are denied. The API reference's live request runner is also disabled in demo mode.
 
-“Create your account” explains the existing sales-assisted onboarding and leads to the
-pricing page after leaving the demo. Real accounts use the existing clean provisioning
-flow; they cannot inherit demo reviews or decisions.
+“Create your account” opens `/signup?from=demo` on the client hostname. Visitors
+create an email/password account and a new private advertiser workspace immediately;
+no invitation or sales contact is required. Signup creates a blank disabled policy,
+a starter allowance and an unpaid subscription record atomically. It never reads or
+copies a demo workspace. The real session cookie and demo capability are independent.
+Demo cleanup is attempted only after signup succeeds; failure does not undo the real
+account and the original 24-hour cleanup still applies.
+
+The signed-in visitor lands at `/client/setup` to add their own guidelines. Setup is
+available before subscribing; existing billing gates still protect reviews and
+publisher operations. Pricing can supply `plan=starter|growth&interval=month|year`
+to continue to hosted checkout, with retry after an account is created. Existing
+free accounts keep their exemption and are never enrolled by signup.
+
+Signup accepts only workspace name, email and password. The Worker checks host,
+origin and body size, replaces untrusted gateway headers, and derives an IP hash.
+The backend requires this trusted gateway and enforces a global Convex admission
+limit before password hashing (5 attempts/IP/hour, 200 total/hour). Limiter rows
+expire after one hour. Provisioning rejects duplicate normalized login names and
+workspace IDs. Passwords use the application's existing scrypt implementation and
+sessions use the existing signed HttpOnly cookie. Signup does not send email or
+create a Stripe customer until the visitor proceeds to checkout.
 
 ## Resource bounds
 

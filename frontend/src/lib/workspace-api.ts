@@ -32,3 +32,7 @@ export const createAdvertiser = (clientId: string, category: string) => requestJ
 export const resetAdvertiserInvite = (clientId: string) => requestJson<{ username: string; invite_url: string }>(`/api/admin/advertiser-workspaces/${encodeURIComponent(clientId)}/invite`, json({}));
 export const getAdminPlans = () => requestJson<(Plan & { name: string; billing?: BillingStatus })[]>('/api/admin/workspaces');
 export const setAdminPlan = (clientId: string, plan: Plan['plan'], publisherLimit: number, monthlyReviewLimit: number) => requestJson(`/api/admin/workspaces/${clientId}/plan`, json({ plan, publisher_limit: publisherLimit, monthly_review_limit: monthlyReviewLimit }, 'PUT'));
+
+export type WorkspaceSetup = { name: string; official_guidelines: string; configured: boolean };
+export const getWorkspaceSetup = (clientId: string) => requestJson<WorkspaceSetup>(`${base(clientId)}/setup`);
+export const saveWorkspaceSetup = (clientId: string, official_guidelines: string) => requestJson<WorkspaceSetup>(`${base(clientId)}/setup`, json({ official_guidelines }, 'PUT'));

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { Link, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CreditCard, ShieldCheck } from 'lucide-react';
 import type { ClientSession } from '@/lib/api';
@@ -13,7 +14,7 @@ function useBilling(clientId: string, required: boolean) {
   return useQuery({ queryKey: ['billing', clientId], queryFn: () => getBilling(clientId), enabled: required && !isDemo(), retry: 1, staleTime: 5000, refetchInterval: 15000 });
 }
 function BillingDetails({ clientId, state, publisher = false }: { clientId: string; state: BillingStatus; publisher?: boolean }) {
-  const [yearly, setYearly] = useState(false);
+  const [yearly, setYearly] = useState(() => new URLSearchParams(window.location.search).get('interval') === 'year');
   const cache = useQueryClient();
   const action = useMutation({ mutationFn: async (kind: 'starter' | 'growth' | 'portal' | 'refresh') => {
     if (kind === 'refresh') { await refreshBilling(clientId); await cache.invalidateQueries({ queryKey: ['billing', clientId] }); return; }
@@ -36,7 +37,7 @@ function BillingDetails({ clientId, state, publisher = false }: { clientId: stri
         return <div className="grid gap-3 rounded-xl border p-4" key={plan}><h3 className="font-semibold capitalize">{plan}</h3><p className="text-2xl font-semibold">${(monthly * (yearly ? 10 : 1)).toLocaleString()} <span className="text-sm font-normal text-muted-foreground">USD / {yearly ? 'year' : 'month'}</span></p><p className="text-sm text-muted-foreground">{plan === 'starter' ? '5 publisher teams · 250 reviews/month' : '25 publisher teams · 1,000 reviews/month'}</p><Button disabled={!available || action.isPending} onClick={() => action.mutate(plan)}>Subscribe to {plan === 'starter' ? 'Starter' : 'Growth'}</Button></div>;
       })}</div>
       <p className="text-xs leading-5 text-muted-foreground">Tax is calculated at checkout. Subscriptions renew automatically until canceled. Payments are sold through Link, Stripe’s merchant of record. Review limits reset each calendar month (UTC). No automatic overage charges.</p>
-    </> : <p className="text-sm text-muted-foreground">Live checkout is being prepared. Contact <a className="underline" href="mailto:hello@adchecked.com">hello@adchecked.com</a> to finish activation.</p> : null}
+    </> : <p className="text-sm text-muted-foreground">Checkout is temporarily unavailable. Your account and settings are saved. Please try again later.</p> : null}
     {!publisher ? <div className="flex flex-wrap gap-2">{state.hasCustomer ? <Button variant="outline" disabled={action.isPending || !state.checkoutReady} onClick={() => action.mutate('portal')}>Manage billing</Button> : null}<Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('refresh')}>{action.isPending ? 'Updating…' : 'Check payment status'}</Button></div> : <p className="text-sm">Ask your advertiser to activate or update their subscription to restore workspace access.</p>}
     {action.error ? <p role="alert" className="text-sm text-destructive">{action.error.message}</p> : null}
   </CardContent></Card>;
@@ -50,8 +51,11 @@ export function BillingPanel({ clientId, required, publisher = false }: { client
 }
 export function BillingGate({ session, logout, children }: { session: ClientSession; logout: () => Promise<void>; children: ReactNode }) {
   const { clientId, setClientId } = useWorkspace();
-  const required = session.portals.find(p => p.client_id === clientId)?.billing_required === true;
+  const portal = session.portals.find(p => p.client_id === clientId);
+  const required = portal?.billing_required === true;
+  const canSetup = portal?.self_serve === true && session.role === 'client';
+  const pathname = useRouterState({ select: state => state.location.pathname });
   const query = useBilling(clientId, required);
-  if (!required || isDemo() || query.data?.allowed) return children;
-  return <div className="min-h-screen bg-muted/20 px-5 py-8"><div className="mx-auto grid max-w-3xl gap-6"><div className="flex flex-wrap items-center justify-between gap-4"><a className="text-lg font-semibold" href="https://adchecked.com">AdChecked</a><Button variant="outline" onClick={() => void logout()}>Sign out</Button></div>{session.portals.length > 1 ? <Select value={clientId} onValueChange={value => setClientId(String(value))} options={session.portals.map(p => ({ value: p.client_id, label: p.display_name }))} /> : <h1 className="text-2xl font-semibold">{session.portals[0]?.display_name}</h1>}{query.error ? <div role="alert" className="rounded-xl border bg-card p-6"><p>We couldn’t check workspace access. Please try again.</p><Button className="mt-4" onClick={() => void query.refetch()}>Retry</Button></div> : query.data ? <BillingDetails clientId={clientId} state={query.data} publisher={session.role === 'publisher'} /> : <p>Checking workspace access…</p>}</div></div>;
+  if (!required || isDemo() || (canSetup && pathname === '/client/setup') || query.data?.allowed) return children;
+  return <div className="min-h-screen bg-muted/20 px-5 py-8"><div className="mx-auto grid max-w-3xl gap-6"><div className="flex flex-wrap items-center justify-between gap-4"><a className="text-lg font-semibold" href="https://adchecked.com">AdChecked</a><Button variant="outline" onClick={() => void logout()}>Sign out</Button></div>{session.portals.length > 1 ? <Select value={clientId} onValueChange={value => setClientId(String(value))} options={session.portals.map(p => ({ value: p.client_id, label: p.display_name }))} /> : <h1 className="text-2xl font-semibold">{session.portals[0]?.display_name}</h1>}{canSetup ? <Link to="/client/setup" className="text-sm font-medium underline underline-offset-4">Set up your review guidelines</Link> : null}{query.error ? <div role="alert" className="rounded-xl border bg-card p-6"><p>We couldn’t check workspace access. Please try again.</p><Button className="mt-4" onClick={() => void query.refetch()}>Retry</Button></div> : query.data ? <BillingDetails clientId={clientId} state={query.data} publisher={session.role === 'publisher'} /> : <p>Checking workspace access…</p>}</div></div>;
 }

@@ -2,7 +2,7 @@ import { configureDemoUi, clearDemoUi } from '@/lib/browser-storage';
 import { createRoot } from 'react-dom/client';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Building2, CheckCircle2, Clock3, FlaskConical, LoaderCircle, ScanSearch, ShieldCheck, Users } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { demoControl, DemoControlError, demoHome, type DemoRole, type DemoSession } from '@/lib/demo';
 
@@ -51,22 +51,9 @@ function DemoBanner({ session }: { session: DemoSession }) {
     <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2"><div className="min-w-0 text-sm"><span className="inline-flex items-center gap-2 font-semibold"><FlaskConical className="size-4" />Demo workspace</span><span className="ml-3 text-emerald-100">{experiences.find(e => e.role === session.role)?.name} · Fictional data · <span className="whitespace-nowrap">{remaining}h left</span></span><p className="mt-1 text-xs text-emerald-100">Changes stay in your session. Reviews and external actions are simulated.</p></div><div className="flex flex-wrap items-center gap-3 text-xs font-medium"><a href="/demo" className="rounded px-1 py-2 underline underline-offset-4">Switch experience</a><a href="/demo/signup" className="rounded-lg bg-white px-3 py-2 text-emerald-950">Create your account <span aria-hidden>↗</span></a></div></div>
   </div>;
 }
-function DemoSignup() {
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function proceed() {
-    setBusy(true);
-    try {
-      try { await demoControl('session', 'DELETE'); } catch (error) { if (!(error instanceof DemoControlError && error.status === 401)) throw error; }
-      clearDemoUi(); window.location.assign('https://adchecked.com/pricing');
-    }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Please try again.'); setBusy(false); }
-  }
-  return <main className="grid min-h-svh place-items-center bg-background p-5"><div className="grid w-full max-w-lg gap-5"><ShieldCheck className="size-10 text-emerald-700" /><h1 className="text-3xl font-semibold">Create your account</h1><p className="text-sm leading-6 text-muted-foreground">AdChecked accounts are set up with our team. Choose a plan and contact us to create your workspace. Your real account starts with clean data; demo records and decisions are never transferred.</p><Button disabled={busy} onClick={() => void proceed()}>{busy ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}Choose a plan and get started</Button><a className={buttonVariants({ variant: 'outline' })} href="/demo">Back to the demo</a>{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}</div></main>;
-}
 export async function mountDemoApp(root: HTMLElement) {
   document.title = 'Explore the demo · AdChecked';
-  if (window.location.pathname === '/demo/signup') { createRoot(root).render(<DemoSignup />); return; }
+  if (window.location.pathname === '/demo/signup') { window.location.replace(window.location.hostname.endsWith('adchecked.com') ? 'https://app.adchecked.com/signup?from=demo' : '/signup?from=demo'); return; }
   let session: DemoSession | null = null;
   try { session = await demoControl('session'); } catch (error) {
     if (!(error instanceof DemoControlError && error.status === 401)) {

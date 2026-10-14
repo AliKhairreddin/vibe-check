@@ -21,6 +21,7 @@ def call(module: str, function: str, args: dict, kind: str = 'query'):
         return storage._convex_call(kind, f'{module}:{function}', args)
     except Exception as exc:
         for message in (
+            'This email is already in use. Sign in instead.',
             'Workspace already exists or is invalid', 'Configure an enabled offer and its guidelines first',
             'Invitation expired or already used', 'Username already exists',
             'This workspace does not need a subscription.', 'Live billing is not available yet. Contact AdChecked.',
@@ -44,7 +45,7 @@ def advertiser_session(row: dict) -> dict:
 
 
 def authenticate(username: str, password: str) -> dict | None:
-    if not username.startswith('advertiser.'):
+    if not username.startswith('advertiser.') and '@' not in username:
         return None
     row = account(username=username.lower())
     if row and row['status'] == 'active' and workspaces.verify_password(password, row.get('passwordHash', '')):
