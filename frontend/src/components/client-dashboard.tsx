@@ -1,3 +1,4 @@
+import { listWorkspaceVerticals } from '@/lib/workspace-api';
 import { localStore, sessionStore } from '@/lib/browser-storage';
 import { BillingGate } from './billing-panel';
 import { appPathname, isDemo } from '@/lib/demo';
@@ -230,7 +231,7 @@ export function ClientPortalGate({ children }: { children: ReactNode }) {
     } else if (pathname === '/client/plan') {
       document.title = 'Plan & usage · AdChecked';
     } else if (pathname.startsWith('/client/verticals/')) {
-      document.title = 'Insurance performance · AdChecked';
+      document.title = 'Vertical performance · AdChecked';
     } else {
       document.title = 'Overview · AdChecked';
     }
@@ -912,6 +913,7 @@ export function ClientPortalFrame({ children, workspaceName }: {
   const { clientId, publisherId, setClientId, setPublisherId } = useWorkspace();
   const pathname = useRouterState({ select: (state) => appPathname(state.location.pathname) });
   const canManageGuidelines = session.role === 'client';
+  const availableVerticals = useQuery({ queryKey: ['workspace-verticals', clientId], queryFn: () => listWorkspaceVerticals(clientId), enabled: Boolean(clientId), staleTime: 30_000 });
   const publishers = useQuery({ queryKey: ['publishers', clientId], queryFn: () => listPublishers(clientId), enabled: session.role !== 'publisher' && Boolean(clientId) && pathname !== '/client/guidelines' && pathname !== '/client/setup' });
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -1006,18 +1008,9 @@ export function ClientPortalFrame({ children, workspaceName }: {
                       <span>Overview</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton aria-current={pathname === '/client/verticals/auto-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/auto-insurance'} tooltip="Auto insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'auto-insurance' } })}>
-                      <CarFront />
-                      <span>Auto Insurance</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton aria-current={pathname === '/client/verticals/home-insurance' ? 'page' : undefined} isActive={pathname === '/client/verticals/home-insurance'} tooltip="Home insurance performance" onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: 'home-insurance' } })}>
-                      <Home />
-                      <span>Home Insurance</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
+                  {(availableVerticals.data ?? []).filter(row => row.enabled !== false).map(row => <SidebarMenuItem key={row.verticalId}>
+                    <SidebarMenuButton aria-current={pathname === `/client/verticals/${row.verticalId}` ? 'page' : undefined} isActive={pathname === `/client/verticals/${row.verticalId}`} tooltip={`${row.name} performance`} onClick={() => void navigate({ to: '/client/verticals/$verticalId', params: { verticalId: row.verticalId } })}><Gauge /><span>{row.name}</span></SidebarMenuButton>
+                  </SidebarMenuItem>)}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>

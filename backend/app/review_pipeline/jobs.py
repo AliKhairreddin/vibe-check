@@ -244,7 +244,8 @@ async def _review_offer(
     policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
     # Raw disagreements no longer bypass the tested, versioned learning process.
     partner_feedback_precedents=[]
-    learning_context=await learning.review_context(profile.offer_id, profile.version)
+    scoped_policy = meta.vertical_policy_version is not None
+    learning_context={} if scoped_policy else await learning.review_context(profile.offer_id, profile.version)
     evidence=build_review_evidence(
         media_kind,
         meta,
@@ -268,21 +269,25 @@ async def _review_offer(
     enforce_consequence_based_red(report, profile)
     # Supplemental per-review policy is outside the saved policy's tested scope.
     applied_learning=[]
-    if not meta.policy_text.strip():
+    if not meta.policy_text.strip() and not scoped_policy:
         report,applied_learning=await learning.apply_learning(evidence, profile, report, learning_context, meta.model)
-    report.learning_version=int(learning_context.get('version', 0)) if not meta.policy_text.strip() else 0
+    report.learning_version=int(learning_context.get('version', 0)) if not meta.policy_text.strip() and not scoped_policy else 0
     report.applied_learning=applied_learning
     if job_id:
-        await learning.persist_evidence(job_id, profile, {**evidence, 'additional_policy_present':bool(meta.policy_text.strip())}, report.learning_version)
+        await learning.persist_evidence(job_id, profile, {**evidence, 'additional_policy_present':bool(meta.policy_text.strip()) or scoped_policy}, report.learning_version)
     report.offer_id=profile.offer_id
     report.offer_name=profile.display_name
     report.guideline_version=profile.version
-    report.policy_sources=[*policy_sources]
+    report.vertical_policy_version=meta.vertical_policy_version
+    report.vertical_policy_name=meta.vertical_policy_name
+    report.policy_sources=[*policy_sources] if not scoped_policy or meta.vertical_uses_default else []
+    if scoped_policy:
+        report.policy_sources.append(f'{meta.vertical_policy_name} vertical guidelines (version {meta.vertical_policy_version})')
     if report.learning_version:
         report.policy_sources.append(f'{profile.display_name} learned clarifications (version {report.learning_version})')
     if build_internal_override_context(profile):
         report.policy_sources.append(
-            f'{profile.display_name} current internal rules (version {profile.version})'
+            f'{meta.vertical_policy_name} scoped internal rules (vertical version {meta.vertical_policy_version})' if scoped_policy else f'{profile.display_name} current internal rules (version {profile.version})'
         )
     if partner_feedback_precedents:
         report.policy_sources.append(

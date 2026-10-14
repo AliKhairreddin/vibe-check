@@ -1,5 +1,5 @@
 import { apiUrl, demoRequest, isDemo, leaveDemo } from './demo';
-export type ReviewVertical = 'auto-insurance' | 'home-insurance';
+export type ReviewVertical = string;
 
 export type Status = {
   job_id: string;

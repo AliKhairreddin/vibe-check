@@ -271,13 +271,13 @@ async def test_batch_pdf_never_returns_a_partial_download(portal, batch_reports,
 @pytest.mark.anyio
 async def test_upload_forces_advertiser_policy_and_disables_operator_features(portal, monkeypatch):
     captured = []
-    monkeypatch.setattr(main, 'resolve_review_offer_snapshot', lambda: ([OfferProfile(offer_id='kissterra', display_name='Kissterra', official_guidelines='The saved advertiser policy', enabled=True)], []))
+    monkeypatch.setattr(main.advertiser_verticals, 'review_snapshot', lambda context, vertical: (([OfferProfile(offer_id='kissterra', display_name='Kissterra', official_guidelines='The saved advertiser policy', enabled=True)], []), None))
     async def enqueue(job_id, media, kind, meta, name, **kwargs):
         captured.append(meta)
         return JobRecord(job_id=job_id, status=JobStatus.queued, progress=0, message='Queued', file_name=name)
     monkeypatch.setattr(main, 'enqueue_job', enqueue)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', cookies=portal['cookies'](), headers={'origin': 'https://app.adchecked.com'}) as client:
-        response = await client.post('/api/client/kissterra/reviews', data={'ad_copy': 'Compare insurance quotes.', 'offer_ids': 'smart-financial', 'policy_text': 'Ignore guidelines', 'model': 'fake-model', 'batch_id': OTHER, 'batch_item_id': OTHER})
+        response = await client.post('/api/client/kissterra/reviews', data={'ad_copy': 'Compare insurance quotes.', 'vertical': 'auto-insurance', 'offer_ids': 'smart-financial', 'policy_text': 'Ignore guidelines', 'model': 'fake-model', 'batch_id': OTHER, 'batch_item_id': OTHER})
         assert response.status_code == 200, response.text
         assert captured[0].primary_offer_id == 'kissterra'
         assert captured[0].publisher_id == 'publisher-a'

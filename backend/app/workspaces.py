@@ -32,7 +32,7 @@ def call(function: str, args: dict, *, mutation: bool = False):
     except RuntimeError as exc:
         # Only expose our known business errors, never backend traces or secrets.
         message = str(exc)
-        for public in ('Publisher limit reached. Contact AdChecked to upgrade.', 'Monthly review allowance reached. Contact your advertiser to upgrade.', 'Invitation expired or already used', 'Only completed, available creatives can be shared', 'Username already exists', 'This login is managed by the publisher organization'):
+        for public in ('Publisher limit reached. Contact AdChecked to upgrade.', 'Monthly review allowance reached. Contact your advertiser to upgrade.', 'This vertical is no longer active. Choose another vertical.', 'Invitation expired or already used', 'Only completed, available creatives can be shared', 'Username already exists', 'This login is managed by the publisher organization'):
             if public in message:
                 raise HTTPException(409, public) from None
         raise HTTPException(503, 'Could not update the workspace. Please retry.') from None
@@ -168,7 +168,7 @@ def check_upload_owner(context: dict | None, metadata: dict):
 
 def claim_submission(context: dict | None, job_id: str):
     if context:
-        call('claimSubmission', {k: context[k] for k in ('clientId', 'publisherId')} | {'jobId': job_id}, mutation=True)
+        call('claimSubmission', {k: context[k] for k in ('clientId', 'publisherId')} | {'jobId': job_id} | ({'verticalId': context['verticalId']} if context.get('verticalId') else {}), mutation=True)
 
 
 def release_unstarted_submission(context: dict | None, job_id: str):

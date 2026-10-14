@@ -37,7 +37,7 @@ type ReviewForStats = {
   sourceStatus?: string;
   sourceUrl?: string;
   status: string;
-  vertical?: "auto-insurance" | "home-insurance";
+  vertical?: string;
 };
 
 type OfferReportForStorage = {
@@ -64,10 +64,7 @@ const statusArgs = {
   progress: v.number(),
   reportReady: v.boolean(),
   status: v.string(),
-  vertical: v.optional(v.union(
-    v.literal("auto-insurance"),
-    v.literal("home-insurance"),
-  )),
+  vertical: v.optional(v.string()),
 };
 
 function requireSecret(secret: string) {
@@ -608,7 +605,7 @@ function publicReview(review: {
   sourceStatus?: string;
   sourceUrl?: string;
   updatedAt: number;
-  vertical?: "auto-insurance" | "home-insurance";
+  vertical?: string;
 }, clientDecisions: ClientDecisionRow[] = []) {
   const hasAdCopy = review.hasAdCopy ?? true;
   const hasCreative = review.hasCreative ?? true;
@@ -1213,10 +1210,7 @@ export const getStats = query({
     secret: v.string(),
     offerId: v.optional(v.string()),
     offerIds: v.optional(v.array(v.string())),
-    vertical: v.optional(v.union(
-      v.literal("auto-insurance"),
-      v.literal("home-insurance"),
-    )),
+    vertical: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     requireSecret(args.secret);

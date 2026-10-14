@@ -89,7 +89,7 @@ test('groups metrics under performance, actions under workspace, and account con
   const reviewQueue = clientDashboardSource.indexOf('<span>Review queue</span>');
   const performance = clientDashboardSource.indexOf('>Performance</SidebarGroupLabel>');
   const overview = clientDashboardSource.indexOf('<span>Overview</span>');
-  const homeInsurance = clientDashboardSource.indexOf('<span>Home Insurance</span>');
+  const homeInsurance = clientDashboardSource.indexOf('{(availableVerticals.data');
   const sidebarFooter = clientDashboardSource.indexOf('<SidebarFooter');
   const plan = clientDashboardSource.indexOf('<span>Plan & usage</span>');
   const settings = clientDashboardSource.lastIndexOf('<span>Settings</span>');
@@ -104,9 +104,8 @@ test('groups metrics under performance, actions under workspace, and account con
   assert.ok(plan > sidebarFooter);
   assert.ok(settings > plan);
   assert.ok(company > settings);
-  assert.match(clientDashboardSource, /<span>Auto Insurance<\/span>/);
-  assert.match(clientDashboardSource, /<CarFront\s*\/>\s*<span>Auto Insurance<\/span>/);
-  assert.match(clientDashboardSource, /<span>Home Insurance<\/span>/);
+  assert.match(clientDashboardSource, /filter\(row => row.enabled !== false\)/);
+  assert.match(clientDashboardSource, /<span>\{row.name\}<\/span>/);
   assert.doesNotMatch(clientDashboardSource, /<SidebarGroupLabel[^>]*>Verticals<\/SidebarGroupLabel>/);
 });
 

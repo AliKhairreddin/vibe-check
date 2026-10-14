@@ -1,9 +1,25 @@
 """Advertisers manage only the policy attached to their signed-in workspace."""
+import asyncio
+from threading import BoundedSemaphore
+
 from fastapi import HTTPException, Request
+from starlette.datastructures import UploadFile
+from starlette.formparsers import MultiPartParser, MultiPartException
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .guideline_import import MAX_FILE_BYTES, extract_guidelines
+from .guideline_organizer import OrganizeInput, organize_guidelines
 from .review_pipeline import storage
 from .review_pipeline.models import OfferOverride, OfferProfile
+
+
+_import_capacity = BoundedSemaphore(2)
+_organize_capacity = BoundedSemaphore(2)
+
+
+class UploadTooLarge(MultiPartException):
+    pass
 
 
 class GuidelineRule(OfferOverride):
@@ -62,6 +78,47 @@ def own_offer(request: Request, client_id: str):
 
 
 def register(app):
+    @app.post('/api/client/{client_id}/guidelines/import')
+    async def import_guidelines(client_id: str, request: Request):
+        own_offer(request, client_id)
+        if not _import_capacity.acquire(blocking=False):
+            raise HTTPException(429, 'Document imports are busy. Please retry shortly.', headers={'Retry-After': '10'})
+        try:
+            async def bounded_stream():
+                size = 0
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_FILE_BYTES + 64 * 1024:
+                        raise UploadTooLarge('Upload a file of 10 MB or less.')
+                    yield chunk
+            parser = MultiPartParser(request.headers, bounded_stream(), max_files=1, max_fields=0)
+            try:
+                form = await parser.parse()
+                try:
+                    upload = form.get('file')
+                    if not isinstance(upload, UploadFile):
+                        raise HTTPException(400, 'Choose a guidelines file to import.')
+                    data = await upload.read(MAX_FILE_BYTES + 1)
+                    return await asyncio.to_thread(extract_guidelines, upload.filename or '', data)
+                finally:
+                    await form.close()
+            except UploadTooLarge:
+                raise HTTPException(413, 'Upload a file of 10 MB or less.') from None
+            except MultiPartException:
+                raise HTTPException(400, 'Upload one guidelines file at a time.') from None
+        finally:
+            _import_capacity.release()
+
+    @app.post('/api/client/{client_id}/guidelines/organize')
+    async def organize(client_id: str, payload: OrganizeInput, request: Request):
+        own_offer(request, client_id)
+        if not _organize_capacity.acquire(blocking=False):
+            raise HTTPException(429, 'Text organization is busy. Please retry shortly.', headers={'Retry-After': '10'})
+        try:
+            return await organize_guidelines(payload.text)
+        finally:
+            _organize_capacity.release()
+
     @app.get('/api/client/{client_id}/guidelines', response_model=OfferProfile)
     def get_guidelines(client_id: str, request: Request):
         return policy_call('query', 'get', {'offerId': own_offer(request, client_id)})

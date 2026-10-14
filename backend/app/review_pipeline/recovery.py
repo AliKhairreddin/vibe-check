@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import json
 import logging
 from dataclasses import asdict, dataclass
@@ -14,7 +15,7 @@ from . import storage
 from .drive import DriveFile
 from .media import MediaKind, detect_media_kind
 from .models import ReviewRequestMeta
-from .verticals import ReviewVertical, classify_review_vertical
+from .verticals import VERTICAL_ID_PATTERN, ReviewVertical, classify_review_vertical
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +230,7 @@ def list_interrupted_reviews(limit: int = 500) -> list[InterruptedReview]:
             processing_instance_id=row.get('processingInstanceId'),
             vertical=(
                 row['vertical']
-                if row.get('vertical') in {'auto-insurance', 'home-insurance'}
+                if isinstance(row.get('vertical'), str) and re.fullmatch(VERTICAL_ID_PATTERN, row['vertical'])
                 else classify_review_vertical(str(row.get('fileName') or ''))
             ),
         ))

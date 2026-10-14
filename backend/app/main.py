@@ -94,7 +94,7 @@ from .review_pipeline.queue import (
 )
 from .review_pipeline.media import detect_media_kind
 from .review_pipeline.ocr import initialize_ocr, shutdown_ocr, ocr_state
-from .review_pipeline.verticals import classify_review_vertical
+from .review_pipeline.verticals import classify_review_vertical, VERTICAL_ID_PATTERN
 from .review_pipeline.drive import (
     FOLDER_MIME_TYPE,
     MAX_DRIVE_SELECTION_FILES,
@@ -189,7 +189,6 @@ BATCH_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 JOB_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 OBSERVATION_DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 OFFER_ID_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$')
-REVIEW_VERTICALS = {'auto-insurance', 'home-insurance'}
 PARTNER_ID_PATTERN = re.compile(r'^partner_[0-9a-f]{32}$')
 API_KEY_ID_PATTERN = re.compile(r'^key_[0-9a-f]{32}$')
 MAX_BATCH_ITEMS = 100
@@ -310,11 +309,12 @@ def review_meta(
     batch_id: str,
     batch_item_id: str,
     offer_ids: list[str] | None = None,
+    snapshot=None,
 ) -> ReviewRequestMeta:
     if not 0.25 <= frame_interval_seconds <= 30:
         raise HTTPException(400, 'frame_interval_seconds must be between 0.25 and 30.')
     validate_review_text(ad_copy,policy_text,notes,manual_transcript)
-    offer_profiles,offer_outcomes=resolve_review_offer_snapshot()
+    offer_profiles,offer_outcomes=snapshot if snapshot is not None else resolve_review_offer_snapshot()
     if not offer_profiles:
         raise HTTPException(
             409,
@@ -378,8 +378,8 @@ def parse_offer_ids(value:str)->list[str]|None:
 
 def parse_review_vertical(value:str):
     normalized=value.strip().lower()
-    if normalized not in REVIEW_VERTICALS:
-        raise HTTPException(400,'Select Auto Insurance or Home Insurance for this review.')
+    if not re.fullmatch(VERTICAL_ID_PATTERN, normalized):
+        raise HTTPException(400,'Choose a valid review vertical.')
     return normalized
 
 
@@ -2571,9 +2571,9 @@ async def partner_review_history(
     offer_id:str|None=None,
     vertical:ReviewVertical|None=None,
 ):
-    """List reviews; with offer_id, optionally select auto-insurance or home-insurance.
+    """List reviews; with offer_id, optionally filter by a catalog or custom vertical ID.
 
-    Omit vertical to include both categories. Returned reviews include vertical and
+    Omit vertical to include all verticals. Returned reviews include vertical and
     nullable batch_id; only reviews released to the authorized shared offer are listed.
     Keep offer_id and vertical unchanged while following a pagination cursor.
     """
@@ -2973,13 +2973,15 @@ async def run_saved_review_automation(automation_id:str, request:Request):
 
 @app.post('/api/client/{client_id}/reviews', response_model=JobRecord)
 @app.post('/api/reviews', response_model=JobRecord)
-async def create_review(request:Request, creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form(''), vertical:str=Form('auto-insurance')):
+async def create_review(request:Request, creative:UploadFile|None=File(None), video:UploadFile|None=File(None), ad_copy:str=Form(''), policy_text:str=Form(''), notes:str=Form(''), manual_transcript:str=Form(''), model:str=Form(''), frame_interval_seconds:float=Form(1.0), scene_detection:bool=Form(False), batch_id:str=Form(''), batch_item_id:str=Form(''), offer_ids:str=Form(''), vertical:str=Form('')):
     context=workspaces.upload_context(request)
     if context:
         policy_text,model,batch_id,batch_item_id,offer_ids='', '', '', '', context['offerId']
     upload=creative or video
-    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
-    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical), **({'publisher_id':context['publisherId']} if context else {})})
+    snapshot, selected_policy = advertiser_verticals.review_snapshot(context, vertical) if context else (None, None)
+    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids), snapshot=snapshot)
+    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical or ('auto-insurance' if not context else '')), **({'publisher_id':context['publisherId']} if context else {}),
+        **({'vertical_policy_version':selected_policy['version'], 'vertical_policy_name':selected_policy['name'], 'vertical_uses_default':selected_policy['includeDefault']} if selected_policy else {})})
     if upload is None:
         if not meta.has_ad_copy:
             raise HTTPException(400, 'Choose a creative file or enter ad copy to review.')
@@ -3555,7 +3557,7 @@ async def complete_chunked_upload(
     batch_id: str = Form(''),
     batch_item_id: str = Form(''),
     offer_ids: str = Form(''),
-    vertical: str = Form('auto-insurance'),
+    vertical: str = Form(''),
 ):
     context=workspaces.upload_context(request)
     upload_dir, metadata = read_upload_metadata(upload_id)
@@ -3572,8 +3574,10 @@ async def complete_chunked_upload(
     if sum(path.stat().st_size for path in chunk_paths) != int(metadata['size']):
         raise HTTPException(409, 'Upload size does not match; restart this upload.')
 
-    meta = review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids))
-    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical), **({'publisher_id':context['publisherId']} if context else {})})
+    snapshot, selected_policy = advertiser_verticals.review_snapshot(context, vertical) if context else (None, None)
+    meta=review_meta(ad_copy, policy_text, notes, manual_transcript, model, frame_interval_seconds, scene_detection, batch_id, batch_item_id, parse_offer_ids(offer_ids), snapshot=snapshot)
+    meta=meta.model_copy(update={'vertical':parse_review_vertical(vertical or ('auto-insurance' if not context else '')), **({'publisher_id':context['publisherId']} if context else {}),
+        **({'vertical_policy_version':selected_policy['version'], 'vertical_policy_name':selected_policy['name'], 'vertical_uses_default':selected_policy['includeDefault']} if selected_policy else {})})
     media_path = upload_dir / str(metadata['file_name'])
     enqueued = False
     try:
@@ -3967,7 +3971,7 @@ def review_stats(
     if len(normalized) > 10 or any(not OFFER_ID_PATTERN.fullmatch(value) for value in normalized):
         raise HTTPException(400, 'Invalid offer IDs')
     normalized_vertical=vertical.strip().lower() if vertical else None
-    if normalized_vertical is not None and normalized_vertical not in REVIEW_VERTICALS:
+    if normalized_vertical is not None and not re.fullmatch(VERTICAL_ID_PATTERN, normalized_vertical):
         raise HTTPException(400, 'Invalid review vertical')
     return get_review_stats(normalized, normalized_vertical)
 
@@ -4059,8 +4063,9 @@ from . import billing
 billing.register(app)
 from . import signup
 signup.register(app)
-from . import advertiser_guidelines
+from . import advertiser_guidelines, advertiser_verticals
 advertiser_guidelines.register(app)
+advertiser_verticals.register(app)
 workspaces.register(app)
 release_emails.register(app)
 platform_monitoring.register(app)

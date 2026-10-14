@@ -97,3 +97,32 @@ async def test_existing_advertisers_open_the_same_saved_policy_and_exceptions(pr
         assert provision['profiles'] == before
         foreign = 'kissterra' if client_id != 'kissterra' else 'lead-economy'
         assert (await browser.get(f'/api/client/{foreign}/guidelines')).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_import_and_organization_are_scoped_drafts_and_never_save(provision, policies, monkeypatch):
+    from app import guideline_organizer
+    async def organize(text):
+        return {'text': '## General requirements\n\n' + text, 'removed': []}
+    monkeypatch.setattr(advertiser_guidelines, 'organize_guidelines', organize)
+    async with client() as browser:
+        own = (await browser.post('/api/client/signup', json=DETAILS)).json()['portals'][0]['client_id']
+        before = copy.deepcopy(provision['profiles'])
+        path = f'/api/client/{own}/guidelines'
+        response = await browser.post(path + '/import', files={'file': ('rules.txt', b'No guarantees.')})
+        assert response.status_code == 200, response.text
+        assert response.json()['text'] == 'No guarantees.'
+        assert (await browser.post(path + '/organize', json={'text': 'No guarantees.'})).status_code == 200
+        assert provision['profiles'] == before
+        assert not policies
+        for suffix in ['/import', '/organize']:
+            data = {'files': {'file': ('rules.txt', b'No guarantees.')}} if suffix == '/import' else {'json': {'text': 'No guarantees.'}}
+            assert (await browser.post('/api/client/kissterra/guidelines' + suffix, **data)).status_code == 404
+            assert (await browser.post(path + suffix, headers={'origin': 'https://evil.example'}, **data)).status_code == 403
+        assert (await browser.post(path + '/import', files=[('file', ('one.txt', b'one')), ('file', ('two.txt', b'two'))])).status_code == 400
+        monkeypatch.setattr(advertiser_guidelines, 'MAX_FILE_BYTES', 5)
+        assert (await browser.post(path + '/import', files={'file': ('rules.txt', b'x' * 70000)})).status_code == 413
+        monkeypatch.setattr(main, 'authenticate_client', lambda _: {'role': 'publisher', 'portal_ids': [own]})
+        assert (await browser.post(path + '/import', files={'file': ('rules.txt', b'No guarantees.')})).status_code == 403
+        assert (await browser.post(path + '/organize', json={'text': 'No guarantees.'})).status_code == 403
+        assert provision['profiles'] == before

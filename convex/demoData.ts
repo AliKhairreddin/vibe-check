@@ -1,11 +1,12 @@
 import type { ClientReviewItem, OfferProfile, Report, ReviewBatch, ReviewHistoryItem } from '../frontend/src/lib/api';
-import type { Publisher, SharedLink } from '../frontend/src/lib/workspace-api';
+import type { Publisher, SharedLink, WorkspaceVertical } from '../frontend/src/lib/workspace-api';
 import type { DemoRole } from '../shared/demo.ts';
 import { effectiveReviewStatus } from '../frontend/src/lib/client-review-status.ts';
 
 export type DemoReview = { history: ReviewHistoryItem; client: ClientReviewItem; report: Report; decisions: NonNullable<ClientReviewItem['decision']>[] };
 export type DemoEmail = { emailId: string; offerId: string; to: string[]; cc: string[]; replyTo: string; subject: string; message: string; signature: string; status: 'draft' | 'sent'; createdAt: number; expiresAt: number; sentAt?: number; links: { batchId: string; label: string; url: string; jobIds: string[] }[] };
 export type DemoState = {
+  verticals?: WorkspaceVertical[];
   offers: OfferProfile[]; reviews: DemoReview[]; batches: ReviewBatch[]; publishers: Publisher[];
   shares: (SharedLink & { jobIds: string[]; offerId: string })[];
   automations: Record<string, unknown>[];
@@ -23,7 +24,7 @@ export function demoClientSession(role: DemoRole) {
     portals: [{ client_id: DEMO_OFFER, display_name: DEMO_OFFER_NAMES[DEMO_OFFER], category: 'Auto insurance' }],
   };
 }
-export function makeDemoReview(id: string, now: number, input: { name: string; copy: string; offerIds: string[]; vertical?: 'auto-insurance' | 'home-insurance'; batchId?: string; itemId?: string; publisherId?: string; creative?: boolean; released?: boolean }, offers: OfferProfile[]): DemoReview {
+export function makeDemoReview(id: string, now: number, input: { name: string; copy: string; offerIds: string[]; vertical?: string; batchId?: string; itemId?: string; publisherId?: string; creative?: boolean; released?: boolean }, offers: OfferProfile[]): DemoReview {
   // Deterministic examples only. No model, media extraction, or provider call is made.
   const risky = /guarantee|everyone|government|official/i.test(input.copy);
   const qualify = /save|\d+%|cheapest/i.test(input.copy);

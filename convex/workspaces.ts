@@ -1,3 +1,4 @@
+import { selectedVertical } from './verticals.ts';
 import { v } from 'convex/values';
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server.js';
 import { requireBillingAccess } from './billing.ts';
@@ -104,8 +105,9 @@ export const suspendPublisher = mutation({
   },
 });
 export const claimSubmission = mutation({
-  args: { ...secret, clientId: v.string(), publisherId: v.string(), jobId: v.string() }, returns: v.null(), handler: async (ctx, args) => {
+  args: { ...secret, clientId: v.string(), publisherId: v.string(), jobId: v.string(), verticalId: v.optional(v.string()) }, returns: v.null(), handler: async (ctx, args) => {
     authorize(args.secret);
+    if (args.verticalId && !(await selectedVertical(ctx, args.clientId, args.verticalId))?.enabled) throw new Error('This vertical is no longer active. Choose another vertical.');
     await requireBillingAccess(ctx, args.clientId);
     const row = await publisher(ctx, args.publisherId);
     if (!row || row.clientId !== args.clientId || row.status !== 'active') throw new Error('Publisher unavailable');
@@ -153,7 +155,7 @@ export const listSubmissions = query({
     return (await Promise.all(rows.filter(row => row.clientId === args.clientId).map(async row => {
       const review = await ctx.db.query('reviewOfferStats').withIndex('by_job_id_and_offer_id', q => q.eq('jobId', row.jobId).eq('offerId', args.clientId)).unique();
       if (review?.deletedAt !== undefined || ((!review || review.withheld) && args.previewPublisherId !== row.publisherId)) return null;
-      return { released: Boolean(review && !review.withheld), jobId: row.jobId, publisherId: row.publisherId, createdAt: row.createdAt, fileName: review?.fileName ?? 'Preparing submission', status: review?.status ?? 'queued', progress: review?.progress ?? (review?.status === 'complete' ? 100 : 0), message: review?.message ?? (review?.status === 'complete' ? 'Review complete' : review?.status === 'failed' ? 'Review failed' : 'Preparing submission') };
+      return { released: Boolean(review && !review.withheld), jobId: row.jobId, publisherId: row.publisherId, vertical: review?.vertical ?? 'auto-insurance', createdAt: row.createdAt, fileName: review?.fileName ?? 'Preparing submission', status: review?.status ?? 'queued', progress: review?.progress ?? (review?.status === 'complete' ? 100 : 0), message: review?.message ?? (review?.status === 'complete' ? 'Review complete' : review?.status === 'failed' ? 'Review failed' : 'Preparing submission') };
     }))).filter(Boolean);
   },
 });

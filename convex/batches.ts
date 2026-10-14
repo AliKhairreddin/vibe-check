@@ -33,7 +33,7 @@ type BatchItem = {
   message: string;
   result?: string;
   status: string;
-  vertical?: "auto-insurance" | "home-insurance";
+  vertical?: string;
 };
 
 type BatchReviewContext = {
@@ -118,8 +118,7 @@ const publicBatchValidator = v.object({
     result: v.union(v.string(), v.null()),
     status: v.string(),
     vertical: v.union(
-      v.literal("auto-insurance"),
-      v.literal("home-insurance"),
+      v.string(),
       v.null(),
     ),
   })),
@@ -489,10 +488,7 @@ export const createBatch = mutation({
       fileName: v.string(),
       itemId: v.string(),
       mediaKind: v.string(),
-      vertical: v.optional(v.union(
-        v.literal("auto-insurance"),
-        v.literal("home-insurance"),
-      )),
+      vertical: v.optional(v.string()),
       offerOutcomes: v.optional(v.array(v.object({
         adCopyResult: v.optional(v.string()),
         creativeResult: v.optional(v.string()),

@@ -1,3 +1,4 @@
+import { VERTICAL_CATALOG, verticalLabel as catalogVerticalLabel } from '../../../convex/verticalCatalog';
 import { ReleaseButton } from '@/components/release-controls';
 import { hasReviewReleases } from '@/lib/review-releases';
 import { Select } from '@/components/ui/select';
@@ -163,8 +164,7 @@ export function DashboardPage() {
               className="h-10 min-w-40 font-medium"
               options={[
                 { value: 'all', label: 'All verticals' },
-                { value: 'auto-insurance', label: 'Auto Insurance' },
-                { value: 'home-insurance', label: 'Home Insurance' },
+                ...VERTICAL_CATALOG.map(([value, label]) => ({ value, label })),
               ]}
             />
           </label>
@@ -669,8 +669,7 @@ function offerFilterLabel(offers: OfferCatalogItem[], selectedOfferIds: string[]
 }
 
 function verticalLabel(vertical: ReviewVertical | 'all') {
-  if (vertical === 'auto-insurance') return 'Auto Insurance';
-  if (vertical === 'home-insurance') return 'Home Insurance';
+  if (vertical !== 'all') return catalogVerticalLabel(vertical);
   return 'All verticals';
 }
 

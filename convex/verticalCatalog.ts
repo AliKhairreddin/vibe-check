@@ -1,0 +1,36 @@
+export const VERTICAL_CATALOG = [
+  ['auto-insurance', 'Auto Insurance', 'Insurance'], ['home-insurance', 'Home Insurance', 'Insurance'],
+  ['health-insurance', 'Health Insurance', 'Insurance'], ['medicare', 'Medicare', 'Insurance'],
+  ['life-insurance', 'Life Insurance', 'Insurance'], ['final-expense', 'Final Expense', 'Insurance'],
+  ['renters-insurance', 'Renters Insurance', 'Insurance'], ['pet-insurance', 'Pet Insurance', 'Insurance'],
+  ['business-insurance', 'Business Insurance', 'Insurance'], ['travel-insurance', 'Travel Insurance', 'Insurance'],
+  ['disability-insurance', 'Disability Insurance', 'Insurance'], ['dental-insurance', 'Dental Insurance', 'Insurance'],
+  ['personal-loans', 'Personal Loans', 'Finance'], ['business-loans', 'Business Loans', 'Finance'],
+  ['mortgage', 'Mortgage', 'Finance'], ['mortgage-refinance', 'Mortgage Refinance', 'Finance'],
+  ['debt-relief', 'Debt Relief', 'Finance'], ['credit-repair', 'Credit Repair', 'Finance'],
+  ['credit-cards', 'Credit Cards', 'Finance'], ['banking', 'Banking', 'Finance'],
+  ['investing', 'Investing', 'Finance'], ['tax-services', 'Tax Services', 'Finance'],
+  ['solar', 'Solar', 'Home services'], ['roofing', 'Roofing', 'Home services'],
+  ['hvac', 'HVAC', 'Home services'], ['windows-doors', 'Windows & Doors', 'Home services'],
+  ['bathroom-remodeling', 'Bathroom Remodeling', 'Home services'], ['kitchen-remodeling', 'Kitchen Remodeling', 'Home services'],
+  ['home-warranty', 'Home Warranty', 'Home services'], ['home-security', 'Home Security', 'Home services'],
+  ['plumbing', 'Plumbing', 'Home services'], ['electrical', 'Electrical', 'Home services'],
+  ['pest-control', 'Pest Control', 'Home services'], ['landscaping', 'Landscaping', 'Home services'],
+  ['cleaning', 'Cleaning', 'Home services'], ['moving', 'Moving', 'Home services'],
+  ['auto-warranty', 'Auto Warranty', 'Automotive'], ['auto-sales', 'Auto Sales', 'Automotive'],
+  ['auto-financing', 'Auto Financing', 'Automotive'], ['auto-repair', 'Auto Repair', 'Automotive'],
+  ['personal-injury', 'Personal Injury', 'Legal'], ['mass-tort', 'Mass Tort', 'Legal'], ['legal-services', 'Legal Services', 'Legal'],
+  ['healthcare', 'Healthcare', 'Health & wellness'], ['telehealth', 'Telehealth', 'Health & wellness'],
+  ['dental-care', 'Dental Care', 'Health & wellness'], ['senior-care', 'Senior Care', 'Health & wellness'],
+  ['fitness', 'Fitness', 'Health & wellness'], ['weight-management', 'Weight Management', 'Health & wellness'],
+  ['supplements', 'Supplements', 'Health & wellness'], ['beauty', 'Beauty', 'Health & wellness'],
+  ['real-estate', 'Real Estate', 'Other industries'], ['education', 'Education', 'Other industries'],
+  ['employment', 'Employment', 'Other industries'], ['travel', 'Travel', 'Other industries'],
+  ['ecommerce', 'E-commerce', 'Other industries'], ['software', 'Software', 'Other industries'],
+  ['business-services', 'Business Services', 'Other industries'], ['internet-telecom', 'Internet & Telecom', 'Other industries'],
+  ['entertainment', 'Entertainment', 'Other industries'], ['nonprofit', 'Nonprofit', 'Other industries'],
+] as const;
+export const verticalLabel = (id: string) => VERTICAL_CATALOG.find(item => item[0] === id)?.[1]
+  ?? id.replace(/^custom-/, '').replace(/-[a-f0-9]{8}$/, '').split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+export const validVerticalId = (id: string) => /^[a-z0-9][a-z0-9-]{0,79}$/.test(id);
+export const LEGACY_VERTICALS = ['auto-insurance', 'home-insurance'];

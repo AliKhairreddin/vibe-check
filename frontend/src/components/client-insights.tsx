@@ -1,3 +1,4 @@
+import { verticalLabel } from '../../../convex/verticalCatalog';
 import { useWorkspace } from './workspace-context';
 import { ShareButton } from './share-controls';
 import { useMemo } from 'react';
@@ -97,8 +98,7 @@ export function ClientDashboardPage() {
 
 export function ClientVerticalPage() {
   const { verticalId } = useParams({ from: '/client/verticals/$verticalId' });
-  const vertical = VERTICALS.find((item) => item.id === verticalId);
-  return <ClientInsights vertical={vertical?.id ?? 'auto-insurance'} />;
+  return <ClientInsights vertical={verticalId} />;
 }
 
 export function ClientBatchPage() {
@@ -222,7 +222,8 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
   const overrides = reviews.filter(isClientOverride).length;
   const approvalRate = reviews.length ? Math.round((counts.green / reviews.length) * 100) : 0;
   const isLoading = queries.some((query) => query.isLoading);
-  const selectedVertical = vertical ? VERTICALS.find((item) => item.id === vertical) : null;
+  const displayVerticals = [...new Set([...VERTICALS.map(row => row.id), ...allEntries.map(row => row.review.vertical)])].map(id => VERTICALS.find(row => row.id === id) ?? { id, label: verticalLabel(id), icon: CarFront, description: `Performance and decision trends for ${verticalLabel(id).toLowerCase()} creatives.` });
+  const selectedVertical = vertical ? displayVerticals.find(item => item.id === vertical) ?? { id: vertical, label: verticalLabel(vertical), description: 'Creative performance', icon: CarFront } : null;
 
   return (
     <ClientPortalFrame>
@@ -254,7 +255,7 @@ function ClientInsights({ vertical }: { vertical?: ReviewVertical }) {
 
         {!vertical ? (
           <section className="grid gap-3 sm:grid-cols-2">
-            {VERTICALS.map((item) => {
+            {displayVerticals.map((item) => {
               const Icon = item.icon;
               const verticalReviews = allEntries.filter((entry) => entry.review.vertical === item.id).map((entry) => entry.review);
               const verticalCounts = statusCounts(verticalReviews);

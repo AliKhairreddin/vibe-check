@@ -1060,7 +1060,7 @@ export const listSharedOfferReviews = query({
     paginationOpts: paginationOptsValidator,
     partnerId: v.string(),
     secret: v.string(),
-    vertical: v.optional(v.union(v.literal("auto-insurance"), v.literal("home-insurance"))),
+    vertical: v.optional(v.string()),
   },
   returns: v.any(),
   handler: async (ctx, args) => {

@@ -419,7 +419,7 @@ const endpoints: Endpoint[] = [
     scope: 'history:read',
     fields: [
       { name: 'offer_id', label: 'Shared offer ID', location: 'query', placeholder: 'acp', description: 'Optional. Requires shared internal history access for this offer.' },
-      { name: 'vertical', label: 'Insurance category', location: 'query', placeholder: 'home-insurance', description: 'Optional: auto-insurance or home-insurance. Requires offer_id. Omit for both categories; reset the cursor when changing category.' },
+      { name: 'vertical', label: 'Creative vertical', location: 'query', placeholder: 'home-insurance', description: 'Optional vertical ID, such as auto-insurance, home-insurance, solar, or a custom vertical ID returned on a review. Requires offer_id. Omit for all verticals; reset the cursor when changing vertical.' },
       ...paginationFields,
     ],
   },

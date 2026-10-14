@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ResultStatus = Literal['green','yellow','red']
-ReviewVertical = Literal['auto-insurance','home-insurance']
+from .verticals import ReviewVertical
 EnforcementConsequence = Literal[
     'none',
     'payment_withheld_or_forfeited',
@@ -189,6 +189,8 @@ class OfferComplianceResult(BaseModel):
     offer_id: str = 'acp'
     offer_name: str = 'ACP'
     guideline_version: int | None = None
+    vertical_policy_version: int | None = None
+    vertical_policy_name: str | None = None
     learning_version: int = 0
     applied_learning: list[str] = Field(default_factory=list)
     overall_status: ResultStatus
@@ -319,6 +321,9 @@ class ReviewRequestMeta(BaseModel):
     automation_run_id: str | None = None
     automation_file_id: str | None = None
     automation_file_modified_time: str = ''
+    vertical_policy_version: int | None = None
+    vertical_policy_name: str | None = None
+    vertical_uses_default: bool = True
     publisher_id: str | None = None
     api_partner_id: str | None = None
     api_key_id: str | None = None

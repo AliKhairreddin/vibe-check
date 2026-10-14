@@ -1,7 +1,7 @@
 import { requestJson, type OfferProfile, type ClientSession, type ClientReviewItem, type ClientReviewList, type OfferResult, type ReviewEvidenceFrame } from './api';
 export type Publisher = { managedLogin?: boolean; publisherId: string; name: string; username: string; status: 'invited' | 'active' | 'suspended'; createdAt: number; inviteExpiresAt: number | null };
 export type Invitation = { publisher_id: string; username: string; invite_url: string };
-export type Submission = { released: boolean; jobId: string; publisherId: string; fileName: string; status: string; progress: number; message: string; createdAt: number };
+export type Submission = { vertical?: string; released: boolean; jobId: string; publisherId: string; fileName: string; status: string; progress: number; message: string; createdAt: number };
 export type Plan = { clientId: string; plan: 'pilot' | 'starter' | 'growth' | 'enterprise'; publisherLimit: number; monthlyReviewLimit: number; monthlyReviews: number; publishers: number };
 export type SharedLink = { shareId: string; title: string; createdAt: number; expiresAt: number; revokedAt: number | null; count: number };
 export type SharedDetail = { review: ClientReviewItem; report: OfferResult; media_url: string; evidence_frames: ReviewEvidenceFrame[] };
@@ -40,3 +40,17 @@ export const saveWorkspaceSetup = (clientId: string, official_guidelines: string
 export type WorkspaceGuidelinesInput = Pick<OfferProfile, 'official_guidelines' | 'internal_overrides' | 'enabled'> & { expected_version: number };
 export const getWorkspaceGuidelines = (clientId: string) => requestJson<OfferProfile>(`${base(clientId)}/guidelines`);
 export const saveWorkspaceGuidelines = (clientId: string, policy: WorkspaceGuidelinesInput) => requestJson<OfferProfile>(`${base(clientId)}/guidelines`, json(policy, 'PUT'));
+
+export type GuidelineImport = { filename: string; text: string; warnings: string[] };
+export const importWorkspaceGuidelines = (clientId: string, file: File) => {
+  const body = new FormData(); body.set('file', file);
+  return requestJson<GuidelineImport>(`${base(clientId)}/guidelines/import`, { method: 'POST', body });
+};
+
+export type OrganizedGuidelines = { text: string; removed: { text: string; reason: string }[] };
+export const organizeWorkspaceGuidelines = (clientId: string, text: string) => requestJson<OrganizedGuidelines>(`${base(clientId)}/guidelines/organize`, json({ text }));
+
+export type WorkspaceVertical = { verticalId: string; name: string; group: string; enabled: boolean; includeDefault: boolean; officialGuidelines: string; internalOverrides: { overrideId: string; title: string; guidance: string; rationale: string; enabled: boolean }[]; version: number; updatedAt: number };
+export const listWorkspaceVerticals = (clientId: string) => requestJson<WorkspaceVertical[]>(`${base(clientId)}/verticals`);
+export const listPublisherVerticals = (clientId: string) => requestJson<{ verticalId: string; name: string }[]>(`${base(clientId)}/verticals`);
+export const saveWorkspaceVertical = (clientId: string, verticalId: string, data: { name: string; enabled: boolean; include_default: boolean; official_guidelines: string; internal_overrides: OfferProfile['internal_overrides']; expected_version: number }) => requestJson<WorkspaceVertical>(`${base(clientId)}/verticals/${encodeURIComponent(verticalId)}`, json(data, 'PUT'));

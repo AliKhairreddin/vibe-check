@@ -1,3 +1,4 @@
+import { verticalLabel } from '../../convex/verticalCatalog';
 import { localStore } from '@/lib/browser-storage';
 import { demoBasepath, appPathname, apiUrl, isDemo, pageUrl } from '@/lib/demo';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -2137,7 +2138,7 @@ function reviewVertical(review: ReviewHistoryItem): ReviewVertical {
 }
 
 function historyVerticalLabel(vertical: ReviewVertical) {
-  return vertical === 'home-insurance' ? 'Home Insurance' : 'Auto Insurance';
+  return verticalLabel(vertical);
 }
 
 function historyEntryItemCount(entry: Extract<HistoryEntry, { kind: 'batch' }>) {

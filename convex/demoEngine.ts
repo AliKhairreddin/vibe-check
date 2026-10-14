@@ -1,3 +1,5 @@
+import { VERTICAL_CATALOG } from './verticalCatalog.ts';
+import type { WorkspaceVertical } from '../frontend/src/lib/workspace-api';
 // This adapter implements the application's API contracts using only one bounded,
 // visitor-owned snapshot. It deliberately has no database, fetch, or scheduler access.
 import { effectiveReviewStatus } from '../frontend/src/lib/client-review-status.ts';
@@ -54,9 +56,40 @@ export function runDemoRequest(state: DemoState, role: DemoRole, path: string, m
   };
   const offerIds = () => {
     const ids = clientMatch ? [DEMO_OFFER] : strings(body.offer_ids);
-    if (!ids.length || ids.some(id => !state.offers.some(o => o.offer_id === id && o.enabled && o.official_guidelines))) fail(400, 'Choose enabled demo offers with saved guidelines.');
+    const selected = publisher ? allVerticals().find(row => row.verticalId === body.vertical && row.enabled) : undefined;
+    if (!ids.length || ids.some(id => !state.offers.some(o => o.offer_id === id && ((selected && !selected.includeDefault && selected.officialGuidelines) || (o.enabled && o.official_guidelines))))) fail(400, 'Choose enabled demo offers with saved guidelines.');
     return [...new Set(ids)];
   };
+  const allVerticals = (): WorkspaceVertical[] => {
+    const saved = state.verticals ?? [];
+    return [...VERTICAL_CATALOG.map(([verticalId, name, group]) => saved.find(row => row.verticalId === verticalId) ?? {
+      verticalId, name, group, enabled: ['auto-insurance', 'home-insurance'].includes(verticalId), includeDefault: ['auto-insurance', 'home-insurance'].includes(verticalId), officialGuidelines: '', internalOverrides: [], version: 0, updatedAt: 0,
+    }), ...saved.filter(row => !VERTICAL_CATALOG.some(item => item[0] === row.verticalId))];
+  };
+  if (clientMatch && route === '/api/verticals') {
+    requireMethod(method, ['GET']);
+    return allVerticals().filter(row => !publisher || row.enabled).map(row => publisher ? { verticalId: row.verticalId, name: row.name } : row);
+  }
+  const verticalMatch = route.match(/^\/api\/verticals\/([^/]+)$/);
+  if (clientMatch && verticalMatch) {
+    requireMethod(method, ['PUT']);
+    if (role !== 'advertiser') fail(403, 'Only the advertiser can manage verticals.');
+    const id = verticalMatch[1];
+    const catalog = VERTICAL_CATALOG.find(row => row[0] === id);
+    if (!catalog && !/^custom-[a-z0-9][a-z0-9-]{0,72}$/.test(id)) fail(400, 'Choose a valid vertical.');
+    const old = allVerticals().find(row => row.verticalId === id);
+    if (body.expected_version !== (old?.version ?? 0)) fail(409, 'Vertical changed since you opened it. Reload before saving.');
+    if (typeof body.official_guidelines !== 'string' || body.official_guidelines.length > 12000 || !Array.isArray(body.internal_overrides) || body.internal_overrides.length > 10) fail(400, 'The demo supports 12,000 characters and ten rules per vertical.');
+    const rules = body.internal_overrides.map(object).map(rule => ({ overrideId: text(rule.override_id, 80), title: text(rule.title, 160), guidance: text(rule.guidance, 2000), rationale: text(rule.rationale, 2000), enabled: rule.enabled === true }));
+    if (rules.some(rule => !rule.overrideId || !rule.title || !rule.guidance) || new Set(rules.map(rule => rule.overrideId)).size !== rules.length) fail(400, 'Each rule needs a unique ID, title, and guidance.');
+    const row = { verticalId: id, name: catalog?.[1] ?? text(body.name, 100), group: catalog?.[2] ?? 'Custom', enabled: body.enabled === true, includeDefault: body.include_default === true, officialGuidelines: body.official_guidelines.trim(), internalOverrides: rules, version: (old?.version ?? 0) + 1, updatedAt: now };
+    if (row.name.length < 2 || (row.enabled && !row.includeDefault && !row.officialGuidelines)) fail(400, 'Add a name and guidelines before activating.');
+    state.verticals ??= [];
+    const index = state.verticals.findIndex(item => item.verticalId === id);
+    if (index < 0) { if (state.verticals.length >= 10) fail(429, 'The demo supports ten configured verticals.'); state.verticals.push(row); }
+    else state.verticals[index] = row;
+    return row;
+  }
   if (clientMatch && route === '/api/guidelines') {
     requireMethod(method, ['GET', 'PUT']);
     if (role !== 'advertiser') fail(403, 'Only the advertiser can manage guidelines.');
@@ -120,11 +153,13 @@ export function runDemoRequest(state: DemoState, role: DemoRole, path: string, m
     requireMethod(method, ['POST']);
     if (!staff && !publisher) fail(403, 'Only a publisher can submit in this experience.');
     if (state.reviews.length >= 80) fail(429, 'This demo has reached 80 reviews. Start a fresh demo to continue.');
+    const selectedVertical = publisher ? allVerticals().find(row => row.verticalId === body.vertical && row.enabled) : undefined;
+    if (publisher && !selectedVertical) fail(400, 'Choose an active vertical for these creatives.');
     const copy = text(body.ad_copy, 5000);
     if (!copy && !text(body.file_name)) fail(400, 'Enter ad copy or choose a sample creative.');
     if (body.batch_id && !state.batches.some(b => b.batch_id === body.batch_id)) fail(404, 'Batch not found in this demo.');
     const review = makeDemoReview(`demo-${nonce}`, now, { name: text(body.file_name, 160) || 'New copy review (demo)', copy: copy || 'Compare options. Rates and eligibility vary.',
-      offerIds: offerIds(), vertical: body.vertical === 'home-insurance' ? 'home-insurance' : 'auto-insurance', batchId: text(body.batch_id) || undefined, itemId: text(body.batch_item_id) || undefined, creative: body.has_creative === true }, state.offers);
+      offerIds: offerIds(), vertical: selectedVertical?.verticalId ?? (text(body.vertical) || 'auto-insurance'), batchId: text(body.batch_id) || undefined, itemId: text(body.batch_item_id) || undefined, creative: body.has_creative === true }, state.offers);
     state.reviews.unshift(review);
     const batch = state.batches.find(b => b.batch_id === body.batch_id);
     if (batch) {
@@ -202,7 +237,7 @@ export function runDemoRequest(state: DemoState, role: DemoRole, path: string, m
     if (batchMatch[2]) return { demo_reports: rows.map(r => ({ ...(clientMatch ? r.report.offer_results?.find(o => o.offer_id === DEMO_OFFER) ?? r.report : r.report), file_name: r.history.file_name })) };
     return { ...batch, items: batch.items.filter(i => rows.some(r => r.history.job_id === i.job_id)) };
   }
-  if (route === '/api/submissions') { requireMethod(method, ['GET']); return publisherFilter(visible()).map(r => ({ jobId: r.history.job_id, publisherId: r.client.publisher_id, fileName: r.history.file_name, status: r.history.status, progress: 100, message: r.history.message, createdAt: r.history.created_at, released: r.client.released })); }
+  if (route === '/api/submissions') { requireMethod(method, ['GET']); return publisherFilter(visible()).map(r => ({ jobId: r.history.job_id, vertical: r.history.vertical, publisherId: r.client.publisher_id, fileName: r.history.file_name, status: r.history.status, progress: 100, message: r.history.message, createdAt: r.history.created_at, released: r.client.released })); }
   const deleteSubmission = route.match(/^\/api\/submissions\/([^/]+)$/);
   if (deleteSubmission) { requireMethod(method, ['DELETE']); if (!publisher) fail(403, 'Publisher access required.'); const r = reviewById(deleteSubmission[1]); if (r.client.released) fail(409, 'Released creatives stay in the review history.'); state.reviews = state.reviews.filter(x => x !== r); return { removed: true }; }
   if (route === '/api/plan') { requireMethod(method, ['GET']); return { ...state.plan, clientId: DEMO_OFFER, monthlyReviews: state.reviews.length, publishers: state.publishers.length }; }

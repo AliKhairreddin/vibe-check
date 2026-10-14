@@ -1,4 +1,4 @@
-export type ReviewVertical = "auto-insurance" | "home-insurance";
+export type ReviewVertical = string;
 
 const HOME_TOKEN = /(^|[^a-z0-9])home([^a-z0-9]|$)/i;
 const AUTO_TOKEN = /(^|[^a-z0-9])auto([^a-z0-9]|$)/i;

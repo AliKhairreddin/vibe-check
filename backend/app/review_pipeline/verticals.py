@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+import json
+from pathlib import Path
+from typing import Annotated
+from pydantic import Field
 
 
-ReviewVertical = Literal['auto-insurance', 'home-insurance']
+VERTICAL_CATALOG = json.loads((Path(__file__).parents[1] / 'vertical_catalog.json').read_text())
+VERTICAL_ID_PATTERN = r'^(?:' + '|'.join(re.escape(row[0]) for row in VERTICAL_CATALOG) + r'|custom-[a-z0-9][a-z0-9-]{0,72})$'
+ReviewVertical = Annotated[str, Field(pattern=VERTICAL_ID_PATTERN)]
 
 _HOME_TOKEN = re.compile(r'(^|[^A-Z0-9])HOME([^A-Z0-9]|$)', re.IGNORECASE)
 _AUTO_TOKEN = re.compile(r'(^|[^A-Z0-9])AUTO([^A-Z0-9]|$)', re.IGNORECASE)

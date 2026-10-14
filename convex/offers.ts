@@ -114,7 +114,7 @@ function optionalText(value: string, label: string, maxLength: number) {
   return text;
 }
 
-function normalizeOverrides(values: InternalOverride[]) {
+export function normalizeOverrides(values: InternalOverride[]) {
   if (values.length > MAX_OVERRIDES) {
     throw new Error(`An offer can have at most ${MAX_OVERRIDES} internal overrides.`);
   }
@@ -149,7 +149,7 @@ function normalizeOverrides(values: InternalOverride[]) {
   });
 }
 
-function publicProfile(profile: OfferProfile) {
+export function publicProfile(profile: OfferProfile) {
   return {
     offer_id: profile.offerId,
     display_name: profile.displayName,

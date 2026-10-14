@@ -4,6 +4,7 @@ export type ResponseSchema = {
   $ref?: string;
   type?: string;
   enum?: unknown[];
+  pattern?: string;
   anyOf?: ResponseSchema[];
   default?: unknown;
   properties?: Record<string, ResponseSchema>;
@@ -54,7 +55,10 @@ function project(schema: ResponseSchema, value: unknown): unknown {
     return value.map(item => project(schema.items!, item));
   }
   if (schema.type === 'null' && value === null) return null;
-  if (schema.type === 'string' && typeof value === 'string') return value;
+  if (schema.type === 'string' && typeof value === 'string') {
+    if (schema.pattern && !new RegExp(schema.pattern).test(value)) throw new Error('Unexpected response string');
+    return value;
+  }
   if (schema.type === 'boolean' && typeof value === 'boolean') return value;
   if (schema.type === 'integer' && typeof value === 'number' && Number.isSafeInteger(value)) return value;
   // Unusual legacy coercions or future model shapes use the original backend.

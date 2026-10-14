@@ -32,7 +32,7 @@ test('demo sessions seed fresh disconnected datasets and schedule exact 24h clea
 
 test('publisher submit, release, advertiser decision and reset reuse one private session', async () => {
   const f = demoFixture(); await start(f.ctx, a, 'publisher');
-  const created = await call(f.ctx, '/api/client/harbor-auto/reviews', 'POST', { ad_copy: 'Save 40% today.' });
+  const created = await call(f.ctx, '/api/client/harbor-auto/reviews', 'POST', { ad_copy: 'Save 40% today.', vertical: 'auto-insurance' });
   assert.equal(created.status, 200);
   const id = created.body.job_id;
   assert.equal((await call(f.ctx, `/api/client/harbor-auto/reviews/${id}/decision`, 'PUT', { decision: 'approved' })).status, 403);

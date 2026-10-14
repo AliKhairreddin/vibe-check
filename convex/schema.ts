@@ -56,6 +56,18 @@ export default defineSchema({
     .index('by_client_id_and_created_at', ['clientId', 'createdAt'])
     .index('by_client_id_and_counts_toward_usage_and_created_at', ['clientId', 'countsTowardUsage', 'createdAt'])
     .index('by_publisher_id', ['publisherId']),
+  advertiserVerticals: defineTable({
+    clientId: v.string(), verticalId: v.string(), name: v.string(), enabled: v.boolean(),
+    includeDefault: v.boolean(), officialGuidelines: v.string(),
+    internalOverrides: v.array(v.object({ overrideId: v.string(), title: v.string(), guidance: v.string(), rationale: v.string(), enabled: v.boolean() })),
+    version: v.number(), updatedAt: v.number(),
+  }).index('by_client_id', ['clientId']).index('by_client_and_vertical', ['clientId', 'verticalId']),
+  advertiserVerticalRevisions: defineTable({
+    clientId: v.string(), verticalId: v.string(), name: v.string(), enabled: v.boolean(),
+    includeDefault: v.boolean(), officialGuidelines: v.string(),
+    internalOverrides: v.array(v.object({ overrideId: v.string(), title: v.string(), guidance: v.string(), rationale: v.string(), enabled: v.boolean() })),
+    version: v.number(), updatedAt: v.number(),
+  }).index('by_client_and_vertical_version', ['clientId', 'verticalId', 'version']),
   advertiserPlans: defineTable({
     clientId: v.string(), plan: v.union(v.literal('pilot'), v.literal('starter'), v.literal('growth'), v.literal('enterprise')),
     publisherLimit: v.number(), monthlyReviewLimit: v.number(), updatedAt: v.number(),
@@ -316,10 +328,7 @@ export default defineSchema({
     sourceStatus: v.optional(v.string()),
     sourceUrl: v.optional(v.string()),
     updatedAt: v.number(),
-    vertical: v.optional(v.union(
-      v.literal("auto-insurance"),
-      v.literal("home-insurance")
-    )),
+    vertical: v.optional(v.string()),
   })
     .index("by_job_id", ["jobId"])
     .index("by_batch_id", ["batchId"])
@@ -370,10 +379,7 @@ export default defineSchema({
     sourceUrl: v.optional(v.string()),
     status: v.string(),
     updatedAt: v.number(),
-    vertical: v.optional(v.union(
-      v.literal("auto-insurance"),
-      v.literal("home-insurance")
-    )),
+    vertical: v.optional(v.string()),
   })
     .index("by_offer_deleted_withheld_status_created", ["offerId", "deletedAt", "withheld", "status", "createdAt"])
     .index("by_offer_deleted_withheld_vertical_status_created", ["offerId", "deletedAt", "withheld", "vertical", "status", "createdAt"])
@@ -427,10 +433,7 @@ export default defineSchema({
       message: v.string(),
       result: v.optional(v.string()),
       status: v.string(),
-      vertical: v.optional(v.union(
-        v.literal("auto-insurance"),
-        v.literal("home-insurance")
-      )),
+      vertical: v.optional(v.string()),
     })),
     reviewContext: v.optional(v.object({
       adCopy: v.string(),

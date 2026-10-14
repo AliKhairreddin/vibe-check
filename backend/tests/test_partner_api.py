@@ -310,7 +310,8 @@ async def test_partner_openapi_contains_only_versioned_partner_routes(monkeypatc
     assert '/api/v1/reviews' in schema['paths']
     vertical = next(p for p in schema['paths']['/api/v1/reviews']['get']['parameters'] if p['name'] == 'vertical')
     assert vertical['required'] is False
-    assert vertical['schema']['anyOf'][0]['enum'] == ['auto-insurance', 'home-insurance']
+    assert __import__('re').fullmatch(vertical['schema']['anyOf'][0]['pattern'], 'health-insurance')
+    assert 'custom-' in vertical['schema']['anyOf'][0]['pattern']
     assert '/api/v1/reviews/{job_id}/media' in schema['paths']
     assert '/api/v1/scans/creative' in schema['paths']
     assert '/api/reviews' not in schema['paths']

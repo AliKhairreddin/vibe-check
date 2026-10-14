@@ -79,7 +79,7 @@ const reviewValidator = v.object({
   jobId: v.string(),
   mediaKind: v.union(v.literal("video"), v.literal("image"), v.literal("copy_only")),
   preview: previewValidator,
-  vertical: v.union(v.literal("auto-insurance"), v.literal("home-insurance")),
+  vertical: v.string(),
 });
 
 function effectiveStatus(
