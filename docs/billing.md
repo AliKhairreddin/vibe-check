@@ -2,7 +2,9 @@
 
 Billing belongs to the advertiser workspace; included publisher teams never pay separately. Existing workspaces `acp`, `kissterra`, `lead-economy`, and `smart-financial` are the frozen free-access cohort. They need no Stripe customer, card, or subscription. A missing billing row does not grant free access to any other workspace. Existing quotas remain unchanged.
 
-New advertisers are provisioned by the owner under Advertiser plans after configuring the offer and guidelines. The seven-day invitation creates a login; it does not grant product access. Starter and Growth checkout is available after signing in. The public pricing page remains sales-assisted. Enterprise pricing and capacity remain by agreement; the Enterprise catalog price is the published starting price, not a promise of fixed custom capacity.
+New advertisers can choose Starter or Growth at `https://adchecked.com/pricing`. The public buttons carry `plan=starter|growth` and `interval=month|year` to `https://app.adchecked.com/signup`. Signup creates an isolated advertiser workspace and signs in its owner before opening the selected live Stripe Checkout. Creating an account never grants paid access. A failed or canceled checkout leaves the account intact so its owner can sign in and retry from billing. Existing free sessions keep their exemption and cannot be enrolled through this flow.
+
+Owner-issued seven-day invitations still work for provisioned advertisers. Public signup requires no invitation. Enterprise pricing and capacity remain by agreement; the Enterprise catalog price is the published starting price, not a promise of fixed custom capacity.
 
 ## Production setup
 

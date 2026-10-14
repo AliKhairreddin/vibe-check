@@ -46,10 +46,11 @@ export const checkout = action({
       const expectedAmount = args.plan === 'starter' ? args.interval === 'year' ? 599000 : 59900 : args.interval === 'year' ? 1999000 : 199900;
       if (!price.active || price.livemode === row.isTest || price.currency !== 'usd' || price.unit_amount !== expectedAmount || price.recurring?.interval !== args.interval || price.recurring.interval_count !== 1 || price.tax_behavior !== 'exclusive') throw new Error('Stripe price configuration needs attention');
       const session = await stripe.checkout.sessions.create({
+        integration_identifier: 'adchecked-subscriptions-qnxvktwa',
         customer: customerId, mode: 'subscription', managed_payments: { enabled: true },
         line_items: [{ price: mapping.priceId, quantity: 1 }], client_reference_id: args.clientId,
         metadata: { adchecked_workspace: args.clientId }, subscription_data: { metadata: { adchecked_workspace: args.clientId } },
-        success_url: `${APP_URL}?checkout=success`, cancel_url: `${APP_URL}?checkout=canceled`,
+        success_url: `${APP_URL}?checkout=success`, cancel_url: `${APP_URL}?checkout=canceled&plan=${args.plan}&interval=${args.interval}`,
         expires_at: Math.floor(row.checkoutExpiresAt! / 1000),
       }, { idempotencyKey: `adchecked-checkout-${attempt}` });
       if (!session.url || session.livemode === row.isTest) throw new Error('Checkout unavailable');
