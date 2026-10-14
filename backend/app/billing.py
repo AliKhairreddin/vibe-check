@@ -45,9 +45,8 @@ def advertiser_session(row: dict) -> dict:
 
 
 def authenticate(username: str, password: str) -> dict | None:
-    if not username.startswith('advertiser.') and '@' not in username:
-        return None
-    row = account(username=username.lower())
+    # The stored account determines the role; its username need not encode it.
+    row = account(username=username.strip().lower())
     if row and row['status'] == 'active' and workspaces.verify_password(password, row.get('passwordHash', '')):
         return advertiser_session(row)
     return None
@@ -128,8 +127,8 @@ def register(app):
         from .main import require_settings_admin
         require_settings_admin(request)
         token = secrets.token_urlsafe(32)
-        call('advertiserAccounts', 'resetInvite', {'clientId': client_id, 'inviteHash': workspaces.token_hash(token)}, 'mutation')
-        return {'username': f'advertiser.{client_id}', 'invite_url': f'https://app.adchecked.com/invite/{token}?type=advertiser'}
+        result = call('advertiserAccounts', 'resetInvite', {'clientId': client_id, 'inviteHash': workspaces.token_hash(token)}, 'mutation')
+        return {'username': result['username'], 'invite_url': f'https://app.adchecked.com/invite/{token}?type=advertiser'}
 
     @app.get('/api/client/advertiser-invitations/{token}')
     def invitation(token: str):

@@ -3,7 +3,7 @@ import test from 'node:test';
 import Stripe from 'stripe';
 import { accessAllowed, billingReady, subscriptionSnapshot } from '../convex/billingPolicy.ts';
 import { beginCheckout, claimSync, completeSync, grandfatherExisting, receiveEvent, requestSync, requireBillingAccess, status as billingStatus } from '../convex/billing.ts';
-import { create, acceptInvite, resetInvite, createComplimentary } from '../convex/advertiserAccounts.ts';
+import { create, acceptInvite, resetInvite, createComplimentary, renameUsername, get as getAdvertiser } from '../convex/advertiserAccounts.ts';
 import { claimSubmission } from '../convex/workspaces.ts';
 import http from '../convex/http.ts';
 
@@ -218,4 +218,42 @@ test('operator-created complimentary advertisers have isolated free access witho
   await invoke(completeSync, ctx, { clientId: 'rezono', lease: 'stale', revision: 0, snapshot: subscriptionSnapshot([], false) });
   assert.deepEqual(tables.billingWorkspaces[0], before);
   assert.equal(scheduled.length, 0);
+});
+
+test('renaming an advertiser preserves its existing invite, access and expiry', async () => {
+  const { ctx, tables } = fixture();
+  const inviteHash = 'b'.repeat(64);
+  await invoke(createComplimentary, ctx, { clientId: 'rezono', name: 'Rezono', contactName: 'Nilu Yusupova', inviteHash });
+  const before = structuredClone(tables.advertiserAccounts[0]);
+  const billing = structuredClone(tables.billingWorkspaces);
+  const plans = structuredClone(tables.advertiserPlans);
+  const args = { clientId: 'rezono', expectedUsername: 'advertiser.rezono', username: 'rezono' };
+  assert.deepEqual(await invoke(renameUsername, ctx, args), { username: 'rezono', changed: true });
+  assert.deepEqual(tables.advertiserAccounts[0], { ...before, username: 'rezono', authVersion: before.authVersion + 1 });
+  assert.deepEqual(tables.billingWorkspaces, billing);
+  assert.deepEqual(tables.advertiserPlans, plans);
+  assert.deepEqual(await invoke(renameUsername, ctx, args), { username: 'rezono', changed: false });
+  const secret = 'billing-test-secret';
+  assert.equal((await invoke(getAdvertiser, ctx, { secret, inviteHash })).username, 'rezono');
+  assert.equal(await invoke(getAdvertiser, ctx, { secret, username: 'advertiser.rezono' }), null);
+  const accepted = await invoke(acceptInvite, ctx, { secret, inviteHash, passwordHash: 'password-hash' });
+  assert.equal(accepted.username, 'rezono');
+  assert.equal(accepted.status, 'active');
+  assert.deepEqual(await invoke(resetInvite, ctx, { secret, clientId: 'rezono', inviteHash: 'c'.repeat(64) }), { username: 'rezono' });
+});
+
+test('advertiser rename rejects stale names, reserved names and account collisions', async () => {
+  const { ctx, tables } = fixture();
+  await invoke(createComplimentary, ctx, { clientId: 'rezono', name: 'Rezono', contactName: 'Nilu Yusupova', inviteHash: 'a'.repeat(64) });
+  const before = structuredClone(tables.advertiserAccounts[0]);
+  const args = { clientId: 'rezono', expectedUsername: 'advertiser.rezono', username: 'rezono' };
+  await assert.rejects(invoke(renameUsername, ctx, { ...args, expectedUsername: 'wrong' }), /changed/);
+  await assert.rejects(invoke(renameUsername, ctx, { ...args, username: 'admin' }), /reserved/);
+  await assert.rejects(invoke(renameUsername, ctx, { ...args, username: 'bad name' }), /Invalid/);
+  await ctx.db.insert('publishers', { username: 'rezono' });
+  await assert.rejects(invoke(renameUsername, ctx, args), /already exists/);
+  tables.publishers = [];
+  await ctx.db.insert('advertiserAccounts', { clientId: 'another', username: 'rezono' });
+  await assert.rejects(invoke(renameUsername, ctx, args), /already exists/);
+  assert.deepEqual(tables.advertiserAccounts[0], before);
 });

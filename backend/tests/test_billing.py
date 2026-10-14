@@ -31,6 +31,9 @@ def accounts(monkeypatch):
             row.update(status='active', passwordHash=args['passwordHash'], authVersion=row['authVersion'] + 1)
             row.pop('inviteHash')
             return row
+        if module == 'advertiserAccounts' and function == 'resetInvite':
+            row.update(status='invited', inviteHash=args['inviteHash'])
+            return {'username': row['username']}
         if module == 'billing' and function == 'status':
             return {'allowed': state['allowed'], 'accessMode': state.get('accessMode', 'subscription'), 'status': 'active' if state['allowed'] else 'none'}
         if module == 'stripeBilling':
@@ -113,3 +116,39 @@ async def test_complimentary_invitation_names_contact_and_explains_free_access(a
         assert accepted.status_code == 200
         assert (await client.get('/api/client/new-advertiser/check')).status_code == 200
         assert all(module != 'stripeBilling' for module, _, _, _ in accounts['calls'])
+
+
+@pytest.mark.anyio
+async def test_plain_username_accepts_same_invitation_and_can_sign_in_afterwards(accounts):
+    token = 'r' * 43
+    expires = int(time.time() * 1000) + 60000
+    accounts['row'].update(username='rezono', status='invited', inviteHash=workspaces.token_hash(token),
+                           inviteExpiresAt=expires, name='Rezono', contactName='Nilu Yusupova')
+    accounts.update(allowed=True, accessMode='complimentary')
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', headers={'origin': 'https://app.adchecked.com'}) as client:
+        invite = await client.get(f'/api/client/advertiser-invitations/{token}')
+        assert invite.status_code == 200
+        assert invite.json() == {'name': 'Nilu Yusupova', 'advertiser': 'Rezono', 'username': 'rezono', 'complimentary': True}
+        assert accounts['row']['inviteExpiresAt'] == expires
+        password = 'private-rezono-test-password'
+        accepted = await client.post('/api/client/advertiser-invitations/accept', json={'token': token, 'password': password})
+        assert accepted.status_code == 200 and accepted.json()['username'] == 'rezono'
+        assert (await client.delete('/api/client/session')).status_code == 200
+        login = await client.post('/api/client/session', json={'username': ' REZONO ', 'password': password})
+        assert login.status_code == 200 and login.json()['username'] == 'rezono'
+        assert login.json()['role'] == 'client'
+        assert (await client.get('/api/client/new-advertiser/check')).status_code == 200
+        assert (await client.post('/api/client/session', json={'username': 'rezono', 'password': 'wrong'})).status_code == 401
+        accounts['row']['status'] = 'suspended'
+        assert (await client.post('/api/client/session', json={'username': 'rezono', 'password': password})).status_code == 401
+        assert all(module != 'stripeBilling' for module, _, _, _ in accounts['calls'])
+
+
+@pytest.mark.anyio
+async def test_new_invitation_response_uses_saved_username_after_rename(accounts, monkeypatch):
+    accounts['row']['username'] = 'rezono'
+    monkeypatch.setattr(main, 'require_settings_admin', lambda request: None)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com', headers={'origin': 'https://app.adchecked.com'}) as client:
+        result = await client.post('/api/admin/advertiser-workspaces/new-advertiser/invite')
+        assert result.status_code == 200
+        assert result.json()['username'] == 'rezono'

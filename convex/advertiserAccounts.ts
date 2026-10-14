@@ -40,12 +40,33 @@ export const create = mutation({
   },
 });
 export const resetInvite = mutation({
-  args: { secret: v.string(), clientId: v.string(), inviteHash: v.string() }, returns: v.null(), handler: async (ctx, args) => {
+  args: { secret: v.string(), clientId: v.string(), inviteHash: v.string() }, returns: v.object({ username: v.string() }), handler: async (ctx, args) => {
     authorize(args.secret);
     const row = await ctx.db.query('advertiserAccounts').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).unique();
     if (!row) throw new Error('Workspace unavailable');
     await ctx.db.patch(row._id, { status: 'invited', authVersion: row.authVersion + 1, passwordHash: undefined, inviteHash: args.inviteHash, inviteExpiresAt: Date.now() + 7 * 86400000 });
-    return null;
+    return { username: row.username };
+  },
+});
+
+// Operator-only rename. Patch only the login identifier and session revision;
+// the existing invite capability, expiry, password and workspace stay intact.
+export const renameUsername = internalMutation({
+  args: { clientId: v.string(), expectedUsername: v.string(), username: v.string() },
+  returns: v.object({ username: v.string(), changed: v.boolean() }),
+  handler: async (ctx, args) => {
+    const username = args.username.trim().toLowerCase();
+    const reserved = new Set(['admin', 'owner', 'employee', 'acp', 'kissterra', 'lead-economy', 'smart-financial', 'digital-nudge']);
+    if (!/^[a-z0-9][a-z0-9._-]{1,78}[a-z0-9]$/.test(username) || reserved.has(username)) throw new Error('Invalid or reserved username');
+    const row = await ctx.db.query('advertiserAccounts').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).unique();
+    if (!row) throw new Error('Workspace unavailable');
+    if (row.username === username) return { username, changed: false };
+    if (row.username !== args.expectedUsername) throw new Error('Username changed; reload before renaming');
+    const advertiser = await ctx.db.query('advertiserAccounts').withIndex('by_username', q => q.eq('username', username)).unique();
+    const publisher = await ctx.db.query('publishers').withIndex('by_username', q => q.eq('username', username)).unique();
+    if (advertiser || publisher) throw new Error('Username already exists');
+    await ctx.db.patch(row._id, { username, authVersion: row.authVersion + 1 });
+    return { username, changed: true };
   },
 });
 export const acceptInvite = mutation({
