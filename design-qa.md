@@ -1,3 +1,42 @@
+# Review card status rails QA — 2026-10-14
+
+## Scope and visual target
+
+Implement the user-selected option 2: neutral card surfaces on a cool gray review backdrop with colored left status rails. Preserve the existing controls, typography, grid sizing, density settings, and review behavior.
+
+- Source visual truth: `/Users/alikheireddine/.codex/generated_images/01a13b6a-dd7f-7e71-9f30-bca9f8658d69/exec-ef216220-b952-42b3-b7bd-1d6557524e48.png` (second displayed ideation image, 1952 × 806 pixels).
+- Implementation: `http://127.0.0.1:5173/client/reviews?surface=client`, rendered in the Codex in-app browser with 20 local sample reviews matching the reference's filenames and status order. All decisions initially pending; cards collapsed; light theme.
+- Full-view evidence: `output/playwright/status-rails-desktop-expanded.png` and `status-rails-desktop-collapsed.png`, at a 1920 × 1080 CSS viewport, density 1. Expanded full-page capture is 1905 × 1167 pixels; the scrollbar accounts for the capture-width difference.
+- Focused comparison: `output/playwright/status-rails-comparison.png`, reference above implementation. The reference and implementation grid crop are each normalized to 1280 pixels wide with their aspect ratios preserved. This isolates the card treatment from the surrounding application shell.
+- Responsive evidence: `output/playwright/status-rails-mobile-cards.png` and `status-rails-mobile-navigation.png`, 390 × 844 viewport, navigation closed and open. No horizontal page overflow; cards wrap their actions within a 319px content width.
+- Additional states: `output/playwright/status-rails-dark.png` and `status-rails-list.png`.
+
+## Findings
+
+- No actionable P0, P1, or P2 findings. The first rendered comparison passed without a subsequent visual fix.
+- Typography: existing Geist, filename weight, ellipsis handling, and compact action labels remain legible. The concept's slightly larger badges are intentionally not a redesign of the existing controls.
+- Spacing and layout: existing responsive grid, padding, density choices, radii, and shadows preserved. Five-pixel left borders provide clear status accents. Desktop navigation expansion/collapse, mobile wrapping, and list layout remain functional.
+- Colors: white card surfaces and a #e6eaf0 batch backdrop match the selected treatment. Emerald, amber, and red rails track effective review status; the other three card borders remain neutral. Dark mode uses the existing dark surface tokens and lighter rails.
+- Assets: existing Lucide controls retained; no raster assets required by this card treatment.
+- Content: existing action labels and status badges remain unchanged. Local comparison data is synthetic and has not modified production reviews.
+
+## Interaction verification
+
+- Expanded and collapsed a creative.
+- Approved a yellow sample with an exception reason: status label and rail changed to green.
+- Reset the sample: status label and rail returned to yellow.
+- Switched grid/list, light/dark, desktop sidebar expanded/collapsed, and mobile navigation open/closed.
+- Browser console error checks returned no errors.
+- `pnpm run verify` passed, including Worker and Convex type checks, routing tests, 449 backend tests, and the production frontend build. `git diff --check` passed.
+
+## Comparison history
+
+One comparison pass; no P0/P1/P2 remediation or additional iteration required. Existing application-shell layout and control metrics are intentional constraints of this scoped styling change.
+
+final result: passed
+
+---
+
 # Client Decision Result Model QA
 
 ## Evidence

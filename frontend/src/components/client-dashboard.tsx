@@ -786,7 +786,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
                       </div>
                     </div>
                     {isExpanded ? (
-                      <CardContent className="border-t bg-muted/15 p-3">
+                      <CardContent className="border-t bg-[#e6eaf0] p-3 dark:bg-muted/40">
                         {preferences.reviewView === 'list' ? (
                           <div className={cn('mb-1 hidden gap-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground min-[1200px]:grid', reviewRowColumns(session.role === 'publisher'))}>
                             <span>Creative</span>
@@ -1134,10 +1134,10 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
 
   return (
     <article className={cn(
-      'self-start overflow-hidden rounded-xl border bg-card shadow-xs transition-colors',
-      effectiveStatus === 'green' && 'border-emerald-600/45 bg-emerald-500/[0.025]',
-      effectiveStatus === 'yellow' && 'border-yellow-600/45',
-      effectiveStatus === 'red' && 'border-red-600/45',
+      'self-start overflow-hidden rounded-xl border border-l-[5px] bg-card shadow-xs transition-colors',
+      effectiveStatus === 'green' && 'border-l-emerald-500 dark:border-l-emerald-400',
+      effectiveStatus === 'yellow' && 'border-l-amber-500 dark:border-l-amber-400',
+      effectiveStatus === 'red' && 'border-l-red-500 dark:border-l-red-400',
       isExpanded && 'ring-1 ring-ring/30',
       isSelected && 'ring-2 ring-blue-500/60'
     )} onFocusCapture={onPrefetch} onPointerEnter={onPrefetch}>
