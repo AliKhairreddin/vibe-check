@@ -114,7 +114,7 @@ import {
   type ReviewEvidenceFrame,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { effectiveReviewStatus, withReviewDecision } from '@/lib/client-review-status';
+import { CLIENT_RESULT_FILTERS, effectiveReviewStatus, reviewColorView, withReviewDecision, type ClientResultFilter } from '@/lib/client-review-status';
 export { effectiveReviewStatus } from '@/lib/client-review-status';
 import { useTheme } from '@/hooks/use-theme';
 import {
@@ -136,8 +136,9 @@ type ReviewGroup = {
 };
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'disapproved';
-type ResultFilter = 'all' | OverallStatus;
+type ResultFilter = ClientResultFilter;
 type BatchFilter = 'all' | 'unchecked' | 'checked';
+const EMPTY_BATCH_COLOR_FILTERS: Record<string, ResultFilter> = {};
 
 function reviewRowColumns(publisher: boolean) {
   return publisher
@@ -376,6 +377,10 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [resultFilter, setResultFilter] = useState<ResultFilter>(shared ? 'all' : preferences.defaultResultFilter);
   const [batchFilter, setBatchFilter] = useState<BatchFilter>('all');
+  const [batchColorFilters, setBatchColorFilters] = useState<{ scope: string; values: Record<string, ResultFilter> } | null>(null);
+  const batchColorScope = JSON.stringify([selectedClientId, publisherId, shared?.token]);
+  const activeBatchColorFilters = batchColorFilters?.scope === batchColorScope ? batchColorFilters.values : EMPTY_BATCH_COLOR_FILTERS;
+  const hasBatchColorFilters = Object.keys(activeBatchColorFilters).length > 0;
   const [loadBackgroundPortals, setLoadBackgroundPortals] = useState(false);
 
   const queries = useQueries({
@@ -407,14 +412,18 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
       if (!normalizedSearch) return true;
       return `${review.file_name} ${review.issue_summary ?? ''}`.toLocaleLowerCase().includes(normalizedSearch);
     });
-    return visibleReviews.length ? [{ ...group, reviews: visibleReviews }] : [];
-  }), [allGroups, batchFilter, normalizedSearch, resultFilter, statusFilter]);
-  const selectionScope = JSON.stringify([selectedClientId, publisherId, normalizedSearch, statusFilter, resultFilter, batchFilter]);
+    if (!visibleReviews.length) return [];
+    const colorFilter = activeBatchColorFilters[group.id] ?? 'all';
+    const colorView = reviewColorView(visibleReviews, colorFilter);
+    return [{ ...group, reviews: colorView.reviews, colorCounts: colorView.counts, colorFilter }];
+  }), [allGroups, batchFilter, normalizedSearch, resultFilter, statusFilter, activeBatchColorFilters]);
+  const selectionScope = JSON.stringify([selectedClientId, publisherId, normalizedSearch, statusFilter, resultFilter, batchFilter, activeBatchColorFilters]);
   const isSelecting = selection?.scope === selectionScope;
   const visibleReviewIds = visibleGroups.flatMap(group => group.reviews.map(review => review.job_id));
   const selectedReviewIds = isSelecting ? visibleReviewIds.filter(id => selection.ids.has(id)) : [];
+  const selectedReviewIdSet = new Set(selectedReviewIds);
   const selectedBatchIds = isSelecting ? allGroups
-    .filter(group => group.kind === 'batch' && group.reviews.every(review => selection.ids.has(review.job_id)))
+    .filter(group => group.kind === 'batch' && group.reviews.every(review => selectedReviewIdSet.has(review.job_id)))
     .map(group => group.id.slice('batch:'.length)) : [];
   const selectedBatchesHavePrivateCreatives = allGroups.some(group => selectedBatchIds.includes(group.id.slice('batch:'.length)) && group.reviews.some(review => review.released === false));
   const selectionHasProcessingBatch = reviews.some(review => selectedReviewIds.includes(review.job_id) && review.batch_complete === false);
@@ -442,7 +451,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
 
   useEffect(() => {
     if (!selectedPortal) return;
-    const visibleReviews = allGroups
+    const visibleReviews = visibleGroups
       .filter((group) => expandedGroups.has(group.id))
       .flatMap((group) => group.reviews.slice(0, 9));
     for (const review of visibleReviews) {
@@ -453,7 +462,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
         staleTime: 60_000,
       });
     }
-  }, [allGroups, expandedGroups, queryClient, selectedPortal]);
+  }, [visibleGroups, expandedGroups, queryClient, selectedPortal]);
 
   const decisionMutation = useMutation({
     mutationFn: ({ clientId, jobId, decision, feedbackNote, feedbackReason, feedbackScope, findingIndex }: {
@@ -521,6 +530,15 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
       const next = { ...current, reviewView };
       saveClientPreferences(next);
       return next;
+    });
+  }
+
+  function changeBatchColor(groupId: string, color: ResultFilter) {
+    setBatchColorFilters(current => {
+      const values = current?.scope === batchColorScope ? { ...current.values } : {};
+      if (color === 'all') delete values[groupId];
+      else values[groupId] = color;
+      return { scope: batchColorScope, values };
     });
   }
 
@@ -674,12 +692,13 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
                 <Rows3 />
               </Button>
             </div>
-            {(search || statusFilter !== 'all' || resultFilter !== 'all' || batchFilter !== 'all') ? (
+            {(search || statusFilter !== 'all' || resultFilter !== 'all' || batchFilter !== 'all' || hasBatchColorFilters) ? (
               <Button type="button" size="sm" variant="ghost" aria-label="Clear filters" onClick={() => {
                 setSearch('');
                 setStatusFilter('all');
                 setResultFilter('all');
                 setBatchFilter('all');
+                setBatchColorFilters(null);
               }}>
                 <X />Clear filters
               </Button>
@@ -709,7 +728,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
                 const red = group.reviews.filter((review) => effectiveReviewStatus(review) === 'red').length;
                 const yellow = group.reviews.filter((review) => effectiveReviewStatus(review) === 'yellow').length;
                 const green = group.reviews.filter((review) => effectiveReviewStatus(review) === 'green').length;
-                const pending = group.reviews.filter((review) => !review.decision).map((review) => review.job_id);
+                const pending = wholeGroup.reviews.filter((review) => !review.decision).map((review) => review.job_id);
                 const recommendedPending = group.reviews
                   .filter((review) => !review.decision && aiDecision(review) === 'approved')
                   .map((review) => review.job_id);
@@ -721,7 +740,8 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
                           <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-blue-500/10" title={`Select or deselect all creatives shown in ${formatBatchTitle(group)}`}>
                             <Checkbox
                               aria-label={`Select batch ${formatBatchTitle(group)}`}
-                              checked={selectedCount === group.reviews.length}
+                              checked={group.reviews.length > 0 && selectedCount === group.reviews.length}
+                              disabled={!group.reviews.length}
                               indeterminate={selectedCount > 0 && selectedCount < group.reviews.length}
                               onChange={event => {
                                 const checked = event.target.checked;
@@ -787,7 +807,38 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
                     </div>
                     {isExpanded ? (
                       <CardContent className="border-t bg-[#e6eaf0] p-3 dark:bg-muted/40">
-                        {preferences.reviewView === 'list' ? (
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div role="group" aria-label={`Filter colors in ${formatBatchTitle(group)}`} className="flex flex-wrap gap-1">
+                            {CLIENT_RESULT_FILTERS.map(color => (
+                              <Button
+                                key={color}
+                                type="button"
+                                size="sm"
+                                variant={group.colorFilter === color ? 'selected' : 'outline'}
+                                aria-pressed={group.colorFilter === color}
+                                onClick={() => changeBatchColor(group.id, color)}
+                                className={cn(
+                                  group.colorFilter === color && color === 'red' && 'border-red-600/40 bg-red-100 text-red-900 hover:bg-red-200 dark:border-red-400/40 dark:bg-red-500/20 dark:text-red-200 dark:hover:bg-red-500/30',
+                                  group.colorFilter === color && color === 'yellow' && 'border-amber-600/40 bg-amber-100 text-amber-900 hover:bg-amber-200 dark:border-amber-400/40 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30',
+                                  group.colorFilter === color && color === 'green' && 'border-emerald-600/40 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:border-emerald-400/40 dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30',
+                                )}
+                              >
+                                {color === 'all' ? 'All' : statusLabel(color)}
+                                <span className="tabular-nums opacity-75">{group.colorCounts[color]}</span>
+                              </Button>
+                            ))}
+                          </div>
+                          <span role="status" className="text-xs text-muted-foreground">
+                            {group.colorFilter === 'all' ? 'Grouped by color' : `${group.reviews.length} of ${group.colorCounts.all} shown`}
+                          </span>
+                        </div>
+                        {!group.reviews.length ? (
+                          <div className="grid justify-items-start gap-2 rounded-lg border border-dashed p-4 text-sm">
+                            <p>No {group.colorFilter === 'all' ? '' : `${group.colorFilter} `}creatives match the current filters in this batch.</p>
+                            <Button type="button" size="sm" variant="outline" onClick={() => changeBatchColor(group.id, 'all')}>Show all colors</Button>
+                          </div>
+                        ) : null}
+                        {preferences.reviewView === 'list' && group.reviews.length > 0 ? (
                           <div className={cn('mb-1 hidden gap-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground min-[1200px]:grid', reviewRowColumns(session.role === 'publisher'))}>
                             <span>Creative</span>
                             <span>Result</span>
@@ -1719,6 +1770,7 @@ function QueueMetric({ detail, icon: Icon, label, tone = 'neutral', value }: {
 function BatchResultBar({ label, green, yellow, red }: { label: string; green: number; yellow: number; red: number }) {
   const [open, setOpen] = useState(false);
   const total = green + yellow + red;
+  const creativeLabel = total === 1 ? 'creative' : 'creatives';
   const values = [
     { label: 'Green', count: green, color: 'bg-emerald-500' },
     { label: 'Yellow', count: yellow, color: 'bg-yellow-400' },
@@ -1729,9 +1781,9 @@ function BatchResultBar({ label, green, yellow, red }: { label: string; green: n
       openOnHover delay={160} closeDelay={180}
       onFocus={() => window.requestAnimationFrame(() => setOpen(true))}
       render={<Button variant="ghost" size="xs" className="gap-2 px-1" />}
-      aria-label={`Results for ${label}: ${total} creatives, ${green} green, ${yellow} yellow, ${red} red. Open breakdown.`}
+      aria-label={`Results for ${label}: ${total} ${creativeLabel}, ${green} green, ${yellow} yellow, ${red} red. Open breakdown.`}
     >
-      <span className="min-w-16 text-right font-normal tabular-nums text-muted-foreground">{total} creatives</span>
+      <span className="min-w-16 text-right font-normal tabular-nums text-muted-foreground">{total} {creativeLabel}</span>
       <span aria-hidden="true" className="flex h-2 w-28 overflow-hidden rounded-full bg-muted sm:w-32">
         {values.filter(value => value.count > 0).map(value => <span key={value.label} className={cn('h-full', value.color)} style={{ width: `${value.count / total * 100}%` }} />)}
       </span>
@@ -1739,7 +1791,7 @@ function BatchResultBar({ label, green, yellow, red }: { label: string; green: n
     <Popover.Portal><Popover.Positioner sideOffset={8} className="z-50 max-w-[calc(100vw-1rem)]">
       <Popover.Popup className="w-64 max-w-[calc(100vw-1rem)] rounded-xl border bg-popover p-4 text-popover-foreground shadow-xl outline-none">
         <Popover.Title className="break-words text-sm font-semibold">{label}</Popover.Title>
-        <Popover.Description className="mt-1 text-xs leading-5 text-muted-foreground">Current results for the {total} creatives shown, including advertiser decisions.</Popover.Description>
+        <Popover.Description className="mt-1 text-xs leading-5 text-muted-foreground">Current results for the {total} {creativeLabel} shown, including advertiser decisions.</Popover.Description>
         <dl className="mt-3 grid gap-2">{values.map(value => <div key={value.label} className="flex items-center gap-2 text-xs">
           <span aria-hidden="true" className={cn('size-2 rounded-full', value.color)} /><dt>{value.label}</dt>
           <dd className="ml-auto tabular-nums">{value.count} · {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(total ? value.count / total * 100 : 0)}%</dd>

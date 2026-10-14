@@ -1,3 +1,22 @@
+# Batch color grouping and filters QA — 2026-10-14
+
+## Scope
+
+Review-queue batches now show red, yellow, then green creatives by default, with newest first within each color. Each expanded batch has independent All / Red / Yellow / Green controls and counts. Grouping follows the current effective result, including advertiser decisions, and works with the existing queue-wide filters.
+
+## Verification
+
+- Exercised two synthetic batches with 24 creatives in the local browser. Filtering one batch preserved the other batch's selection. Changing a filter cleared the current bulk selection; selecting a filtered batch selected only its visible creatives.
+- Combined global and per-batch filters, including zero matches. The batch retained its color controls and a working Show all colors action. The batch review-state badge continued to reflect the whole batch.
+- Approved a yellow sample and verified it moved to green with updated counts; reset it and verified it returned to yellow. Production reviews were not modified.
+- Inspected 1920 × 1080 desktop layouts with the sidebar expanded and collapsed, grid and list views, light and dark themes, and 390 × 844 mobile layouts with navigation open and closed. No page-level horizontal overflow or browser console errors.
+- Evidence in `output/playwright/`: `batch-colors-desktop-expanded.png`, `batch-colors-desktop-collapsed.png`, `batch-colors-independent.png`, `batch-colors-empty.png`, `batch-colors-list.png`, `batch-colors-dark.png`, `batch-colors-mobile.png`, and `batch-colors-mobile-navigation.png`.
+- `pnpm run verify` passed: Worker/Convex type checks, 193 routing tests, 449 backend tests, and the production frontend build. `git diff --check` passed.
+
+final result: passed
+
+---
+
 # Review card status rails QA — 2026-10-14
 
 ## Scope and visual target
