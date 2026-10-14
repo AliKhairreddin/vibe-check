@@ -114,11 +114,10 @@ jobs:
           current_shards=${current_shards:-10}
           configured_shards=$(jq -r '.vars.REVIEW_BACKEND_SHARDS' wrangler.jsonc)
           echo "CONFIGURED_BACKEND_SHARDS=$configured_shards" >> "$GITHUB_ENV"
-          if [ "$current_slot" = "primary-blue" ]; then
-            next_slot=primary-green
-          else
-            next_slot=primary-blue
-          fi
+          # Reusing a blue/green Durable Object can revive its previous image.
+          # An unused slot starts the image that completed this rollout; old
+          # slots drain with their existing idle timeout after activation.
+          next_slot="release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "CURRENT_BACKEND_SLOT=$current_slot" >> "$GITHUB_ENV"
           echo "NEXT_BACKEND_SLOT=$next_slot" >> "$GITHUB_ENV"
           # Preserve routing while the new image rolls out. --keep-vars alone
