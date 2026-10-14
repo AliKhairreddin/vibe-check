@@ -1540,6 +1540,13 @@ def resolve_review_offer_snapshot()->tuple[list[OfferProfile], list[OfferOutcome
         profile.model_copy(deep=True)
         for profile in list_offer_profiles(include_disabled=True)
     ]
+    audited_ids = [p.offer_id for p in catalog if p.configured and p.offer_id in {'lead-economy', 'kissterra', 'smart-financial'}]
+    if audited_ids and convex_enabled():
+        remote = _convex_call('query', 'verticals:reviewCatalog', {'offerIds': audited_ids})
+        scoped = {row['offer_id']: OfferProfile.model_validate(row) for row in remote}
+        if set(scoped) != set(audited_ids):
+            raise RuntimeError('The vertical policy snapshot is incomplete. Please retry.')
+        catalog = [scoped.get(p.offer_id, p) for p in catalog]
     active_profiles=[
         profile.model_copy(deep=True)
         for profile in catalog

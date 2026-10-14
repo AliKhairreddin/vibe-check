@@ -65,7 +65,7 @@ function assertProfileDocumentSize(profile: OfferProfile) {
   }
 }
 
-async function ensureRevision(
+export async function ensureRevision(
   ctx: MutationCtx,
   profile: OfferProfile
 ) {

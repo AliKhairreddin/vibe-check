@@ -61,6 +61,16 @@ class AppliedPolicyOverride(BaseModel):
     evidence: str = ''
     rationale: str = ''
 
+class OfferVerticalPolicy(BaseModel):
+    vertical_id: str
+    name: str
+    enabled: bool
+    include_default: bool
+    official_guidelines: str = Field(max_length=200_000)
+    internal_overrides: list[OfferOverride] = Field(default_factory=list)
+    version: int = Field(ge=0)
+
+
 class OfferProfile(BaseModel):
     offer_id: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=160)
@@ -71,6 +81,11 @@ class OfferProfile(BaseModel):
     version: int = Field(default=1, ge=1)
     created_at: int | None = None
     updated_at: int | None = None
+    # Present only on review snapshots, never on the editable shared profile.
+    vertical_policies: list[OfferVerticalPolicy] | None = None
+    vertical_policy_version: int | None = None
+    vertical_policy_name: str | None = None
+    vertical_uses_default: bool = True
 
     @model_validator(mode='after')
     def validate_availability(self):

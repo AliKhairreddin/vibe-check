@@ -6,6 +6,7 @@ Output language:
 - Never switch the report narrative to Chinese or another language because a model, provider, OCR result, or evidence item uses that language.
 
 Policy precedence and internal overrides:
+- The selected vertical is in offer.vertical. Use only the supplied shared and selected-vertical policy. Never borrow another vertical's rates, disclaimers, or exceptions; an unspecified price floor is unknown, not permission to invent one.
 - policy_text contains the official guidelines and any pasted supplemental policy. internal_overrides contains saved, offer-scoped current internal rules.
 - Apply every enabled internal rule, whether it is stricter, more permissive, or clarifies an official rule.
 - When an internal rule directly conflicts with official policy, the internal rule controls the run decision for that exact issue. Do not create a finding for conduct the internal rule clearly permits.

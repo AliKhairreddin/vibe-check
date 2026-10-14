@@ -38,6 +38,7 @@ from .llm import review_with_openrouter
 from .timing import ProcessingTimer
 from .partner_api import persist_api_evidence
 from . import learning
+from .vertical_policy import select_review_policies
 
 INTERMEDIATE_FILES=('request.json','upload.json','metadata.json','frames.json','ocr.json','visual_observations.json','transcript.json')
 
@@ -135,6 +136,7 @@ def build_review_evidence(
             'offer_id': profile.offer_id,
             'display_name': profile.display_name,
             'guideline_version': profile.version,
+            'vertical': meta.vertical,
         },
         'source_definitions': {
             'ad_copy': 'Submitted platform caption/body text from the form only.',
@@ -244,7 +246,10 @@ async def _review_offer(
     policy_text,policy_sources=build_policy_context(meta.policy_text, profile)
     # Raw disagreements no longer bypass the tested, versioned learning process.
     partner_feedback_precedents=[]
-    scoped_policy = meta.vertical_policy_version is not None
+    policy_version = profile.vertical_policy_version if profile.vertical_policy_version is not None else meta.vertical_policy_version
+    policy_name = profile.vertical_policy_name or meta.vertical_policy_name
+    uses_default = profile.vertical_uses_default if profile.vertical_policy_version is not None else meta.vertical_uses_default
+    scoped_policy = policy_version is not None
     learning_context={} if scoped_policy else await learning.review_context(profile.offer_id, profile.version)
     evidence=build_review_evidence(
         media_kind,
@@ -278,16 +283,16 @@ async def _review_offer(
     report.offer_id=profile.offer_id
     report.offer_name=profile.display_name
     report.guideline_version=profile.version
-    report.vertical_policy_version=meta.vertical_policy_version
-    report.vertical_policy_name=meta.vertical_policy_name
-    report.policy_sources=[*policy_sources] if not scoped_policy or meta.vertical_uses_default else []
+    report.vertical_policy_version=policy_version
+    report.vertical_policy_name=policy_name
+    report.policy_sources=[*policy_sources] if not scoped_policy or uses_default else []
     if scoped_policy:
-        report.policy_sources.append(f'{meta.vertical_policy_name} vertical guidelines (version {meta.vertical_policy_version})')
+        report.policy_sources.append(f'{policy_name} vertical guidelines (version {policy_version})')
     if report.learning_version:
         report.policy_sources.append(f'{profile.display_name} learned clarifications (version {report.learning_version})')
     if build_internal_override_context(profile):
         report.policy_sources.append(
-            f'{meta.vertical_policy_name} scoped internal rules (vertical version {meta.vertical_policy_version})' if scoped_policy else f'{profile.display_name} current internal rules (version {profile.version})'
+            f'{policy_name} scoped internal rules (vertical version {policy_version})' if scoped_policy else f'{profile.display_name} current internal rules (version {profile.version})'
         )
     if partner_feedback_precedents:
         report.policy_sources.append(
@@ -401,6 +406,12 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
     error_type=''
     ocr_result=OcrResult(not_applicable=media_kind == 'copy_only')
     try:
+        # Durable partner jobs bypass the in-memory queue, so also select here
+        # from their frozen batch snapshot. Previously selected jobs are a no-op.
+        selected_meta = select_review_policies(meta, media_path.name if media_path else '')
+        if selected_meta is not meta:
+            meta = selected_meta
+            write_json(jd/'request.json', meta.model_dump(mode='json'))
         if media_kind == 'copy_only':
             with timer.stage('prepare_copy_only_evidence'):
                 frames=[]

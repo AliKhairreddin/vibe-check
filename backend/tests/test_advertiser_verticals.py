@@ -39,7 +39,7 @@ def test_selected_policy_excludes_other_verticals_and_shared_rules_unless_explic
     state['policy']['includeDefault'] = True
     combined, _ = verticals.review_snapshot(context, 'solar')
     assert 'Changed after submission' in combined[0][0].official_guidelines
-    state['policy'].update(officialGuidelines='', internalOverrides=[])
+    state['policy'].update(officialGuidelines='', internalOverrides=[], version=0)
     unchanged, marker = verticals.review_snapshot(context, 'auto-insurance')
     assert marker is None
     assert unchanged[0][0].model_dump() == verticals.OfferProfile.model_validate(state['base']).model_dump()

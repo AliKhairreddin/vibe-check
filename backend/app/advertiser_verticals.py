@@ -1,12 +1,11 @@
 """Advertiser-selected verticals and immutable per-submission policy snapshots."""
-import hashlib
-
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .advertiser_guidelines import GuidelineRule, own_offer
 from .review_pipeline import storage
-from .review_pipeline.models import OfferProfile, OfferOutcome
+from .review_pipeline.models import OfferProfile, OfferOutcome, OfferVerticalPolicy
+from .review_pipeline.vertical_policy import compose_policy
 
 
 def call(function, args, mutation=False):
@@ -50,23 +49,13 @@ def review_snapshot(context, vertical):
         raise HTTPException(409, 'This vertical is not active. Choose an active vertical or contact your advertiser.')
     if not base:
         raise HTTPException(409, 'The advertiser has not configured guidelines yet.')
-    include = selected['includeDefault']
-    if include and (not base['enabled'] or not base['official_guidelines'].strip()):
-        raise HTTPException(409, 'The default policy is paused or empty. Contact your advertiser.')
-    specific = selected['officialGuidelines'].strip()
     rules = [{'override_id': r['overrideId'], **{k: v for k, v in r.items() if k != 'overrideId'}} for r in selected['internalOverrides']]
-    custom = bool(specific or rules or not include)
-    if custom:
-        texts = ([base['official_guidelines']] if include else []) + ([f"Vertical guidelines: {selected['name']}\n{specific}"] if specific else [])
-        text = '\n\n'.join(texts)
-        if not text or len(text) > 200_000:
-            raise HTTPException(409, 'The combined policy is empty or too long. Ask your advertiser to adjust the guidelines.')
-        # Prefix scoped rule IDs, keeping default and vertical exceptions distinct.
-        combined = (base['internal_overrides'] if include else []) + [{**r, 'override_id': 'vertical-' + hashlib.sha256(r['override_id'].encode()).hexdigest()[:32]} for r in rules]
-        base = {**base, 'official_guidelines': text, 'internal_overrides': combined, 'enabled': True, 'is_default': False}
-    profile = OfferProfile.model_validate(base)
+    policy = OfferVerticalPolicy(vertical_id=vertical, name=selected['name'], enabled=selected['enabled'],
+        include_default=selected['includeDefault'], official_guidelines=selected['officialGuidelines'],
+        internal_overrides=rules, version=selected['version'])
+    profile = compose_policy(OfferProfile.model_validate(base), policy)
     context['verticalId'] = vertical
-    return ([profile], [OfferOutcome(offer_id=profile.offer_id, offer_name=profile.display_name, evaluation_state='evaluated')]), selected if custom else None
+    return ([profile], [OfferOutcome(offer_id=profile.offer_id, offer_name=profile.display_name, evaluation_state='evaluated')]), selected if profile.vertical_policy_version is not None else None
 
 
 def register(app):

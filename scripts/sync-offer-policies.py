@@ -122,6 +122,11 @@ def main() -> int:
         if isinstance(profile, dict) and isinstance(profile.get('offer_id'), str)
     }
     for offer_id, profile in profiles.items():
+        if offer_id in {'lead-economy', 'kissterra', 'smart-financial'}:
+            verticals = _convex_json(args.deployment, 'verticals:list', {'secret': secret, 'clientId': offer_id})
+            if any(vertical.get('version', 0) > 0 for vertical in verticals):
+                print(f'{offer_id} has advertiser-managed vertical policies; legacy seed skipped. Edit shared and vertical guidelines in the workspace.')
+                continue
         payload = {
             'secret': secret,
             'offerId': offer_id,

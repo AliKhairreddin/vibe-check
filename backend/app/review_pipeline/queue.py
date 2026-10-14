@@ -11,6 +11,7 @@ from .drive import DriveFile, get_google_drive_client
 from .jobs import process_job
 from .media import MediaKind
 from .models import JobStatus, ReviewRequestMeta
+from .vertical_policy import select_review_policies
 from .storage import get_status, job_dir, set_status, write_json
 from .live_scan_storage import finish_live_review
 from .telegram import finish_batch_item_and_notify, send_job_event, send_review_started
@@ -276,6 +277,10 @@ async def enqueue_job(
     persist_payload: bool = True,
     recovery_payload: RecoveredReviewPayload | None = None,
 ):
+    selected_meta = select_review_policies(meta, file_name)
+    if selected_meta is not meta:
+        meta = selected_meta
+        write_json(job_dir(job_id) / 'request.json', meta.model_dump(mode='json'))
     if persist_payload:
         await persist_job_payload(
             job_id,

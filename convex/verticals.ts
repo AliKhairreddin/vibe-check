@@ -1,6 +1,6 @@
 import { v, getConvexSize } from 'convex/values';
-import { query, mutation, type QueryCtx, type MutationCtx } from './_generated/server.js';
-import { normalizeOverrides, publicProfile } from './offers.ts';
+import { query, mutation, internalMutation, type QueryCtx, type MutationCtx } from './_generated/server.js';
+import { ensureRevision, normalizeOverrides, publicProfile } from './offers.ts';
 import { LEGACY_VERTICALS, VERTICAL_CATALOG, validVerticalId } from './verticalCatalog.ts';
 
 const secret = { secret: v.string() };
@@ -9,6 +9,7 @@ function authorize(value: string) {
   if (!process.env.CONVEX_HTTP_SECRET || value !== process.env.CONVEX_HTTP_SECRET) throw new Error('Unauthorized');
 }
 const legacyClients = new Set(['acp', 'kissterra', 'lead-economy', 'smart-financial']);
+const auditedClients = ['lead-economy', 'kissterra', 'smart-financial'];
 export function defaultVertical(clientId: string, verticalId: string) {
   const entry = VERTICAL_CATALOG.find(item => item[0] === verticalId);
   if (!entry) return null;
@@ -41,6 +42,81 @@ export const reviewPolicy = query({
     const policy = await selectedVertical(ctx, args.clientId, args.verticalId);
     const base = await ctx.db.query('offerProfiles').withIndex('by_offer_id', q => q.eq('offerId', args.offerId)).unique();
     return { policy, base: base ? publicProfile(base) : null };
+  },
+});
+
+// Freeze the complete small policy set with its matching shared-policy version.
+// Internal/API batches select from this snapshot per creative, without fetching
+// newer policies on retries or sending other verticals to the review model.
+export const reviewCatalog = query({
+  args: { ...secret, offerIds: v.array(v.string()) }, returns: v.any(),
+  handler: async (ctx, args) => {
+    authorize(args.secret);
+    if (args.offerIds.length > 3 || args.offerIds.some(id => !auditedClients.includes(id))) throw new Error('Invalid audited offer selection.');
+    return Promise.all([...new Set(args.offerIds)].map(async offerId => {
+      const base = await ctx.db.query('offerProfiles').withIndex('by_offer_id', q => q.eq('offerId', offerId)).unique();
+      if (!base) throw new Error('Offer profile not found.');
+      const rows = await ctx.db.query('advertiserVerticals').withIndex('by_client_id', q => q.eq('clientId', offerId)).take(121);
+      if (rows.length > 120) throw new Error('Too many vertical policies.');
+      const saved = new Map(rows.map(row => [row.verticalId, row]));
+      const policies = [...rows, ...LEGACY_VERTICALS.filter(id => !saved.has(id)).map(id => defaultVertical(offerId, id)!)];
+      return { ...publicProfile(base), vertical_policies: policies.map(row => ({
+        vertical_id: row.verticalId, name: row.name, enabled: row.enabled, include_default: row.includeDefault,
+        official_guidelines: row.officialGuidelines, version: row.version,
+        internal_overrides: row.internalOverrides.map(({ overrideId, ...rule }) => ({ ...rule, override_id: overrideId })),
+      })) };
+    }));
+  },
+});
+
+// One-time operator migration. All three reviewed sources must still match;
+// a changed source or previously edited vertical aborts the whole transaction.
+export const assignLegacy = internalMutation({
+  args: { assignments: v.array(v.object({
+    clientId: v.string(), expectedVersion: v.number(), expectedGuidelines: v.string(), expectedOverrides: overrides,
+    sharedGuidelines: v.string(), sharedOverrides: overrides,
+    verticals: v.array(v.object({ verticalId: v.string(), enabled: v.boolean(), officialGuidelines: v.string(), internalOverrides: overrides })),
+  })) },
+  returns: v.array(v.object({ clientId: v.string(), version: v.number(), changed: v.boolean() })),
+  handler: async (ctx, { assignments }) => {
+    if (assignments.length !== 3 || new Set(assignments.map(a => a.clientId)).size !== 3 || assignments.some(a => !auditedClients.includes(a.clientId))) throw new Error('Provide exactly the three audited advertisers.');
+    const prepared = [];
+    for (const item of assignments) {
+      const base = await ctx.db.query('offerProfiles').withIndex('by_offer_id', q => q.eq('offerId', item.clientId)).unique();
+      if (!base) throw new Error('Offer profile not found.');
+      const rows = await ctx.db.query('advertiserVerticals').withIndex('by_client_id', q => q.eq('clientId', item.clientId)).take(121);
+      const sharedOverrides = normalizeOverrides(item.sharedOverrides);
+      const policies = item.verticals.map(policy => {
+        const entry = VERTICAL_CATALOG.find(row => row[0] === policy.verticalId);
+        if (!entry || policy.officialGuidelines.length > 200000) throw new Error('Invalid migration policy.');
+        return { ...policy, clientId: item.clientId, name: entry[1], includeDefault: true, internalOverrides: normalizeOverrides(policy.internalOverrides), version: 1 };
+      });
+      if (!item.sharedGuidelines.trim() || item.sharedGuidelines.length > 200000 || policies.length > 10 || new Set(policies.map(p => p.verticalId)).size !== policies.length || !LEGACY_VERTICALS.every(id => policies.some(p => p.verticalId === id))) throw new Error('Incomplete migration.');
+      const sameRules = (a: ReturnType<typeof normalizeOverrides>, b: ReturnType<typeof normalizeOverrides>) => JSON.stringify(normalizeOverrides(a)) === JSON.stringify(normalizeOverrides(b));
+      const done = base.version === item.expectedVersion + 1 && base.officialGuidelines === item.sharedGuidelines && sameRules(base.internalOverrides, sharedOverrides)
+        && rows.length === policies.length && policies.every(policy => rows.some(row => row.verticalId === policy.verticalId && row.version === 1 && row.enabled === policy.enabled && row.includeDefault && row.officialGuidelines === policy.officialGuidelines && sameRules(row.internalOverrides, policy.internalOverrides)));
+      if (!done && (base.version !== item.expectedVersion || base.officialGuidelines !== item.expectedGuidelines || !sameRules(base.internalOverrides, normalizeOverrides(item.expectedOverrides)) || rows.length)) throw new Error(`Source changed for ${item.clientId}; audit again before migrating.`);
+      prepared.push({ item, base, sharedOverrides, policies, done });
+    }
+    const result = [];
+    for (const { item, base, sharedOverrides, policies, done } of prepared) {
+      if (!done) {
+        const updatedAt = Date.now();
+        await ensureRevision(ctx, base);
+        const next = { ...base, officialGuidelines: item.sharedGuidelines, internalOverrides: sharedOverrides, version: base.version + 1, updatedAt };
+        if (getConvexSize(next) > 900000) throw new Error('Shared migration policy is too large.');
+        await ctx.db.patch(base._id, { officialGuidelines: next.officialGuidelines, internalOverrides: next.internalOverrides, version: next.version, updatedAt });
+        await ensureRevision(ctx, next);
+        for (const policy of policies) {
+          const value = { ...policy, updatedAt };
+          if (getConvexSize(value) > 900000) throw new Error('Migration policy is too large.');
+          await ctx.db.insert('advertiserVerticals', value);
+          await ctx.db.insert('advertiserVerticalRevisions', value);
+        }
+      }
+      result.push({ clientId: item.clientId, version: item.expectedVersion + 1, changed: !done });
+    }
+    return result;
   },
 });
 export const save = mutation({
