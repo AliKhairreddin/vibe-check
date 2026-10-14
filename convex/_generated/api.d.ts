@@ -50,6 +50,8 @@ import type * as telegramDigest from "../telegramDigest.js";
 import type * as telegramMessageTypes from "../telegramMessageTypes.js";
 import type * as telegramMilestones from "../telegramMilestones.js";
 import type * as telegramNotifications from "../telegramNotifications.js";
+import type * as verticalCatalog from "../verticalCatalog.js";
+import type * as verticals from "../verticals.js";
 import type * as workspaces from "../workspaces.js";
 
 import type {
@@ -101,6 +103,8 @@ declare const fullApi: ApiFromModules<{
   telegramMessageTypes: typeof telegramMessageTypes;
   telegramMilestones: typeof telegramMilestones;
   telegramNotifications: typeof telegramNotifications;
+  verticalCatalog: typeof verticalCatalog;
+  verticals: typeof verticals;
   workspaces: typeof workspaces;
 }>;
 
