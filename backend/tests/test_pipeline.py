@@ -5903,7 +5903,9 @@ def test_convex_progress_write_retries_transient_http_conflicts(monkeypatch):
 
     assert result == {'ok': True}
     assert len(calls) == 3
-    assert sleeps == [0.2, 0.4]
+    assert len(sleeps) == 2
+    assert 0.2 <= sleeps[0] <= 0.4
+    assert 0.4 <= sleeps[1] <= 0.8
 
 
 def test_convex_progress_write_does_not_retry_validation_errors(monkeypatch):

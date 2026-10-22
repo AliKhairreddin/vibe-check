@@ -133,6 +133,17 @@ const NOTIFICATION_LEASE_MS = 15 * 60 * 1000;
 const MAX_NOTIFICATION_ATTEMPTS = 3;
 const PURGE_CHUNK_SIZE = 10;
 
+function sameOutcomes(before: BatchItem['offerOutcomes'], after: BatchItem['offerOutcomes']): boolean {
+  if (before === after) return true;
+  const previous = before ?? [];
+  const next = after ?? [];
+  return previous.length === next.length && previous.every((outcome, index) => {
+    const other = next[index];
+    const keys = new Set([...Object.keys(outcome), ...Object.keys(other)]);
+    return [...keys].every(key => Reflect.get(outcome, key) === Reflect.get(other, key));
+  });
+}
+
 const purgeCountsValidator = v.object({
   apiEvidenceBundles: v.number(),
   apiReviewLinks: v.number(),
@@ -806,12 +817,25 @@ export const finishItem = mutation({
       withOverride: v.optional(v.boolean()),
     }))),
     result: v.optional(v.string()),
-    status: v.string(),
+    status: v.union(v.literal('complete'), v.literal('failed'), v.literal('upload_failed')),
   },
+  returns: v.object({ batch: publicBatchValidator, shouldNotify: v.boolean() }),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
     const batch = await findBatch(ctx, args.batchId);
     if (!batch) throw new Error("Review batch not found");
+    const target = batch.items.find(item => item.itemId === args.itemId);
+    if (!target) throw new Error("Batch item not found");
+    // An old worker must not overwrite a retry's new job, or turn a completed
+    // review into a failure after losing its completion response.
+    if ((target.jobId && args.jobId && target.jobId !== args.jobId)
+      || (target.status === 'complete' && args.status !== 'complete')) {
+      return { batch: publicBatch(batch), shouldNotify: false };
+    }
+    const itemChanged = target.jobId !== (args.jobId ?? target.jobId)
+      || target.message !== args.message || target.status !== args.status
+      || target.result !== (args.result ?? target.result)
+      || !sameOutcomes(target.offerOutcomes, args.offerOutcomes ?? target.offerOutcomes);
     const items = batch.items.map((item) => item.itemId === args.itemId ? {
       ...item,
       jobId: args.jobId ?? item.jobId,
@@ -820,7 +844,6 @@ export const finishItem = mutation({
       result: args.result ?? item.result,
       status: args.status,
     } : item);
-    if (!items.some((item) => item.itemId === args.itemId)) throw new Error("Batch item not found");
     const notificationReady = items.every((item) =>
       TERMINAL_BATCH_STATUSES.has(item.status)
     );
@@ -835,6 +858,10 @@ export const finishItem = mutation({
       && notificationReady
       && !notificationExhausted
     );
+    if (!itemChanged && !shouldNotify && !notificationExhausted
+      && batch.notificationReady === notificationReady) {
+      return { batch: publicBatch(batch), shouldNotify: false };
+    }
     const notificationStatus = shouldNotify
       ? "claimed"
       : notificationExhausted

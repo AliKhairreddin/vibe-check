@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import Stripe from 'stripe';
 import { accessAllowed, billingReady, subscriptionSnapshot } from '../convex/billingPolicy.ts';
-import { beginCheckout, claimSync, completeSync, grandfatherExisting, receiveEvent, requestSync, requireBillingAccess, status as billingStatus } from '../convex/billing.ts';
+import { beginCheckout, claimSync, completeSync, grandfatherExisting, receiveEvent, requestSync, requireBillingAccess, recover, status as billingStatus } from '../convex/billing.ts';
 import { create, acceptInvite, resetInvite, createComplimentary, renameUsername, get as getAdvertiser } from '../convex/advertiserAccounts.ts';
 import { claimSubmission } from '../convex/workspaces.ts';
 import http from '../convex/http.ts';
@@ -85,6 +85,34 @@ test('paid invoice, supported managed plan, environment, and subscription lifecy
   assert.throws(() => subscriptionSnapshot([subscription(), subscription({ id: 'sub_two' })], false), /Multiple/);
   assert.equal(billingReady(false), true);
   assert.equal(billingReady(true), false);
+});
+
+test('billing recovery only schedules eligible due customers and retains current event receipts', async () => {
+  const { ctx, tables, scheduled } = fixture();
+  const now = Date.now();
+  await seed(ctx, { clientId: 'due', customerId: 'cus_due' });
+  await seed(ctx, { clientId: 'future', customerId: 'cus_future', nextSyncAt: now + 86400000 });
+  await seed(ctx, { clientId: 'leased', customerId: 'cus_leased', syncLeaseUntil: now + 60000 });
+  await seed(ctx, { clientId: 'no-customer' });
+  await seed(ctx, { clientId: 'complimentary', customerId: 'cus_free', accessMode: 'complimentary' });
+  await seed(ctx, { clientId: 'wrong-mode', customerId: 'cus_test', isTest: true });
+  await ctx.db.insert('billingEvents', { eventId: 'expired', createdAt: now - 31 * 86400000 });
+  await ctx.db.insert('billingEvents', { eventId: 'current', createdAt: now });
+  const before = structuredClone(tables.billingWorkspaces);
+  await invoke(recover, ctx);
+  assert.deepEqual(scheduled.map(call => call[2]), [{ clientId: 'due' }]);
+  assert.deepEqual(tables.billingWorkspaces, before, 'recovery does not overwrite subscription state');
+  assert.deepEqual(tables.billingEvents.map(row => row.eventId), ['current']);
+});
+
+test('billing recovery with only exempt customers does not schedule a Stripe request', async () => {
+  const { ctx, tables, scheduled } = fixture();
+  await invoke(grandfatherExisting, ctx);
+  await seed(ctx, { clientId: 'complimentary', accessMode: 'complimentary', nextSyncAt: Number.MAX_SAFE_INTEGER });
+  const before = structuredClone(tables.billingWorkspaces);
+  await invoke(recover, ctx);
+  assert.deepEqual(tables.billingWorkspaces, before);
+  assert.equal(scheduled.length, 0);
 });
 
 test('checkout is serialized, reuses one attempt, and cannot enroll exempt or wrong-mode workspaces', async () => {

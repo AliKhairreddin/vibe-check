@@ -105,6 +105,30 @@ def test_convex_function_errors_are_not_retried(convex_transport, monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('recover', [True, False])
+def test_convex_retries_only_system_contention_envelopes(convex_transport, monkeypatch, recover):
+    calls = []
+    message = ('Documents read from or written to the table "reviewBatches" '
+               'changed while this mutation was being run and on every subsequent retry. '
+               'Another call to this mutation changed the document with ID "batch".')
+
+    def respond(request):
+        calls.append(json.loads(request.content))
+        if recover and len(calls) == 2:
+            return httpx.Response(200, json={'status': 'success', 'value': {'saved': True}})
+        return httpx.Response(200, json={'status': 'error', 'errorMessage': message})
+
+    monkeypatch.setattr(storage, '_convex_client', httpx.Client(transport=httpx.MockTransport(respond)))
+    if recover:
+        assert storage._convex_call_with_retry('mutation', 'batches:finishItem', {'itemId': 'item'}) == {'saved': True}
+        assert len(calls) == 2
+    else:
+        with pytest.raises(storage.ConvexContentionError):
+            storage._convex_call_with_retry('mutation', 'batches:finishItem', {'itemId': 'item'})
+        assert len(calls) == storage.CONVEX_CALL_ATTEMPTS
+    assert all(call == calls[0] for call in calls)
+
+
 def test_review_status_write_keeps_event_loop_responsive_and_lease_context(monkeypatch):
     async def run():
         started = asyncio.Event()

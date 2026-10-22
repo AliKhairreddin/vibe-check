@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -186,6 +187,10 @@ def backfill_review_offer_stats(*, max_pages:int=10)->dict[str, Any]:
             break
     return {'processed':processed, 'is_done':is_done}
 
+class ConvexContentionError(RuntimeError):
+    """A system OCC failure after Convex's own automatic attempts."""
+
+
 def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
     if not convex_enabled():
         return None
@@ -211,7 +216,13 @@ def _convex_call(kind:str, path:str, args:dict[str, Any])->Any:
         raise urllib.error.URLError(type(exc).__name__) from None
     data=response.json()
     if data.get('status') != 'success':
-        raise RuntimeError(data.get('errorMessage') or 'Convex request failed')
+        message=data.get('errorMessage') or 'Convex request failed'
+        if re.search(
+            r'Documents read from or written to.+changed while this mutation was being run'
+            r'.+every subsequent retry', message, re.S,
+        ):
+            raise ConvexContentionError(message)
+        raise RuntimeError(message)
     return data.get('value')
 
 def _convex_call_with_retry(kind:str, path:str, args:dict[str, Any])->Any:
@@ -233,10 +244,11 @@ def _convex_call_with_retry(kind:str, path:str, args:dict[str, Any])->Any:
             )
             if not transient or attempt == CONVEX_CALL_ATTEMPTS:
                 raise
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, TimeoutError, ConvexContentionError):
             if attempt == CONVEX_CALL_ATTEMPTS:
                 raise
-        time.sleep(CONVEX_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+        delay=CONVEX_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+        time.sleep(delay + random.uniform(0, delay))
     raise RuntimeError('Convex retry loop exited unexpectedly.')
 
 def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_name:str='', file_size:int|None=None, has_ad_copy:bool|None=None, has_creative:bool|None=None, batch_id:str|None=None, batch_item_id:str|None=None, offer_ids:list[str]|None=None, primary_offer_id:str|None=None, automation_run_id:str|None=None, vertical:ReviewVertical|None=None)->JobRecord:

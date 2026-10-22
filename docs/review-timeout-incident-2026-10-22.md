@@ -42,6 +42,19 @@ Backend hourly totals now use a stable per-instance hash across 64 shards, edge 
 
 Historical Health insights may continue displaying old conflicts after deployment. Reduced contention needs observation under comparable traffic; a passing deploy alone cannot prove that every future conflict is eliminated.
 
+## Follow-up: batch completion, billing, and live conflicts
+
+The CLI's detailed production insights identified the conflicting writers and event times:
+
+- `batches:finishItem`: 21 automatically retried attempts against `reviewBatches`, with the same mutation as the competing writer. The latest recorded event was October 22 at 5:23:35 a.m. EDT. There were no permanent batch-completion failures in these insights. Different genuine item completions must still serialize their shared batch summary and final notification claim; occasional automatic retries are expected under simultaneous completions.
+- `billing:recover`: one automatically retried attempt on October 19 at 8:43:59 p.m. EDT. The competing writer was Convex's internal `migrate_persisted_version`, with no application table identified. This is evidence of a platform migration conflict, not a subscription-row race. Production currently has only grandfathered/complimentary billing records and no Stripe customer IDs. The billing implementation is unchanged; additional regression checks cover recovery eligibility, active sync leases, mode isolation, receipt retention, and exempt workspaces.
+
+Batch completion now skips writes when the same job, status, message, result and outcome snapshot are replayed. It compares outcome fields independently of JSON property order, preserves notification ownership/attempt limits, and can still claim a ready pending notification when an otherwise unchanged final item is replayed. Late failures cannot regress a completed item, and callbacks from a different job cannot overwrite the item's current job.
+
+The Python Convex client now recognizes the specific system message for exhausted optimistic-concurrency retries inside HTTP 200 error envelopes. Idempotent persistence calls use the existing bounded retry count with jitter. Other function, authorization and validation errors continue to fail immediately.
+
+Verification uses `convex logs --success --jsonl` and its `occInfo`, `willRetry`, error and execution timestamps, alongside `convex insights --details --json`. The insight totals cover historical events and must not be presented as new post-release errors. A quiet log interval without real completions does not prove there will be no conflicts during the next large batch; duplicate callback replay checks can verify the new no-write path without altering review results or sending notifications.
+
 ## Validation
 
 Regression checks exercise real asynchronous timeout cancellation and recovery, capped retries, empty/non-text output, malformed envelopes, embedded provider errors, incomplete otherwise-valid JSON, rate-limit cooldowns, preserved model/privacy settings, sharded aggregation, legacy totals, and bounded retention outside ingestion. Run the repository's complete `pnpm run verify` before delivery. Production deployment follows the push-triggered Convex/Cloudflare workflow, including the Docker OCR benchmark and activated-backend health check.
