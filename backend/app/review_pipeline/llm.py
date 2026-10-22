@@ -1,5 +1,6 @@
 from __future__ import annotations
-import asyncio, json, logging, os, re
+import asyncio, json, logging, math, os, random, re, time
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -132,6 +133,8 @@ DEFAULT_MAX_REVIEW_ATTEMPTS = 3
 MAX_REVIEW_ATTEMPTS_LIMIT = 5
 DEFAULT_RETRY_BASE_SECONDS = 1.0
 DEFAULT_REQUEST_DEADLINE_SECONDS = 180
+MAX_REQUEST_DEADLINE_SECONDS = 600
+MAX_PROVIDER_RETRY_DELAY_SECONDS = 300
 SEMANTIC_NORMALIZATION_LIMITATION = (
     'The provider verdict was normalized deterministically from its returned '
     'findings and enforcement-consequence fields.'
@@ -146,6 +149,12 @@ logger = logging.getLogger(__name__)
 
 class ComplianceResponseError(ValueError):
     pass
+
+
+class ProviderResponseError(ComplianceResponseError):
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _english_authored_field_issue(report: ComplianceReport) -> str | None:
@@ -189,7 +198,7 @@ def _request_deadline_seconds() -> int:
         ))
     except ValueError:
         configured = DEFAULT_REQUEST_DEADLINE_SECONDS
-    return max(30, min(configured, 10 * 60))
+    return max(30, min(configured, MAX_REQUEST_DEADLINE_SECONDS))
 
 
 def _max_review_attempts() -> int:
@@ -211,17 +220,81 @@ def _retry_delay_seconds(attempt: int) -> float:
         ))
     except ValueError:
         base = DEFAULT_RETRY_BASE_SECONDS
-    return max(0.0, min(base, 30.0)) * (2 ** max(0, attempt - 1))
+    delay = min(60.0, max(0.0, min(base, 30.0)) * (2 ** max(0, attempt - 1)))
+    # Batch requests often fail together. Avoid retrying every creative at once.
+    return delay + random.uniform(0, min(delay, 5.0))
 
 
 def _retryable_http_status(status_code: int) -> bool:
     return status_code in {408, 409, 425, 429} or 500 <= status_code <= 599
 
 
-async def _wait_before_retry(attempt: int) -> None:
+async def _wait_before_retry(attempt: int, response: httpx.Response | None = None) -> None:
     delay = _retry_delay_seconds(attempt)
+    retry_after = response.headers.get('retry-after') if response is not None else None
+    if retry_after:
+        try:
+            requested_delay = float(retry_after)
+        except ValueError:
+            try:
+                requested_delay = parsedate_to_datetime(retry_after).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError):
+                requested_delay = 0.0
+        if math.isfinite(requested_delay):
+            if requested_delay > MAX_PROVIDER_RETRY_DELAY_SECONDS:
+                raise ComplianceResponseError(
+                    'The policy reviewer requested a retry delay longer than five minutes. '
+                    'Retry this review later; no policy color was assigned.'
+                )
+            delay = max(delay, requested_delay)
     if delay:
         await asyncio.sleep(delay)
+
+
+def _provider_content(response: httpx.Response) -> str:
+    data = response.json()
+    if not isinstance(data, dict):
+        raise TypeError('The provider response must be an object.')
+    choices = data.get('choices') or [{}]
+    if not isinstance(choices, list) or not isinstance(choices[0], dict):
+        raise TypeError('The provider choices must contain an object.')
+    choice = choices[0]
+    error = data.get('error') or choice.get('error')
+    finish_reason = choice.get('finish_reason')
+    # Identifiers help correlate a failed attempt with upstream logs without
+    # retaining the prompt, provider error text, or a partial compliance verdict.
+    context = ' '.join(
+        f'{name}={value}' for name, raw in (
+            ('generation', data.get('id')),
+            ('provider', data.get('provider')),
+            ('finish_reason', finish_reason),
+        ) if isinstance(raw, str) and (value := re.sub(r'[^a-zA-Z0-9_./:-]', '', raw)[:120])
+    )
+    logger.info('Policy review provider response. %s', context)
+    if error or finish_reason == 'error':
+        code = error.get('code') if isinstance(error, dict) else None
+        try:
+            status_code = int(code) if code is not None else None
+        except (TypeError, ValueError):
+            status_code = None
+        raise ProviderResponseError(
+            'The policy reviewer returned an upstream error'
+            f'{f" (HTTP {status_code})" if status_code else ""}. {context}'.strip(),
+            status_code=status_code,
+        )
+    if finish_reason in {'length', 'content_filter'}:
+        raise ProviderResponseError(
+            f'The policy reviewer did not finish its structured result. {context}'.strip()
+        )
+    message = choice.get('message') or {}
+    if not isinstance(message, dict):
+        raise TypeError('The provider message must be an object.')
+    content = message.get('content')
+    if not isinstance(content, str) or not content.strip():
+        raise ProviderResponseError(
+            f'The policy reviewer returned an empty or non-text structured result. {context}'.strip()
+        )
+    return content
 
 
 def _load_json(text: str) -> Any:
@@ -750,8 +823,12 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
     max_attempts=_max_review_attempts()
     last_error:ComplianceResponseError|None=None
     last_content:str|None=None
-    async with httpx.AsyncClient(timeout=120) as client:
+    timeout_scale = 1
+    # The attempt's wall-clock deadline below owns the total budget. A shorter
+    # HTTP read timeout must not silently defeat the longer recovery attempt.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MAX_REQUEST_DEADLINE_SECONDS, connect=30)) as client:
         for attempt in range(1, max_attempts + 1):
+            deadline = min(MAX_REQUEST_DEADLINE_SECONDS, _request_deadline_seconds() * timeout_scale)
             payload={
                 'model':selected_model,
                 'messages':messages,
@@ -760,9 +837,14 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                 'plugins':[{'id':'response-healing'}],
                 'temperature':0,
             }
+            if timeout_scale > 1:
+                # A high-throughput endpoint can still take too long to start.
+                # Keep the model and privacy rules, but prefer lower latency
+                # when recovering from a timeout.
+                payload['provider']['sort'] = 'latency'
             content:Any=None
             try:
-                async with asyncio.timeout(_request_deadline_seconds()):
+                async with asyncio.timeout(deadline):
                     response=await client.post(
                         'https://openrouter.ai/api/v1/chat/completions',
                         headers={
@@ -772,16 +854,19 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                         json=payload,
                     )
                 response.raise_for_status()
-                content=response.json()['choices'][0]['message']['content']
+                content=_provider_content(response)
             except TimeoutError as exc:
+                timeout_scale *= 2
                 last_error=ComplianceResponseError(
-                    f'The policy reviewer timed out on attempt {attempt} of {max_attempts}.'
+                    f'The policy reviewer timed out after {deadline:g} seconds '
+                    f'on attempt {attempt} of {max_attempts}.'
                 )
                 logger.warning(
-                    'Policy review request timed out. attempt=%s max_attempts=%s model=%s',
+                    'Policy review request timed out. attempt=%s max_attempts=%s model=%s deadline_seconds=%s',
                     attempt,
                     max_attempts,
                     selected_model,
+                    deadline,
                 )
                 if attempt < max_attempts:
                     await _wait_before_retry(attempt)
@@ -791,6 +876,8 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                 status_code=exc.response.status_code
                 if not _retryable_http_status(status_code):
                     raise
+                if status_code == 408:
+                    timeout_scale *= 2
                 last_error=ComplianceResponseError(
                     'The policy reviewer returned a transient HTTP '
                     f'{status_code} error on attempt {attempt} of {max_attempts}.'
@@ -804,10 +891,12 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                     status_code,
                 )
                 if attempt < max_attempts:
-                    await _wait_before_retry(attempt)
+                    await _wait_before_retry(attempt, exc.response)
                     continue
                 break
             except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if isinstance(exc, httpx.TimeoutException):
+                    timeout_scale *= 2
                 last_error=ComplianceResponseError(
                     'The policy reviewer had a transient network failure '
                     f'({type(exc).__name__}) on attempt {attempt} of {max_attempts}.'
@@ -822,6 +911,20 @@ async def review_with_openrouter(evidence:dict, model:str|None=None)->Compliance
                 )
                 if attempt < max_attempts:
                     await _wait_before_retry(attempt)
+                    continue
+                break
+            except ProviderResponseError as exc:
+                if exc.status_code is not None and not _retryable_http_status(exc.status_code):
+                    raise
+                last_error = exc
+                if exc.status_code == 408:
+                    timeout_scale *= 2
+                logger.warning(
+                    'Policy review provider did not finish. attempt=%s max_attempts=%s model=%s detail=%s',
+                    attempt, max_attempts, selected_model, exc,
+                )
+                if attempt < max_attempts:
+                    await _wait_before_retry(attempt, response)
                     continue
                 break
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { acceptInvite, claimSubmission, createShare, getShare, invitePublisher, revokeShare, setupDigitalNudge, digitalNudgeMemberships, setPlan, releaseUnstartedSubmission } from '../convex/workspaces.ts';
 import { attributeInternalReview } from '../convex/publisherOwnership.ts';
-import { recordHeartbeat, recordEdgeRead, overview, backfillPublisherStats } from '../convex/platform.ts';
+import { recordHeartbeat, recordEdgeRead, overview, backfillPublisherStats, cleanupTraffic } from '../convex/platform.ts';
+import { TRAFFIC_SHARDS, trafficShard } from '../convex/platformTraffic.ts';
 import { syncReviewOfferStats } from '../convex/reviews.ts';
 import { apiRequestAllowed, isClientPagePath, isAdminPagePath } from '../worker/routing.ts';
 
@@ -44,7 +45,7 @@ async function seedPublisher(ctx: any, clientId = 'kissterra', publisherId = 'ba
   await ctx.db.insert('publishers', { clientId, publisherId, username: publisherId, name: 'Banana', status: 'active', authVersion: 1, createdAt: Date.now() });
 }
 
-test('edge traffic preserves platform totals without registering a container and expires old counters', async () => {
+test('edge traffic preserves platform totals without registering a container or running cleanup on each read', async () => {
   const { ctx, tables } = fixture();
   const hour = Math.floor(Date.now() / 3600000) * 3600000;
   await ctx.db.insert('platformTrafficHours', { hour, requests: 4, errors: 1 });
@@ -53,9 +54,9 @@ test('edge traffic preserves platform totals without registering a container and
   const result = await invoke(overview, ctx);
   assert.deepEqual(result.traffic, [{ hour, requests: 8, errors: 1 }]);
   assert.deepEqual(result.instances, []);
-  assert.equal(tables.platformEdgeTrafficHours.length, 3);
+  assert.equal(tables.platformEdgeTrafficHours.length, 4);
   await assert.rejects(invoke(recordEdgeRead, ctx, { shard: 0, secret: 'wrong' }), /Unauthorized/);
-  for (const shard of [-1, 0.5, 16]) await assert.rejects(invoke(recordEdgeRead, ctx, { shard }), /Invalid/);
+  for (const shard of [-1, 0.5, TRAFFIC_SHARDS]) await assert.rejects(invoke(recordEdgeRead, ctx, { shard }), /Invalid/);
   assert.deepEqual((await invoke(overview, ctx)).traffic, result.traffic);
 });
 
@@ -147,8 +148,54 @@ test('platform heartbeats aggregate counter deltas without double-counting repea
   assert.equal(tables.platformTrafficHours[0].requests, 15);
   assert.equal(tables.platformTrafficHours[0].errors, 3);
   await invoke(recordHeartbeat, ctx, { ...args, instanceId: 'two', requests: 4, errors: 0 });
-  assert.equal(tables.platformTrafficHours[0].requests, 19);
+  assert.notEqual(trafficShard('one'), trafficShard('two'));
+  assert.equal(tables.platformTrafficHours.length, 2);
+  assert.equal(tables.platformTrafficHours.reduce((sum, row) => sum + row.requests, 0), 19);
   await assert.rejects(invoke(recordHeartbeat, ctx, { ...args, secret: 'wrong' }));
+});
+
+test('platform charts include all counter shards and legacy totals throughout the day', async () => {
+  const { ctx } = fixture();
+  const currentHour = Math.floor(Date.now() / 3600000) * 3600000;
+  for (let offset = 0; offset < 24; offset++) {
+    const hour = currentHour - offset * 3600000;
+    await ctx.db.insert('platformTrafficHours', { hour, requests: 10, errors: 1 });
+    for (let shard = 0; shard < TRAFFIC_SHARDS; shard++) {
+      await ctx.db.insert('platformTrafficHours', { hour, shard, requests: 2, errors: 1 });
+      await ctx.db.insert('platformEdgeTrafficHours', { hour, shard, requests: 3 });
+    }
+  }
+  const result = await invoke(overview, ctx);
+  assert.equal(result.traffic.length, 24);
+  assert.ok(result.traffic.every((row: any) => row.requests === 10 + 5 * TRAFFIC_SHARDS && row.errors === 1 + TRAFFIC_SHARDS));
+});
+
+test('traffic retention is bounded, preserves current data and runs separately from ingestion', async () => {
+  const { ctx, tables, queryCounts } = fixture();
+  const hour = Math.floor(Date.now() / 3600000) * 3600000;
+  const oldHour = hour - 8 * 86400000;
+  for (let i = 0; i < 110; i++) {
+    await ctx.db.insert('platformInstances', { instanceId: `old-${i}`, updatedAt: oldHour });
+    await ctx.db.insert('platformTrafficHours', { hour: oldHour, requests: 1, errors: 0 });
+    await ctx.db.insert('platformEdgeTrafficHours', { hour: oldHour, shard: i % TRAFFIC_SHARDS, requests: 1 });
+  }
+  await invoke(recordHeartbeat, ctx, { instanceId: 'current', startedAt: hour, requests: 3, errors: 1, active: 0, pending: 0, workers: 5 });
+  assert.equal(queryCounts.platformInstances, 1);
+  assert.equal(queryCounts.platformTrafficHours, 1);
+  await invoke(recordEdgeRead, ctx, { shard: TRAFFIC_SHARDS - 1 });
+  assert.equal(queryCounts.platformEdgeTrafficHours, 1);
+  const before = await invoke(overview, ctx);
+  await cleanupTraffic._handler(ctx as any, {});
+  for (const table of ['platformInstances', 'platformTrafficHours', 'platformEdgeTrafficHours']) {
+    assert.equal(tables[table].length, 11);
+  }
+  await cleanupTraffic._handler(ctx as any, {});
+  for (const table of ['platformInstances', 'platformTrafficHours', 'platformEdgeTrafficHours']) {
+    assert.equal(tables[table].length, 1);
+  }
+  const after = await invoke(overview, ctx);
+  assert.deepEqual(after.traffic, before.traffic);
+  assert.deepEqual(after.instances, before.instances);
 });
 
 test('public shares and publisher pages route only through allowed application surfaces', () => {

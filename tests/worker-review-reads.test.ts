@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import { fetchReviewRead, reviewReadRoute } from '../worker/review-reads.ts';
+import { fetchReviewRead, reviewReadRoute, recordEdgeRead } from '../worker/review-reads.ts';
 import { drainInternalResponse, readInternalJson } from '../worker/internal-responses.ts';
-import { combineTrafficHours } from '../convex/platformTraffic.ts';
+import { combineTrafficHours, TRAFFIC_SHARDS } from '../convex/platformTraffic.ts';
 
 const jobId = 'a'.repeat(32);
 const env = { SESSION_SECRET: 'test-signing-secret', ADMIN_PASSWORD: 'owner-password', EMPLOYEE_ADMIN_PASSWORD: 'employee-password',
@@ -126,4 +126,19 @@ test('traffic charts retain container and edge reads without adding running inst
   assert.deepEqual(combineTrafficHours([{ hour: 1, requests: 4, errors: 1 }],
     [{ hour: 1, requests: 7, errors: 0 }, { hour: 1, requests: 2, errors: 0 }, { hour: 2, requests: 3, errors: 0 }]),
   [{ hour: 1, requests: 13, errors: 1 }, { hour: 2, requests: 3, errors: 0 }]);
+});
+
+test('edge traffic uses the expanded shard range and reports recording failures', async t => {
+  t.mock.method(crypto, 'getRandomValues', (bytes: Uint8Array) => { bytes[0] = 255; return bytes; });
+  const mock = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.equal(url, `${env.CONVEX_URL}/api/mutation`);
+    const payload = JSON.parse(options.body as string);
+    assert.equal(payload.path, 'platform:recordEdgeRead');
+    assert.equal(payload.args.shard, TRAFFIC_SHARDS - 1);
+    return Response.json({ status: 'success', value: null });
+  });
+  await recordEdgeRead(env);
+  mock.mock.restore();
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'error' }));
+  await assert.rejects(recordEdgeRead(env), /recording failed/);
 });

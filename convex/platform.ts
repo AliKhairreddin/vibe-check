@@ -1,7 +1,7 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server.js';
+import { internalMutation, mutation, query } from './_generated/server.js';
 import { attributeInternalReview, DIGITAL_NUDGE_CLIENTS } from './publisherOwnership.ts';
-import { combineTrafficHours } from './platformTraffic.ts';
+import { combineTrafficHours, trafficShard, TRAFFIC_SHARDS } from './platformTraffic.ts';
 
 function authorize(secret: string) {
   if (!process.env.CONVEX_HTTP_SECRET || secret !== process.env.CONVEX_HTTP_SECRET) throw new Error('Unauthorized');
@@ -18,12 +18,13 @@ export const recordHeartbeat = mutation({
     if (previous) await ctx.db.patch(previous._id, { ...value, updatedAt: now });
     else await ctx.db.insert('platformInstances', { ...value, updatedAt: now });
     const hour = Math.floor(now / 3600000) * 3600000;
-    const traffic = await ctx.db.query('platformTrafficHours').withIndex('by_hour', q => q.eq('hour', hour)).unique();
-    if (traffic) await ctx.db.patch(traffic._id, { requests: traffic.requests + requests, errors: traffic.errors + errors });
-    else await ctx.db.insert('platformTrafficHours', { hour, requests, errors });
-    const oldInstances = await ctx.db.query('platformInstances').withIndex('by_updated_at', q => q.lt('updatedAt', now - 86400000)).take(10);
-    const oldTraffic = await ctx.db.query('platformTrafficHours').withIndex('by_hour', q => q.lt('hour', now - 7 * 86400000)).take(10);
-    for (const row of [...oldInstances, ...oldTraffic]) await ctx.db.delete(row._id);
+    if (requests || errors) {
+      const shard = trafficShard(args.instanceId);
+      const traffic = await ctx.db.query('platformTrafficHours').withIndex('by_hour_and_shard',
+        q => q.eq('hour', hour).eq('shard', shard)).unique();
+      if (traffic) await ctx.db.patch(traffic._id, { requests: traffic.requests + requests, errors: traffic.errors + errors });
+      else await ctx.db.insert('platformTrafficHours', { hour, shard, requests, errors });
+    }
     return null;
   },
 });
@@ -34,8 +35,9 @@ export const overview = query({
     const now = Date.now();
     const [instances, backendTraffic, edgeTraffic, publishers, stats, timings] = await Promise.all([
       ctx.db.query('platformInstances').withIndex('by_updated_at', q => q.gte('updatedAt', now - 86400000)).order('desc').take(200),
-      ctx.db.query('platformTrafficHours').withIndex('by_hour', q => q.gte('hour', now - 86400000)).take(25),
-      ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard', q => q.gte('hour', now - 86400000)).take(25 * 16),
+      // Include the legacy unsharded backend row alongside all new shards.
+      ctx.db.query('platformTrafficHours').withIndex('by_hour', q => q.gte('hour', now - 86400000)).take(25 * (TRAFFIC_SHARDS + 1)),
+      ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard', q => q.gte('hour', now - 86400000)).take(25 * TRAFFIC_SHARDS),
       ctx.db.query('publishers').take(1000),
       ctx.db.query('reviewOfferStats').withIndex('by_created_at').order('desc').take(1000),
       ctx.db.query('reviewProcessingMetrics').withIndex('by_started_at').order('desc').take(200),
@@ -68,16 +70,30 @@ export const recordEdgeRead = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     authorize(args.secret);
-    if (!Number.isInteger(args.shard) || args.shard < 0 || args.shard >= 16) throw new Error('Invalid traffic shard');
+    if (!Number.isInteger(args.shard) || args.shard < 0 || args.shard >= TRAFFIC_SHARDS) throw new Error('Invalid traffic shard');
     const now = Date.now();
     const hour = Math.floor(now / 3600000) * 3600000;
     const row = await ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard',
       q => q.eq('hour', hour).eq('shard', args.shard)).unique();
     if (row) await ctx.db.patch(row._id, { requests: row.requests + 1 });
     else await ctx.db.insert('platformEdgeTrafficHours', { hour, shard: args.shard, requests: 1 });
-    const expired = await ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard',
-      q => q.lt('hour', now - 7 * 86400000)).take(1);
-    for (const old of expired) await ctx.db.delete(old._id);
+    return null;
+  },
+});
+
+// Retention must not make unrelated counter shards contend over the same old
+// rows. One scheduled transaction performs bounded cleanup outside ingestion.
+export const cleanupTraffic = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async ctx => {
+    const now = Date.now();
+    const groups = await Promise.all([
+      ctx.db.query('platformInstances').withIndex('by_updated_at', q => q.lt('updatedAt', now - 86400000)).take(100),
+      ctx.db.query('platformTrafficHours').withIndex('by_hour', q => q.lt('hour', now - 7 * 86400000)).take(100),
+      ctx.db.query('platformEdgeTrafficHours').withIndex('by_hour_and_shard', q => q.lt('hour', now - 7 * 86400000)).take(100),
+    ]);
+    for (const row of groups.flat()) await ctx.db.delete(row._id);
     return null;
   },
 });

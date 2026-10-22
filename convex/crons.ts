@@ -7,4 +7,5 @@ crons.interval('Clean up expired demo workspaces and limits', { minutes: 5 }, ma
 crons.interval('Telegram daily roundup', { minutes: 5 }, makeFunctionReference<'mutation'>('telegramDigest:tick'));
 crons.interval('Telegram email delivery check', { minutes: 5 }, makeFunctionReference<'mutation'>('telegramMilestones:checkDelivery'));
 crons.interval('Recover Lemonmaxx status sync', { minutes: 1 }, makeFunctionReference<'mutation'>('lemonmaxx:recover'));
+crons.interval('Expire platform traffic counters and inactive instances', { hours: 1 }, makeFunctionReference<'mutation'>('platform:cleanupTraffic'));
 export default crons;

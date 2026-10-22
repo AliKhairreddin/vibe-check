@@ -1,6 +1,7 @@
 import { validAdminSession } from './admin-session.ts';
 import { isRecord, projectReadResponse } from './read-contract.ts';
 import { drainInternalResponse } from './internal-responses.ts';
+import { TRAFFIC_SHARDS } from '../convex/platformTraffic.ts';
 
 type ReadEnvironment = Pick<Env, 'CONVEX_URL' | 'CONVEX_HTTP_SECRET' | 'CORS_ALLOWED_ORIGINS'>
   & Partial<Pick<Env, 'SESSION_SECRET' | 'ADMIN_PASSWORD' | 'EMPLOYEE_ADMIN_PASSWORD'>>;
@@ -66,7 +67,7 @@ export async function recordEdgeRead(env: ReadEnvironment): Promise<void> {
   const response = await fetch(`${env.CONVEX_URL.replace(/\/$/, '')}/api/mutation`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: 'platform:recordEdgeRead',
-      args: { secret: env.CONVEX_HTTP_SECRET, shard: crypto.getRandomValues(new Uint8Array(1))[0] % 16 }, format: 'json' }),
+      args: { secret: env.CONVEX_HTTP_SECRET, shard: crypto.getRandomValues(new Uint8Array(1))[0] % TRAFFIC_SHARDS }, format: 'json' }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) await drainInternalResponse(response, 'Edge traffic recording');

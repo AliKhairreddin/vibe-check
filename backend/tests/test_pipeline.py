@@ -1308,7 +1308,8 @@ async def test_openrouter_uses_strict_schema_and_normalizes_semantic_mismatch_wi
 
     class FakeAsyncClient:
         def __init__(self, timeout):
-            assert timeout == 120
+            assert timeout.read == 600
+            assert timeout.connect == 30
 
         async def __aenter__(self):
             return self
@@ -1541,7 +1542,8 @@ async def test_openrouter_request_has_hard_wall_clock_deadline(monkeypatch):
 
     class FakeAsyncClient:
         def __init__(self, timeout):
-            assert timeout == 120
+            assert timeout.read == 600
+            assert timeout.connect == 30
 
         async def __aenter__(self):
             return self
