@@ -39,6 +39,7 @@ import type * as reviewEvidenceFrames from "../reviewEvidenceFrames.js";
 import type * as reviewPayloads from "../reviewPayloads.js";
 import type * as reviewProcessingMetrics from "../reviewProcessingMetrics.js";
 import type * as reviewRecovery from "../reviewRecovery.js";
+import type * as reviewReleaseRepairs from "../reviewReleaseRepairs.js";
 import type * as reviewReleaseState from "../reviewReleaseState.js";
 import type * as reviewReleases from "../reviewReleases.js";
 import type * as reviewSources from "../reviewSources.js";
@@ -92,6 +93,7 @@ declare const fullApi: ApiFromModules<{
   reviewPayloads: typeof reviewPayloads;
   reviewProcessingMetrics: typeof reviewProcessingMetrics;
   reviewRecovery: typeof reviewRecovery;
+  reviewReleaseRepairs: typeof reviewReleaseRepairs;
   reviewReleaseState: typeof reviewReleaseState;
   reviewReleases: typeof reviewReleases;
   reviewSources: typeof reviewSources;

@@ -48,7 +48,7 @@ async function selection(ctx: QueryCtx, args: Scope & Target) {
   }
   const stats = await Promise.all(reviews.map(review => ctx.db.query("reviewOfferStats")
     .withIndex("by_job_id", q => q.eq("jobId", review.jobId)).take(20)));
-  const eligible = stats.map(rows => rows.filter(row => row.deletedAt === undefined && row.status === "complete" && row.resultStatus && (!args.clientId || row.offerId === args.clientId)));
+  const eligible = stats.map((rows, index) => rows.filter(row => row.deletedAt === undefined && row.status === "complete" && row.resultStatus && (!args.clientId || row.offerId === args.clientId) && !reviews[index].blockedReleaseOfferIds?.includes(row.offerId)));
   return { reviews, eligible };
 }
 

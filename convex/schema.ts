@@ -315,6 +315,7 @@ export default defineSchema({
     jobId: v.string(),
     message: v.string(),
     releasedOfferIds: v.optional(v.array(v.string())),
+    blockedReleaseOfferIds: v.optional(v.array(v.string())),
     releasedAt: v.optional(v.number()),
     offerIds: v.optional(v.array(v.string())),
     primaryOfferId: v.optional(v.string()),
@@ -349,6 +350,8 @@ export default defineSchema({
     .index("by_deleted_at_created_at", ["deletedAt", "createdAt"]),
   reviewReleaseEvents: defineTable({
     jobId: v.string(), offerIds: v.array(v.string()), releasedBy: v.string(), createdAt: v.number(),
+    action: v.optional(v.union(v.literal('release'), v.literal('retract'))),
+    reason: v.optional(v.string()), previousReleasedOfferIds: v.optional(v.array(v.string())),
   }).index("by_job_id", ["jobId"]),
   reviewOfferStats: defineTable({
     // undefined means legacy/unprojected; null means no publisher ownership.

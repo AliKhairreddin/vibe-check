@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getSelection, release, restrictSmartFinancialAutoBatch } from '../convex/reviewReleases.ts';
+import { retractKissterraOctober23Agt, kissterraOctober23BatchId, kissterraOctober23AgtTargets } from '../convex/reviewReleaseRepairs.ts';
 import { upsertStatus, softDelete, syncReviewOfferStats, getStatus, getReport as getAdminReport, listRecent } from '../convex/reviews.ts';
 import { list, getDetail, getReport, hasReview, decide, clearDecision } from '../convex/clientReviews.ts';
 import { listSubmissions, createShare, getShare } from '../convex/workspaces.ts';
@@ -84,6 +85,60 @@ function fixture() {
   const releaseArgs = { jobIds: ['creative'], offerIds: ['smart-financial'], confirmed: true, releasedBy: 'admin' };
   return { ctx, tables, add, releaseArgs };
 }
+
+test('October 23 retraction removes only the 20 verified Kissterra releases and prevents repeat release', async () => {
+  const { ctx, tables, add } = fixture();
+  const batchId = kissterraOctober23BatchId;
+  const targets = new Set(kissterraOctober23AgtTargets.map(([id]) => id));
+  for (const [jobId, fileName] of kissterraOctober23AgtTargets) {
+    await add(jobId, { fileName, batchId, releasedOfferIds: ['kissterra', 'smart-financial'], releasedAt: 123 });
+  }
+  for (let i = 0; i < 41; i++) await add(`keep-${i}`, { batchId, releasedOfferIds: ['kissterra'], releasedAt: 123 });
+  const batch = { batchId, sourceLabel: '23 Oct 2026 Auto', expectedCount: 61, items: tables.reviews.map(row => ({ jobId: row.jobId, fileName: row.fileName, status: 'complete' })) };
+  await ctx.db.insert('reviewBatches', batch);
+  await invoke(createShare, ctx, { shareId: 'oct23', tokenHash: 'oct23', ownerKey: 'admin', title: 'October 23', expiresAt: Date.now() + 100000,
+    items: tables.reviews.map(row => ({ jobId: row.jobId, offerId: 'kissterra' })) });
+  const before = structuredClone(tables);
+  const preview = await invoke(retractKissterraOctober23Agt, ctx, { dryRun: true });
+  assert.equal(preview.matched, 20);
+  assert.equal(preview.changed, 20);
+  assert.deepEqual(tables, before);
+  // Even the last invalid target must fail before the first target changes.
+  tables.reviews[19].fileName = 'unexpected.mp4';
+  const mismatched = structuredClone(tables);
+  await assert.rejects(invoke(retractKissterraOctober23Agt, ctx, { dryRun: false }), /verified retraction target/);
+  assert.deepEqual(tables, mismatched);
+  tables.reviews[19].fileName = kissterraOctober23AgtTargets[19][1];
+  assert.equal((await invoke(retractKissterraOctober23Agt, ctx, { dryRun: false })).changed, 20);
+  assert.equal(tables.reviewReleaseEvents.length, 20);
+  assert.ok(tables.reviewReleaseEvents.every(event => event.action === 'retract' && event.previousReleasedOfferIds.includes('kissterra')));
+  for (const row of tables.reviews) {
+    const original = before.reviews.find(r => r.jobId === row.jobId);
+    if (!targets.has(row.jobId)) { assert.deepEqual(row, original); continue; }
+    assert.deepEqual(row.releasedOfferIds, ['smart-financial']);
+    assert.deepEqual(row.blockedReleaseOfferIds, ['kissterra']);
+    assert.equal(row.releasedAt, 123);
+    assert.deepEqual(row.report, original.report);
+    const args = { jobId: row.jobId, clientId: 'kissterra', offerId: 'kissterra' };
+    assert.equal(await invoke(hasReview, ctx, args), false);
+    assert.equal(await invoke(getDetail, ctx, args), null);
+    assert.equal(await invoke(getReport, ctx, args), null);
+    assert.equal(await invoke(hasReview, ctx, { ...args, offerId: 'smart-financial' }), true);
+    await assert.rejects(invoke(decide, ctx, { ...args, decision: 'approved' }), /unavailable/i);
+  }
+  assert.equal((await invoke(list, ctx, { clientId: 'kissterra', offerId: 'kissterra', limit: 100 })).length, 41);
+  assert.equal((await invoke(getShare, ctx, { tokenHash: 'oct23' })).items.length, 41);
+  assert.equal((await invoke(retractKissterraOctober23Agt, ctx, { dryRun: false })).changed, 0);
+  assert.equal(tables.reviewReleaseEvents.length, 20);
+  const selection = await invoke(getSelection, ctx, { batchId });
+  assert.equal(selection.offers.find((offer: any) => offer.offer_id === 'kissterra').total, 41);
+  assert.equal((await invoke(release, ctx, { jobIds: selection.job_ids, offerIds: ['kissterra'], confirmed: true, releasedBy: 'admin' })).released, 0);
+  await assert.rejects(invoke(release, ctx, { jobIds: [kissterraOctober23AgtTargets[0][0]], offerIds: ['kissterra'], confirmed: true, releasedBy: 'admin' }), /Choose offers/);
+  // Later report/status projection refreshes must preserve the withdrawal.
+  for (const row of tables.reviews.filter(row => targets.has(row.jobId))) await syncReviewOfferStats(ctx, row, 456);
+  assert.equal((await invoke(getShare, ctx, { tokenHash: 'oct23' })).items.length, 41);
+  assert.equal((await invoke(list, ctx, { clientId: 'kissterra', offerId: 'kissterra', limit: 100 })).length, 41);
+});
 
 test('pending keeps the assessment, decisions override it, and reset restores it across review and batch responses', async () => {
   for (const assessment of ['green', 'yellow', 'red']) {

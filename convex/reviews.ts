@@ -29,6 +29,7 @@ type ReviewForStats = {
   hasCreative?: boolean;
   jobId: string;
   releasedOfferIds?: string[];
+  blockedReleaseOfferIds?: string[];
   releasedAt?: number;
   offerIds?: string[];
   primaryOfferId?: string;
@@ -362,7 +363,7 @@ export async function syncReviewOfferStats(
       batchId: review.batchId,
       createdAt: review.createdAt,
       deletedAt: review.deletedAt,
-      withheld: review.releasedOfferIds !== undefined && !review.releasedOfferIds.includes(offerId) ? true as const : undefined,
+      withheld: review.blockedReleaseOfferIds?.includes(offerId) || (review.releasedOfferIds !== undefined && !review.releasedOfferIds.includes(offerId)) ? true as const : undefined,
       fileName: review.fileName ?? "",
       hasCreative: review.hasCreative ?? true,
       internalDisposition,
