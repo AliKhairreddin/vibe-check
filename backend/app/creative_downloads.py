@@ -1,0 +1,81 @@
+"""Explicit, scoped downloads using the existing authorized media transport."""
+from pathlib import Path
+import re
+from tempfile import TemporaryDirectory
+from threading import BoundedSemaphore
+from zipfile import ZipFile, ZIP_STORED
+
+import anyio
+from fastapi import HTTPException, Request
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import FileResponse
+
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+_archive_slots = BoundedSemaphore(2)
+
+
+async def creative_archive(items: list[tuple[str, dict]], request: Request, media_response, revalidate):
+    """Fail atomically if any selected creative is missing; never return a partial ZIP."""
+    if not _archive_slots.acquire(blocking=False):
+        raise HTTPException(429, 'Other downloads are being prepared. Please try again shortly.', headers={'retry-after': '30'})
+    directory = TemporaryDirectory(prefix='adchecked-creatives-')
+    path = Path(directory.name) / 'creatives.zip'
+    total = 0
+    # A ZIP needs entire files, regardless of Range headers on the download.
+    scope = {**request.scope, 'method': 'GET', 'headers': [
+        (key, value) for key, value in request.scope.get('headers', []) if key.lower() != b'range'
+    ]}
+    media_request = Request(scope)
+    try:
+        with ZipFile(path, 'w', compression=ZIP_STORED, allowZip64=True) as archive:
+            for index, (job_id, detail) in enumerate(items, 1):
+                review = detail['review']
+                filename = re.sub(r'[\\/\x00-\x1f]', '_', str(review.get('fileName') or job_id))
+                filename = f'{index:03d}-{filename[:180]}'
+                if review.get('mediaKind') == 'copy_only':
+                    text = (detail.get('creativeText') or {}).get('ad_copy')
+                    if not text:
+                        raise HTTPException(409, 'A selected creative has no saved ad copy. No ZIP was downloaded.')
+                    body = text.encode('utf-8')
+                    total += len(body)
+                    if total > MAX_ARCHIVE_BYTES:
+                        raise HTTPException(413, 'This download exceeds 512 MB. Download smaller selections or individual originals.')
+                    archive.writestr(filename + '.txt', body)
+                    continue
+                response = await run_in_threadpool(media_response, job_id, media_request)
+                try:
+                    if response.status_code != 200:
+                        raise HTTPException(502, 'A selected original is unavailable. No ZIP was downloaded; try again.')
+                    async def chunks():
+                        if isinstance(response, FileResponse):
+                            async with await anyio.open_file(response.path, 'rb') as source:
+                                while chunk := await source.read(1024 * 1024):
+                                    yield chunk
+                        elif hasattr(response, 'body_iterator'):
+                            async for chunk in response.body_iterator:
+                                yield chunk
+                        else:
+                            yield response.body
+                    with archive.open(filename, 'w', force_zip64=True) as target:
+                        size = 0
+                        async for chunk in chunks():
+                            total += len(chunk)
+                            size += len(chunk)
+                            if total > MAX_ARCHIVE_BYTES:
+                                raise HTTPException(413, 'This download exceeds 512 MB. Download smaller selections or individual originals.')
+                            await run_in_threadpool(target.write, chunk)
+                        expected = response.headers.get('content-length')
+                        if not size or (expected and size != int(expected)):
+                            raise HTTPException(502, 'An original download was incomplete. No ZIP was downloaded; try again.')
+                finally:
+                    if response.background:
+                        await response.background()
+        await run_in_threadpool(revalidate)
+        return FileResponse(path, media_type='application/zip', filename='creatives.zip',
+                            headers={'cache-control': 'no-store'}, background=BackgroundTask(directory.cleanup))
+    except BaseException:
+        directory.cleanup()
+        raise
+    finally:
+        _archive_slots.release()

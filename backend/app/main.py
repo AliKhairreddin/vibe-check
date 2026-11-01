@@ -1536,6 +1536,7 @@ def client_review_detail(client_id:str, job_id:str, request:Request):
                 else [],
             ),
             'google_drive_url':fast_detail.get('googleDriveUrl'),
+            'creative_text':fast_detail.get('creativeText'),
             'report_pdf_url':f'/api/client/{client_id}/reviews/{job_id}/report.pdf',
         }
     report=get_client_review_report(client_id, config['offer_id'], job_id, **workspaces.preview_scope(request, client_id))

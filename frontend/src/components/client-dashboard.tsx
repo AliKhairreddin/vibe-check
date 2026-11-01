@@ -1,3 +1,5 @@
+import { CreativeDownloadButton } from './creative-download';
+import { CreativeTextPanel } from './creative-text';
 import { listWorkspaceVerticals } from '@/lib/workspace-api';
 import { localStore, sessionStore } from '@/lib/browser-storage';
 import { BillingGate } from './billing-panel';
@@ -9,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -91,6 +94,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
 import { CreativeEvidenceImage, CreativeThumbnail } from '@/components/creative-media';
 import { SessionLoadingScreen } from '@/components/session-loading-screen';
@@ -552,7 +556,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
               <p className="text-sm font-medium text-muted-foreground">Creative decisions</p>
               <h1 className="font-heading text-3xl font-semibold tracking-tight">{shared ? shared.title : 'Review queue'}</h1>
               <p className="mt-1 text-sm text-muted-foreground">{shared ? 'The creatives from your shared link, ready to review in your workspace.' : session.role === 'publisher' ? 'Review your batches, release them to your advertiser, then send the batch links by email.' : 'Review each creative, apply your final decision, and inspect every finding.'}</p>
-              {shared ? <div className="mt-2 flex flex-wrap items-center gap-3 text-sm"><Link to="/client/reviews" className="font-medium underline underline-offset-4">Show all creatives</Link><a href={`/share/${encodeURIComponent(shared.token)}`} className="text-muted-foreground underline underline-offset-4">Back to shared preview</a></div> : null}
+              {shared ? <div className="mt-2 flex flex-wrap items-center gap-3 text-sm"><CreativeDownloadButton token={shared.token} /><Link to="/client/reviews" className="font-medium underline underline-offset-4">Show all creatives</Link><a href={`/share/${encodeURIComponent(shared.token)}`} className="text-muted-foreground underline underline-offset-4">Back to shared preview</a></div> : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <MetricBadge label="total" value={reviews.length} />
@@ -872,7 +876,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
                               isSaving={decisionMutation.isPending && decisionMutation.variables?.jobId === review.job_id}
                               review={review}
                               view={preferences.reviewView}
-                              onDecide={(input) => decisionMutation.mutate({ clientId: selectedPortal.client_id, jobId: review.job_id, ...input })}
+                              onDecide={(input) => decisionMutation.mutateAsync({ clientId: selectedPortal.client_id, jobId: review.job_id, ...input })}
                               onPrefetch={() => prefetchCreative(review)}
                               onToggle={() => {
                                 prefetchCreative(review);
@@ -896,7 +900,7 @@ function ClientDashboard({ shared }: { shared?: SharedReviewScope }) {
               </div>
             </div>
           )}
-          {decisionMutation.error || bulkMutation.error ? <p role="alert" className="text-sm text-destructive">{errorMessage(decisionMutation.error ?? bulkMutation.error)}</p> : null}
+          {bulkMutation.error ? <p role="alert" className="text-sm text-destructive">{errorMessage(bulkMutation.error)}</p> : null}
         </div>
       ) : null}
     </ClientPortalFrame>
@@ -1136,7 +1140,32 @@ function ClientSidebarBorderTrigger() {
   );
 }
 
-function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecting, isSelected, onSelectionChange, onDecide, onPrefetch, onToggle, review, view }: {
+// Keep save state with the creative: a shared mutation observer only tracks its
+// latest call and can hide failures when reviewers work on multiple creatives.
+function useDecisionSave(onDecide: (input: DecisionInput) => Promise<unknown>) {
+  const pending = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  async function saveDecision(input: DecisionInput): Promise<boolean> {
+    if (pending.current) return false;
+    pending.current = true;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onDecide(input);
+      return true;
+    } catch (error) {
+      setSaveError(errorMessage(error));
+      return false;
+    } finally {
+      pending.current = false;
+      setSaving(false);
+    }
+  }
+  return { saveDecision, saving, saveError };
+}
+
+function CreativeReviewCard({ clientId, density, isExpanded, isSaving: externallySaving, isSelecting, isSelected, onSelectionChange, onDecide, onPrefetch, onToggle, review, view }: {
   clientId: string;
   density: ClientPreferences['density'];
   isSelecting: boolean;
@@ -1144,13 +1173,15 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
   onSelectionChange: (checked: boolean) => void;
   isExpanded: boolean;
   isSaving: boolean;
-  onDecide: (input: DecisionInput) => void;
+  onDecide: (input: DecisionInput) => Promise<unknown>;
   onPrefetch: () => void;
   onToggle: () => void;
   review: ClientReviewItem;
   view: ClientReviewView;
 }) {
   const { session } = useClientAuth();
+  const { saveDecision, saving, saveError } = useDecisionSave(onDecide);
+  const isSaving = externallySaving || saving;
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
   const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
   const [isNoteOpen, setIsNoteOpen] = useState(false);
@@ -1161,19 +1192,18 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
   }, [review.decision?.feedback_note, review.job_id]);
 
   function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
-    if (review.ai_status === 'yellow' || decision !== aiDecision(review)) {
+    if (review.ai_status !== 'yellow' && decision !== aiDecision(review)) {
       setDraftDecision(decision);
-      if (!isExpanded) onToggle();
       return;
     }
     setDraftDecision(null);
-    onDecide({ decision, ...(draftNote.trim() ? { feedbackNote: draftNote.trim() } : {}) });
+    void saveDecision({ decision, ...(draftNote.trim() ? { feedbackNote: draftNote.trim() } : {}) });
   }
 
   function resetDecision() {
     setDraftDecision(null);
     setIsNoteOpen(false);
-    onDecide({ decision: 'pending' });
+    void saveDecision({ decision: 'pending' });
   }
 
   return (
@@ -1222,7 +1252,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
           ) : (
             <>
               {view === 'grid' ? <Badge variant="outline">Pending</Badge> : null}
-              <Button type="button" size="xs" variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}><Check />Approve</Button>
+              <Button type="button" size="xs" variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Approve</Button>
               <Button type="button" size="xs" variant="destructive" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
               <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
                 <MessageSquareText />{draftNote ? 'Edit note' : 'Add note'}
@@ -1231,6 +1261,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
           )}
         </div>
       </div>
+      {saveError ? <p role="alert" className="px-3 text-sm text-destructive">Decision not saved: {saveError}</p> : null}
       {isNoteOpen ? (
         <DecisionNoteEditor
           initialNote={draftNote}
@@ -1238,15 +1269,16 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
           onCancel={() => setIsNoteOpen(false)}
           onSave={(note) => {
             setDraftNote(note);
-            setIsNoteOpen(false);
             if (review.decision) {
-              onDecide({
+              void saveDecision({
                 decision: review.decision.decision,
                 feedbackNote: note,
                 ...(review.decision.feedback_reason ? { feedbackReason: review.decision.feedback_reason } : {}),
                 ...(review.decision.feedback_scope ? { feedbackScope: review.decision.feedback_scope } : {}),
                 ...(review.decision.finding_index != null ? { findingIndex: review.decision.finding_index } : {}),
-              });
+              }).then(saved => { if (saved) setIsNoteOpen(false); });
+            } else {
+              setIsNoteOpen(false);
             }
           }}
           pending={!review.decision}
@@ -1257,14 +1289,14 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
         <FeedbackForm
           clientId={clientId}
           decision={draftDecision}
+          error={saveError}
           initialNote={draftNote}
           isSaving={isSaving}
           review={review}
           onCancel={() => setDraftDecision(null)}
           onSubmit={(feedbackReason, feedbackNote, feedbackScope, findingIndex) => {
-            setDraftNote(feedbackNote);
-            onDecide({ decision: draftDecision, feedbackNote, feedbackReason, feedbackScope, findingIndex });
-            setDraftDecision(null);
+            void saveDecision({ decision: draftDecision, feedbackNote, feedbackReason, feedbackScope, findingIndex })
+              .then(saved => { if (saved) setDraftDecision(null); });
           }}
         />
       ) : null}
@@ -1275,6 +1307,7 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving, isSelecti
 
 function InlineCreativeDetails({ clientId, review }: { clientId: string; review: ClientReviewItem }) {
   const { preview } = review;
+  const detail = useQuery({ queryKey: ['client', clientId, 'review', review.job_id], queryFn: () => getClientReview(clientId, review.job_id), staleTime: 60_000 });
   return (
     <div className="grid gap-4 border-t bg-muted/10 p-3">
       <CreativeThumbnail
@@ -1304,6 +1337,7 @@ function InlineCreativeDetails({ clientId, review }: { clientId: string; review:
           </ul>
         ) : <p className="text-sm text-muted-foreground">No policy flags were found.</p>}
       </div>
+      <CreativeTextPanel text={detail.data?.creative_text} />
       <div className="flex flex-wrap gap-2">
         {preview.google_drive_url ? <a className={buttonVariants({ variant: 'outline', size: 'sm' })} href={preview.google_drive_url} target="_blank" rel="noreferrer"><ExternalLink />Open in Drive</a> : null}
         <Link to="/client/$clientId/reviews/$jobId" params={{ clientId, jobId: review.job_id }} aria-label={`Open full review for ${review.file_name}`} className={buttonVariants({ size: 'sm' })}><FileText />View full details</Link>
@@ -1363,7 +1397,7 @@ function ClientReviewDetail() {
       <div className="grid gap-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link to="/client/reviews" className={buttonVariants({ variant: 'outline', size: 'sm' })} onClick={() => sessionStore.setItem(SELECTED_CLIENT_KEY, clientId)}>Back to reviews</Link>
-          <div className="flex flex-wrap gap-2"><ShareButton jobIds={[jobId]} clientId={clientId} />{session.role !== 'publisher' ? <DecisionControl clientId={clientId} review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutate(input)} /> : <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge>}</div>
+          <div className="flex flex-wrap gap-2"><ShareButton jobIds={[jobId]} clientId={clientId} />{session.role !== 'publisher' ? <DecisionControl clientId={clientId} review={review} isSaving={decisionMutation.isPending} onDecide={(input) => decisionMutation.mutateAsync(input)} /> : <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge>}</div>
         </div>
 
         <Card>
@@ -1395,6 +1429,8 @@ function ClientReviewDetail() {
           </CardContent>
         </Card>
 
+        <CreativeTextPanel text={query.data.creative_text} />
+
         <Card>
           <CardHeader><CardTitle>Findings with evidence</CardTitle><CardDescription>Each finding is paired with the closest available creative frame.</CardDescription></CardHeader>
           <CardContent>
@@ -1407,7 +1443,6 @@ function ClientReviewDetail() {
             )}
           </CardContent>
         </Card>
-        {decisionMutation.error ? <Alert variant="destructive"><AlertCircle /><AlertTitle>Decision not saved</AlertTitle><AlertDescription>{errorMessage(decisionMutation.error)}</AlertDescription></Alert> : null}
       </div>
     </ClientPortalFrame>
   );
@@ -1426,8 +1461,9 @@ function FindingCard({ clientId, driveUrl, fileName, finding, frame, index, jobI
   );
 }
 
-function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel, onSubmit, review }: {
+function FeedbackForm({ clientId, decision, initialNote = '', isSaving, error, onCancel, onSubmit, review }: {
   clientId: string;
+  error: string | null;
   decision: Exclude<ClientDecisionValue, 'pending'>;
   initialNote?: string;
   isSaving: boolean;
@@ -1451,6 +1487,12 @@ function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel
   }, [decision, initialNote]);
 
   return (
+    <Sheet open onOpenChange={(open) => { if (!open && !isSaving) onCancel(); }}>
+      <SheetContent className="data-[side=right]:w-full data-[side=right]:sm:max-w-lg overflow-y-auto" showCloseButton={!isSaving}>
+        <SheetHeader className="pr-12">
+          <SheetTitle>{decision === 'approved' ? 'Approve creative' : 'Disapprove creative'}</SheetTitle>
+          <SheetDescription className="wrap-anywhere">{review.file_name}</SheetDescription>
+        </SheetHeader>
     <form
       className="grid w-full max-w-xl gap-3 border-t bg-muted/20 p-3 text-left"
       onSubmit={(event) => {
@@ -1466,6 +1508,7 @@ function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel
       <div className="grid gap-1.5">
         <Label htmlFor={`feedback-reason-${review.job_id}`}>Reason</Label>
         <Select
+          disabled={isSaving}
           id={`feedback-reason-${review.job_id}`}
           className="w-full"
           value={reason}
@@ -1479,6 +1522,7 @@ function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel
       <div className="grid gap-1.5">
         <Label htmlFor={`feedback-note-${review.job_id}`}>{noteRequired ? 'Additional details (required)' : 'Additional details (optional)'}</Label>
         <Textarea
+          disabled={isSaving}
           id={`feedback-note-${review.job_id}`}
           aria-describedby={noteRequired ? `feedback-note-help-${review.job_id}` : undefined}
           required={noteRequired}
@@ -1491,24 +1535,29 @@ function FeedbackForm({ clientId, decision, initialNote = '', isSaving, onCancel
       </div>
       {findings.length > 0 ? <div className="grid gap-1.5">
         <Label htmlFor={`feedback-finding-${review.job_id}`}>Related finding (optional)</Label>
-        <Select id={`feedback-finding-${review.job_id}`} value={findingIndex} onValueChange={(value) => setFindingIndex(String(value))}
+        <Select disabled={isSaving} id={`feedback-finding-${review.job_id}`} value={findingIndex} onValueChange={(value) => setFindingIndex(String(value))}
           options={[{ value: '', label: 'General feedback or a missed issue' }, ...findings.map((finding, index) => ({ value: String(index + 1), label: `${index + 1}. ${finding.evidence}` }))]} />
       </div> : null}
       {reason && isCalibrationReason(reason) ? <div className="grid gap-1.5">
         <Label htmlFor={`feedback-scope-${review.job_id}`}>Use this feedback for</Label>
-        <Select id={`feedback-scope-${review.job_id}`} value={scope} onValueChange={(value) => setScope(value as typeof scope)}
+        <Select disabled={isSaving} id={`feedback-scope-${review.job_id}`} value={scope} onValueChange={(value) => setScope(value as typeof scope)}
           options={[{ value: 'this_creative', label: 'This creative only' }, { value: 'similar_creatives', label: 'Future similar creatives too' }]} />
         <p className="text-xs leading-5 text-muted-foreground">Reusable feedback is checked against other decisions before guidelines change automatically.</p>
       </div> : null}
+      {error ? <p role="alert" className="text-sm text-destructive">Decision not saved: {error}. Your feedback is still here; try saving again.</p> : null}
       <div className="flex justify-end gap-2">
         <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={onCancel}>Cancel</Button>
         <Button type="submit" size="xs" disabled={isSaving || !canSubmit}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Save decision</Button>
       </div>
     </form>
+      </SheetContent>
+    </Sheet>
   );
 }
 
-function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: string; isSaving: boolean; onDecide: (input: DecisionInput) => void; review: ClientReviewItem }) {
+function DecisionControl({ clientId, isSaving: externallySaving, onDecide, review }: { clientId: string; isSaving: boolean; onDecide: (input: DecisionInput) => Promise<unknown>; review: ClientReviewItem }) {
+  const { saveDecision, saving, saveError } = useDecisionSave(onDecide);
+  const isSaving = externallySaving || saving;
   const [draftDecision, setDraftDecision] = useState<Exclude<ClientDecisionValue, 'pending'> | null>(null);
   const [draftNote, setDraftNote] = useState(review.decision?.feedback_note ?? '');
   const [isNoteOpen, setIsNoteOpen] = useState(false);
@@ -1518,12 +1567,12 @@ function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: s
   }, [review.decision?.feedback_note, review.job_id]);
 
   function chooseDecision(decision: Exclude<ClientDecisionValue, 'pending'>) {
-    if (review.ai_status === 'yellow' || decision !== aiDecision(review)) {
+    if (review.ai_status !== 'yellow' && decision !== aiDecision(review)) {
       setDraftDecision(decision);
       return;
     }
     setDraftDecision(null);
-    onDecide({ decision, ...(draftNote.trim() ? { feedbackNote: draftNote.trim() } : {}) });
+    void saveDecision({ decision, ...(draftNote.trim() ? { feedbackNote: draftNote.trim() } : {}) });
   }
 
   return (
@@ -1538,7 +1587,7 @@ function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: s
             <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={() => {
               setDraftDecision(null);
               setIsNoteOpen(false);
-              onDecide({ decision: 'pending' });
+              void saveDecision({ decision: 'pending' });
             }}><RotateCcw />Reset to pending</Button>
           </>
         ) : (
@@ -1550,6 +1599,7 @@ function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: s
         )}
         {isClientOverride(review) ? <Badge variant="secondary">Different from recommendation</Badge> : null}
       </div>
+      {saveError ? <p role="alert" className="px-3 text-sm text-destructive">Decision not saved: {saveError}</p> : null}
       {isNoteOpen ? (
         <DecisionNoteEditor
           initialNote={draftNote}
@@ -1557,15 +1607,16 @@ function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: s
           onCancel={() => setIsNoteOpen(false)}
           onSave={(note) => {
             setDraftNote(note);
-            setIsNoteOpen(false);
             if (review.decision) {
-              onDecide({
+              void saveDecision({
                 decision: review.decision.decision,
                 feedbackNote: note,
                 ...(review.decision.feedback_reason ? { feedbackReason: review.decision.feedback_reason } : {}),
                 ...(review.decision.feedback_scope ? { feedbackScope: review.decision.feedback_scope } : {}),
                 ...(review.decision.finding_index != null ? { findingIndex: review.decision.finding_index } : {}),
-              });
+              }).then(saved => { if (saved) setIsNoteOpen(false); });
+            } else {
+              setIsNoteOpen(false);
             }
           }}
           pending={!review.decision}
@@ -1576,14 +1627,14 @@ function DecisionControl({ clientId, isSaving, onDecide, review }: { clientId: s
         <FeedbackForm
           clientId={clientId}
           decision={draftDecision}
+          error={saveError}
           initialNote={draftNote}
           isSaving={isSaving}
           review={review}
           onCancel={() => setDraftDecision(null)}
           onSubmit={(feedbackReason, feedbackNote, feedbackScope, findingIndex) => {
-            setDraftNote(feedbackNote);
-            onDecide({ decision: draftDecision, feedbackNote, feedbackReason, feedbackScope, findingIndex });
-            setDraftDecision(null);
+            void saveDecision({ decision: draftDecision, feedbackNote, feedbackReason, feedbackScope, findingIndex })
+              .then(saved => { if (saved) setDraftDecision(null); });
           }}
         />
       ) : null}

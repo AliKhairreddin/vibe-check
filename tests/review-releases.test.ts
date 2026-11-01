@@ -456,3 +456,19 @@ test('owned API review metadata uses the saved category and originating API batc
   assert.equal(result.vertical, 'home-insurance');
   assert.equal(result.batch_id, 'batch_api');
 });
+
+
+test('released review text stays scoped to its offer and withheld evidence is unavailable', async () => {
+  const { ctx, add } = fixture();
+  await add('text-creative', { releasedOfferIds: ['kissterra'] });
+  await ctx.db.insert('learningEvidence', { jobId: 'text-creative', offerId: 'kissterra', evidence: {
+    audio_transcript: { chunks: [{ text: 'Original spoken words' }] }, notes: 'Private notes',
+  } });
+  await ctx.db.insert('learningEvidence', { jobId: 'text-creative', offerId: 'smart-financial', evidence: {
+    audio_transcript: { chunks: [{ text: 'Other offer evidence' }] },
+  } });
+  const detail = await invoke(getDetail, ctx, { clientId: 'kissterra', offerId: 'kissterra', jobId: 'text-creative' });
+  assert.equal(detail.creativeText.transcript, 'Original spoken words');
+  assert.equal(JSON.stringify(detail.creativeText).includes('Private notes'), false);
+  assert.equal(await invoke(getDetail, ctx, { clientId: 'smart-financial', offerId: 'smart-financial', jobId: 'text-creative' }), null);
+});

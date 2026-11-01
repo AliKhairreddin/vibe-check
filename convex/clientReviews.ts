@@ -1,3 +1,4 @@
+import { creativeText } from './creativeText.ts';
 import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
 import { classifyReviewVertical } from "./reviewVerticals.ts";
@@ -368,7 +369,7 @@ export const getDetail = query({
       .unique();
     if (stat?.withheld && !await canPreview(ctx, args.jobId, args.offerId, args.previewPublisherId)) return null;
     if (!stat || stat.deletedAt !== undefined || stat.status !== "complete") return null;
-    const [review, storedReport, decision, previousDecision, evidence] = await Promise.all([
+    const [review, storedReport, decision, previousDecision, evidence, textEvidence] = await Promise.all([
       ctx.db
         .query("reviews")
         .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
@@ -402,6 +403,9 @@ export const getDetail = query({
         .query("reviewEvidenceFrames")
         .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
         .unique(),
+      ctx.db.query("learningEvidence")
+        .withIndex("by_job_id_and_offer_id", q => q.eq("jobId", args.jobId).eq("offerId", args.offerId))
+        .unique(),
     ]);
     if (!review || review.deletedAt !== undefined) return null;
     const report = objectValue(storedReport?.report) ?? offerReport(review.report, args.offerId);
@@ -415,6 +419,7 @@ export const getDetail = query({
       : null;
     const preview = reportPreview(report, aiStatus);
     return {
+      creativeText: creativeText(textEvidence?.evidence),
       evidenceFrames: (evidence?.frames ?? []).map((frame) => ({
         filename: frame.filename,
         timestamp: frame.timestamp ?? null,

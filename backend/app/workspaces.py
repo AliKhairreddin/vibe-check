@@ -461,6 +461,32 @@ def register(app):
         row = active_share(token)
         return {'title': row['title'], 'expires_at': row['expiresAt'], 'job_ids': [item['jobId'] for item in row['items']]}
 
+    @app.get('/api/public/shares/{token}/creatives.zip')
+    async def download_shared_creatives(token: str, request: Request):
+        from starlette.concurrency import run_in_threadpool
+        from .creative_downloads import creative_archive
+        from .main import get_client_review_detail, review_media_response
+
+        def selection():
+            row = active_share(token)
+            def selected(item):
+                detail = get_client_review_detail(row.get('clientId') or item['offerId'], item['offerId'], item['jobId'])
+                if not detail:
+                    raise HTTPException(404, 'A selected creative is no longer available. Refresh the shared link.')
+                return item['jobId'], detail
+            with ThreadPoolExecutor(max_workers=min(8, len(row['items']))) as pool:
+                return list(pool.map(selected, row['items']))
+
+        # Both reads enforce expiry, revocation, and current advertiser release.
+        # Media is retrieved only for this deliberate download, never on reload.
+        items = await run_in_threadpool(selection)
+        selected_ids = [job_id for job_id, _ in items]
+        def revalidate():
+            current_ids = [item['jobId'] for item in active_share(token)['items']]
+            if current_ids != selected_ids:
+                raise HTTPException(409, 'The shared selection changed during the download. Refresh the page and try again.')
+        return await creative_archive(items, request, review_media_response, revalidate)
+
     @app.get('/api/client/shared/{token}')
     def shared_review_context(token: str, request: Request):
         from .main import authenticate_client, CLIENT_PORTALS
@@ -507,7 +533,7 @@ def register(app):
         review = public_client_review(detail['review'])
         review['preview']['google_drive_url'] = shared_drive_url(detail)
         base = f'/api/public/shares/{token}/reviews/{job_id}'
-        return {'review': review, 'report': safe_report, 'media_url': f'{base}/media', 'evidence_frames': [
+        return {'review': review, 'report': safe_report, 'creative_text': detail.get('creativeText'), 'media_url': f'{base}/media', 'evidence_frames': [
             {'filename': f['filename'], 'timestamp': f.get('timestamp'), 'url': f'{base}/frames/{f["filename"]}'} for f in detail.get('evidenceFrames', [])
         ]}
 

@@ -518,3 +518,31 @@ async def test_publisher_deletion_checks_ownership_and_release_lock(portal, monk
         assert response.status_code == 409
         assert 'Released' in response.json()['detail']
     assert deleted == [JOB]
+
+
+@pytest.mark.anyio
+async def test_shared_zip_checks_release_and_revocation_and_contains_only_selected_media(portal, monkeypatch):
+    from io import BytesIO
+    from zipfile import ZipFile
+    from starlette.responses import Response
+    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: detail())
+    portal['share'] = {'items': [{'jobId': JOB, 'offerId': 'kissterra'}]}
+    visited = []
+    def media(job_id, request):
+        visited.append(job_id)
+        return Response(b'original video')
+    monkeypatch.setattr(main, 'review_media_response', media)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://app.adchecked.com') as client:
+        url = f'/api/public/shares/{TOKEN}/creatives.zip'
+        response = await client.get(url)
+        assert response.status_code == 200
+        with ZipFile(BytesIO(response.content)) as archive:
+            assert archive.namelist() == ['001-creative.mp4']
+            assert archive.read(archive.namelist()[0]) == b'original video'
+        assert visited == [JOB]
+        def revoke_during_download(job_id, request):
+            portal['share'] = None
+            return Response(b'original video')
+        monkeypatch.setattr(main, 'review_media_response', revoke_during_download)
+        assert (await client.get(url)).status_code == 404
+        assert (await client.get(url)).status_code == 404

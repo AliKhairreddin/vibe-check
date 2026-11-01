@@ -302,7 +302,10 @@ export type AdminSession = {
   username: string;
 };
 
+export type CreativeText = { transcript: string | null; onscreen_text: string | null; ad_copy: string | null; onscreen_text_partial: boolean };
+
 export type ClientReviewDetail = {
+  creative_text?: CreativeText | null;
   client_id: string;
   display_name: string;
   review: ClientReviewItem;

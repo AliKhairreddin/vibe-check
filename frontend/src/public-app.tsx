@@ -1,3 +1,5 @@
+import { CreativeDownloadButton } from './components/creative-download';
+import { CreativeTextPanel } from './components/creative-text';
 import { useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -61,6 +63,7 @@ function SharedCreative({ token, jobId }: { token: string; jobId: string }) {
         {report.findings.length || frames.length ? <Button variant="outline" size="sm" aria-expanded={expanded} aria-controls={detailsId} className="mt-auto" onClick={() => setExpanded(value => !value)}>{expanded ? <ChevronUp /> : <ChevronDown />}{expanded ? 'Hide details' : report.findings.length ? `View findings (${report.findings.length})` : 'View evidence'}</Button> : null}
       </div>
     </div>
+    <div className="px-4 pb-4 sm:px-5 sm:pb-5"><CreativeTextPanel text={query.data.creative_text} /></div>
     <div id={detailsId} hidden={!expanded} className="min-w-0 border-t bg-muted/20 p-4 sm:p-5">{expanded ? <SharedFindings findings={report.findings} frames={frames} /> : null}</div>
   </article>;
 }
@@ -80,6 +83,7 @@ function SharedPage({ token }: { token: string }) {
       <div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shared with you · View only</p><h1 className="mt-2 wrap-anywhere text-3xl font-semibold">{query.data.title}</h1><p className="mt-2 text-sm text-muted-foreground">{query.data.job_ids.length} creatives · Expires {new Date(query.data.expires_at).toLocaleDateString()} · No login required</p></div>
       <aside className="rounded-xl border bg-card p-4"><h2 className="text-sm font-semibold">Ready to review these creatives?</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{signedIn ? 'Open these creatives in your workspace to review and leave feedback.' : 'Sign in to approve, disapprove, or leave feedback.'}</p><a href={reviewHref} className={buttonVariants({ size: 'sm', className: 'mt-3' })}>{signedIn ? 'Continue review' : 'Sign in to review'}<ArrowRight /></a></aside>
     </div>
+    <CreativeDownloadButton token={token} />
     {query.data.job_ids.slice(page * 5, page * 5 + 5).map(jobId => <SharedCreative key={jobId} token={token} jobId={jobId} />)}
     {query.data.job_ids.length > 5 ? <nav aria-label="Creative pages" className="flex items-center justify-between gap-2"><Button variant="outline" disabled={page === 0} onClick={() => changePage(page - 1)}>Previous</Button><span className="text-sm">Page {page + 1} of {Math.ceil(query.data.job_ids.length / 5)}</span><Button variant="outline" disabled={(page + 1) * 5 >= query.data.job_ids.length} onClick={() => changePage(page + 1)}>Next</Button></nav> : null}
   </div>}</PublicShell>;

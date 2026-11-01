@@ -289,3 +289,12 @@ Advertisers activate publisher verticals from a 61-category catalog or add custo
 The review snapshots only the selected vertical and any explicitly included default policy. Other vertical policies never enter the prompt. Custom vertical policies do not apply or train the existing default-policy learned clarifications, whose validation scope does not include them. Reports record the vertical policy version; completed reviews are not reinterpreted when a vertical changes or is deactivated.
 
 Document imports are drafts, never automatic saves. Files are limited to 10 MB, PDFs to 100 pages, and scanned pages to ten per import. Empty PDF text pages use the existing OCR engine. Word paragraphs, tables, headers, footers, and footnotes are extracted; images/embedded objects and automatic numbering may need manual review. Optional **Clean up & organize** uses the configured OpenRouter model and existing provider privacy settings to group exact source blocks and propose removing clutter. Every source block must be either retained or displayed in proposed removals; incomplete model output is rejected. Advertisers explicitly choose original or organized text, apply it, then save. Source files and transient cleanup results are not retained; accepted policy text is saved in Convex with the existing access controls.
+
+
+### Advertiser decisions and creative downloads
+
+Yellow (needs review) creatives accept Approve or Disapprove immediately. Decisions that override a red or green recommendation open a focused feedback panel. Saving shows progress per creative; failures remain next to the action, retain the feedback, and allow a retry. Existing decisions and automated assessments remain separate.
+
+Shared links and signed-in review details show saved spoken transcripts, extracted on-screen text, and submitted ad copy under **Video script & creative text**. Missing text is identified as unavailable, and partial OCR is labeled. These are the original saved extraction results, not newly generated scripts. No transcription or OCR is rerun when opening the page.
+
+**Download creatives (.ZIP)** on a shared link or its signed-in queue downloads only that link's selected originals (up to 512 MB). The archive is prepared on demand with at most two builds per backend process, checks access again before delivery, and fails without returning a partial archive if an original is missing or incomplete. Temporary archives are removed after delivery. Original Drive file links remain available for individual downloads.
