@@ -11,7 +11,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse
 
-MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 _archive_slots = BoundedSemaphore(2)
 
 
@@ -40,7 +40,7 @@ async def creative_archive(items: list[tuple[str, dict]], request: Request, medi
                     body = text.encode('utf-8')
                     total += len(body)
                     if total > MAX_ARCHIVE_BYTES:
-                        raise HTTPException(413, 'This download exceeds 512 MB. Download smaller selections or individual originals.')
+                        raise HTTPException(413, 'This download exceeds 1 GB. Download smaller selections or individual originals.')
                     archive.writestr(filename + '.txt', body)
                     continue
                 response = await run_in_threadpool(media_response, job_id, media_request)
@@ -63,7 +63,7 @@ async def creative_archive(items: list[tuple[str, dict]], request: Request, medi
                             total += len(chunk)
                             size += len(chunk)
                             if total > MAX_ARCHIVE_BYTES:
-                                raise HTTPException(413, 'This download exceeds 512 MB. Download smaller selections or individual originals.')
+                                raise HTTPException(413, 'This download exceeds 1 GB. Download smaller selections or individual originals.')
                             await run_in_threadpool(target.write, chunk)
                         expected = response.headers.get('content-length')
                         if not size or (expected and size != int(expected)):
