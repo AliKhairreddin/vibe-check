@@ -29,7 +29,7 @@ export function CreativeDownloadButton({ token }: { token: string }) {
   }
   return <div className="grid justify-items-start gap-2">
     <Button variant="outline" size="sm" disabled={busy} onClick={() => void download()}>{busy ? <LoaderCircle className="animate-spin" /> : <Download />}{busy ? 'Preparing ZIP…' : 'Download creatives (.ZIP)'}</Button>
-    {busy ? <p role="status" className="text-xs text-muted-foreground">Preparing the originals from this shared link. Larger videos may take a few minutes.</p> : null}
+    {busy ? <p role="status" className="text-xs text-muted-foreground">Preparing originals and matching text files with saved transcripts and on-screen text. Larger videos may take a few minutes.</p> : null}
     {error ? <p role="alert" className="max-w-xl text-sm text-destructive">{error}</p> : null}
   </div>;
 }

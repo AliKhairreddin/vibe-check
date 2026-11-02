@@ -525,7 +525,9 @@ async def test_shared_zip_checks_release_and_revocation_and_contains_only_select
     from io import BytesIO
     from zipfile import ZipFile
     from starlette.responses import Response
-    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: detail())
+    monkeypatch.setattr(main, 'get_client_review_detail', lambda *args, **kwargs: {
+        **detail(), 'creativeText': {'transcript': 'Selected spoken words', 'onscreen_text': 'Selected screen text'},
+    })
     portal['share'] = {'items': [{'jobId': JOB, 'offerId': 'kissterra'}]}
     visited = []
     def media(job_id, request):
@@ -537,8 +539,11 @@ async def test_shared_zip_checks_release_and_revocation_and_contains_only_select
         response = await client.get(url)
         assert response.status_code == 200
         with ZipFile(BytesIO(response.content)) as archive:
-            assert archive.namelist() == ['001-creative.mp4']
+            assert archive.namelist() == ['001-creative.mp4', '001-creative.txt']
             assert archive.read(archive.namelist()[0]) == b'original video'
+            text = archive.read('001-creative.txt').decode('utf-8')
+            assert 'Spoken text / transcript\nSelected spoken words' in text
+            assert 'On-screen text\nSelected screen text' in text
         assert visited == [JOB]
         def revoke_during_download(job_id, request):
             portal['share'] = None

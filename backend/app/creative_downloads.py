@@ -15,6 +15,22 @@ MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 _archive_slots = BoundedSemaphore(2)
 
 
+def _creative_text_document(filename: str, detail: dict) -> bytes:
+    """Export only the authorized, saved creative text projection."""
+    text = detail.get('creativeText') or {}
+    sections = [
+        f'Creative: {filename}',
+        'Text extracted during review. Transcription and text recognition may contain errors.',
+        'Spoken text / transcript\n' + (text.get('transcript') or 'No saved transcript is available.'),
+        'On-screen text\n' + (text.get('onscreen_text') or 'No saved on-screen text is available.'),
+    ]
+    if text.get('onscreen_text_partial'):
+        sections[-1] += '\n\nOnly part of the sampled on-screen text could be read.'
+    if text.get('ad_copy'):
+        sections.append('Submitted ad copy\n' + text['ad_copy'])
+    return ('\n\n'.join(sections) + '\n').encode('utf-8')
+
+
 async def creative_archive(items: list[tuple[str, dict]], request: Request, media_response, revalidate):
     """Fail atomically if any selected creative is missing; never return a partial ZIP."""
     if not _archive_slots.acquire(blocking=False):
@@ -71,6 +87,15 @@ async def creative_archive(items: list[tuple[str, dict]], request: Request, medi
                 finally:
                     if response.background:
                         await response.background()
+                body = _creative_text_document(filename, detail)
+                total += len(body)
+                if total > MAX_ARCHIVE_BYTES:
+                    raise HTTPException(413, 'This download exceeds 1 GB. Download smaller selections or individual originals.')
+                text_filename = str(Path(filename).with_suffix('.txt'))
+                # Preserve unusual originals that already have a .txt extension.
+                if text_filename == filename:
+                    text_filename = filename + '.txt'
+                archive.writestr(text_filename, body)
         await run_in_threadpool(revalidate)
         return FileResponse(path, media_type='application/zip', filename='creatives.zip',
                             headers={'cache-control': 'no-store'}, background=BackgroundTask(directory.cleanup))
