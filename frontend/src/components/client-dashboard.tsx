@@ -1236,29 +1236,36 @@ function CreativeReviewCard({ clientId, density, isExpanded, isSaving: externall
         {view === 'list' ? <div><StatusBadge status={effectiveStatus} /></div> : null}
         {view === 'list' ? <span className="text-xs tabular-nums text-muted-foreground max-[1199px]:justify-self-end">{review.preview.finding_count} finding{review.preview.finding_count === 1 ? '' : 's'}</span> : null}
         {view === 'list' ? <div className={session.role !== 'publisher' ? 'col-span-2 min-[1200px]:col-span-1' : undefined}>{session.role === 'publisher' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : review.decision ? <ClientDecisionBadge decision={review.decision.decision} /> : <Badge variant="outline">Pending</Badge>}</div> : null}
-        <div className={cn('flex min-w-0 flex-wrap items-center gap-1.5', view === 'list' && (session.role === 'publisher' ? 'justify-end' : 'col-span-2 min-[1200px]:col-span-1 min-[1200px]:justify-end'))}>
-          {view === 'grid' ? <StatusBadge status={effectiveStatus} /> : null}
-          <ShareButton jobIds={[review.job_id]} clientId={clientId} size="xs" label={view === 'list' ? 'Share' : undefined} />
-          {session.role === 'publisher' ? (view === 'grid' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : null) : review.decision ? (
+        <div className={cn('min-w-0', view === 'grid' ? 'grid gap-3' : cn('flex flex-wrap items-center gap-2', session.role === 'publisher' ? 'justify-end' : 'col-span-2 min-[1200px]:col-span-1 min-[1200px]:justify-end'))}>
+          {view === 'grid' ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge status={effectiveStatus} />
+                {session.role === 'publisher' ? <Badge variant="outline">{review.decision?.decision ?? 'Awaiting advertiser'}</Badge> : review.decision ? <ClientDecisionBadge decision={review.decision.decision} /> : <Badge variant="outline">Pending</Badge>}
+              </div>
+              <ShareButton jobIds={[review.job_id]} clientId={clientId} size="xs" label="Share" />
+            </div>
+          ) : <ShareButton jobIds={[review.job_id]} clientId={clientId} size="xs" label="Share" />}
+          {session.role !== 'publisher' ? <div role="group" aria-label={`Decision for ${review.file_name}`} className={cn('flex flex-wrap items-center gap-2', view === 'grid' && 'border-t pt-3')}>
+          {review.decision ? (
             <>
-              {view === 'grid' ? <ClientDecisionBadge decision={review.decision.decision} /> : null}
-              <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
+              <Button type="button" size={view === 'grid' ? 'sm' : 'xs'} className={view === 'grid' ? 'min-h-11 flex-1 sm:min-h-9' : undefined} variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
                 <MessageSquareText />{review.decision.feedback_note ? 'Edit note' : 'Add note'}
               </Button>
-              <Button type="button" size="xs" variant="outline" disabled={isSaving} onClick={resetDecision}>
+              <Button type="button" size={view === 'grid' ? 'sm' : 'xs'} className={view === 'grid' ? 'min-h-11 flex-1 sm:min-h-9' : undefined} variant="outline" disabled={isSaving} onClick={resetDecision}>
                 <RotateCcw />Reset
               </Button>
             </>
           ) : (
             <>
-              {view === 'grid' ? <Badge variant="outline">Pending</Badge> : null}
-              <Button type="button" size="xs" variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Approve</Button>
-              <Button type="button" size="xs" variant="destructive" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
-              <Button type="button" size="xs" variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
+              <Button type="button" size={view === 'grid' ? 'sm' : 'xs'} className={view === 'grid' ? 'min-h-11 flex-1 sm:min-h-9' : undefined} variant="success" disabled={isSaving} onClick={() => chooseDecision('approved')}>{isSaving ? <LoaderCircle className="animate-spin" /> : <Check />}Approve</Button>
+              <Button type="button" size={view === 'grid' ? 'sm' : 'xs'} className={view === 'grid' ? 'min-h-11 flex-1 sm:min-h-9' : undefined} variant="destructive" disabled={isSaving} onClick={() => chooseDecision('disapproved')}><X />Disapprove</Button>
+              <Button type="button" size={view === 'grid' ? 'sm' : 'xs'} className={view === 'grid' ? 'min-h-11 sm:min-h-9' : undefined} variant="ghost" disabled={isSaving} onClick={() => setIsNoteOpen((open) => !open)}>
                 <MessageSquareText />{draftNote ? 'Edit note' : 'Add note'}
               </Button>
             </>
           )}
+          </div> : null}
         </div>
       </div>
       {saveError ? <p role="alert" className="px-3 text-sm text-destructive">Decision not saved: {saveError}</p> : null}

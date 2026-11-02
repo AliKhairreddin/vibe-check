@@ -181,6 +181,58 @@ test('pending keeps the assessment, decisions override it, and reset restores it
   }
 });
 
+test('review lists retain saved decisions beyond 1,000 account decisions, including after changes and reset', async () => {
+  const { ctx, tables, add } = fixture();
+  // These older jobs are outside the displayed page but used to consume the
+  // entire account-wide decision lookup before it reached the visible job.
+  for (let i = 0; i < 1_005; i++) {
+    await ctx.db.insert('clientReviewDecisions', {
+      clientId: 'kissterra', offerId: 'kissterra', jobId: `a-${String(i).padStart(4, '0')}`,
+      decision: 'approved', decidedAt: i, createdAt: i, updatedAt: i,
+    });
+  }
+  await add('z-visible', { releasedOfferIds: undefined, report: {
+    offer_results: [{ offer_id: 'kissterra', overall_status: 'yellow', summary: 'Needs review', findings: [] }],
+  } });
+  await ctx.db.insert('publisherSubmissions', { clientId: 'kissterra', publisherId: 'publisher', jobId: 'z-visible', createdAt: 1 });
+  const args = { clientId: 'kissterra', offerId: 'kissterra', jobId: 'z-visible' };
+  for (const [decision, color] of [['approved', 'green'], ['disapproved', 'red'], [null, 'yellow']] as const) {
+    if (decision) await invoke(decide, ctx, { ...args, decision, feedbackNote: 'Keep my feedback' });
+    else await invoke(clearDecision, ctx, args);
+    for (const publisherId of [undefined, 'publisher']) {
+      // A fresh list read is what made the successful save disappear on screen.
+      const [row] = await invoke(list, ctx, { clientId: args.clientId, offerId: args.offerId, publisherId, limit: 1 });
+      const detail = await invoke(getDetail, ctx, args);
+      assert.equal(row.decision?.decision ?? null, decision);
+      assert.equal(row.effectiveStatus, color);
+      assert.deepEqual(row.decision, detail.review.decision);
+      if (decision) assert.equal(row.decision.feedbackNote, 'Keep my feedback');
+    }
+  }
+  assert.equal(tables.clientReviewDecisions.length, 1_005, 'unrelated decisions are untouched');
+});
+
+test('review lists retrieve the latest history for each visible job without account-wide truncation or scope leakage', async () => {
+  const { ctx, add } = fixture();
+  await add('visible', { releasedOfferIds: undefined });
+  const args = { clientId: 'kissterra', offerId: 'kissterra', jobId: 'visible' };
+  await ctx.db.insert('clientReviewDecisionHistory', { ...args, archivedAt: 1, decidedAt: 1, decision: 'approved', feedbackNote: 'Older' });
+  await ctx.db.insert('clientReviewDecisionHistory', { ...args, archivedAt: 2, decidedAt: 2, decision: 'disapproved', feedbackNote: 'Latest for this creative' });
+  for (let i = 0; i < 1_005; i++) {
+    await ctx.db.insert('clientReviewDecisionHistory', { ...args, jobId: `other-${i}`, archivedAt: i + 3, decidedAt: i + 3, decision: 'approved' });
+  }
+  for (const scope of [{ clientId: 'another-client' }, { offerId: 'smart-financial' }]) {
+    await ctx.db.insert('clientReviewDecisions', { ...args, ...scope, decision: 'approved', decidedAt: 2_000 });
+    await ctx.db.insert('clientReviewDecisionHistory', { ...args, ...scope, archivedAt: 2_000, decidedAt: 2_000, decision: 'approved' });
+  }
+  const [row] = await invoke(list, ctx, { ...args, limit: 1 });
+  const detail = await invoke(getDetail, ctx, args);
+  assert.equal(row.decision, null);
+  assert.equal(row.previousDecision?.decision, 'disapproved');
+  assert.equal(row.previousDecision?.feedbackNote, 'Latest for this creative');
+  assert.deepEqual(row.previousDecision, detail.review.previousDecision);
+});
+
 test('new jobs start private, including when their first update is already complete', async () => {
   const { ctx, tables } = fixture();
   await invoke(upsertStatus, ctx, { jobId: 'new', fileName: 'new.mp4', status: 'complete', progress: 100, reportReady: true, message: 'Complete', offerIds: ['kissterra'] });

@@ -268,27 +268,22 @@ export const list = query({
               q.eq("jobId", stat.jobId).eq("offerId", args.offerId)
             )
             .unique())),
-      ctx.db
+      // Resolve decisions for the displayed jobs. An account-wide take(1000)
+      // silently drops saved decisions once the account outgrows that prefix.
+      Promise.all(stats.map((stat) => ctx.db
         .query("clientReviewDecisions")
         .withIndex("by_client_id_and_offer_id_and_job_id", (q) =>
-          q.eq("clientId", args.clientId).eq("offerId", args.offerId)
+          q.eq("clientId", args.clientId).eq("offerId", args.offerId).eq("jobId", stat.jobId)
         )
-        .take(1000),
-      ctx.db
+        .unique())),
+      Promise.all(stats.map((stat) => ctx.db
         .query("clientReviewDecisionHistory")
-        .withIndex("by_client_id_and_offer_id_and_archived_at", (q) =>
-          q.eq("clientId", args.clientId).eq("offerId", args.offerId)
+        .withIndex("by_client_id_and_offer_id_and_job_id_and_archived_at", (q) =>
+          q.eq("clientId", args.clientId).eq("offerId", args.offerId).eq("jobId", stat.jobId)
         )
         .order("desc")
-        .take(1000),
+        .first())),
     ]);
-    const decisionByJobId = new Map(decisions.map((decision) => [decision.jobId, decision]));
-    const previousDecisionByJobId = new Map<string, (typeof decisionHistory)[number]>();
-    for (const decision of decisionHistory) {
-      if (!previousDecisionByJobId.has(decision.jobId)) {
-        previousDecisionByJobId.set(decision.jobId, decision);
-      }
-    }
     const batchIds = [...new Set(stats.flatMap((stat, index) => {
       const batchId = stat.batchId ?? legacyReviews[index]?.batchId;
       return batchId ? [batchId] : [];
@@ -307,7 +302,7 @@ export const list = query({
       const aiStatus = normalizeResultStatus(stat.resultStatus);
       const fileName = stat.fileName ?? review?.fileName;
       if (!fileName || review?.deletedAt !== undefined || !aiStatus) return [];
-      const decision = decisionByJobId.get(stat.jobId);
+      const decision = decisions[index] ?? undefined;
       const batchId = stat.batchId ?? review?.batchId ?? null;
       const batch = batchId ? batchById.get(batchId) : null;
       const report = stat.previewReady
@@ -343,7 +338,7 @@ export const list = query({
         jobId: stat.jobId,
         mediaKind: mediaKind(fileName, stat.hasCreative),
         preview: { ...preview, googleDriveUrl },
-        previousDecision: publicDecision(previousDecisionByJobId.get(stat.jobId)),
+        previousDecision: publicDecision(decisionHistory[index] ?? undefined),
         vertical: stat.vertical ?? classifyReviewVertical(fileName),
       }];
     });
