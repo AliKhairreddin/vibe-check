@@ -3802,18 +3802,18 @@ async def retry_batch_drive_item(
     meta=meta.model_copy(update={
         'vertical':item.vertical or classify_review_vertical(file_name),
     })
+    job_id=uuid.uuid4().hex
     try:
-        claimed=await asyncio.to_thread(claim_batch_item_retry,batch_id,item_id)
+        claimed=await asyncio.to_thread(claim_batch_item_retry,batch_id,item_id,job_id)
     except (FileNotFoundError,KeyError):
         raise HTTPException(404,'Review batch item not found') from None
     if not claimed:
         raise HTTPException(409,'This batch item has already been retried or is no longer failed.')
 
-    job_id=uuid.uuid4().hex
-    jd=job_dir(job_id)
-    media_path=jd/file_name
-    (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
     try:
+        jd=job_dir(job_id)
+        media_path=jd/file_name
+        (jd/'request.json').write_text(meta.model_dump_json(indent=2),encoding='utf-8')
         record=await enqueue_job(
             job_id,
             media_path,
@@ -3823,16 +3823,6 @@ async def retry_batch_drive_item(
             file_size=drive_file.size,
             drive_file=drive_file,
         )
-        set_review_source(job_id,ReviewSource(
-            kind='google_drive_file',
-            status='linked',
-            url=drive_file.web_view_link,
-            file_id=drive_file.file_id,
-            label='Open creative in Google Drive',
-            message=f'Retried “{file_name}” in its original batch.',
-            checked_at=now_ms(),
-        ))
-        return get_status(record.job_id)
     except Exception as exc:
         logger.exception('Could not retry Drive batch item %s/%s',batch_id,item_id)
         try:
@@ -3840,12 +3830,23 @@ async def retry_batch_drive_item(
                 update_batch_item,
                 batch_id,
                 item_id,
+                job_id=job_id,
                 status='upload_failed',
                 message=str(exc),
             )
         except Exception:
             logger.exception('Could not restore failed batch status for %s/%s',batch_id,item_id)
         raise
+    set_review_source(job_id,ReviewSource(
+        kind='google_drive_file',
+        status='linked',
+        url=drive_file.web_view_link,
+        file_id=drive_file.file_id,
+        label='Open creative in Google Drive',
+        message=f'Retried “{file_name}” in its original batch.',
+        checked_at=now_ms(),
+    ))
+    return get_status(record.job_id)
 
 
 @app.get('/api/learning/{offer_id}')

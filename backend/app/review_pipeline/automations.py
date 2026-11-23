@@ -367,6 +367,7 @@ async def run_review_automation(
                         finish_batch_item_and_notify,
                         batch_id,
                         item.item_id,
+                        job_id=claims_by_file[file.file_id]['job_id'],
                         status='upload_failed',
                         message='The automated Drive import could not be queued.',
                     )
@@ -441,6 +442,7 @@ async def run_review_automation(
                         finish_batch_item_and_notify,
                         batch_id,
                         item.item_id,
+                        job_id=claim.get('job_id'),
                         status='upload_failed',
                         message='The automated Drive import could not be queued.',
                     )

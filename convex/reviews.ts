@@ -7,11 +7,11 @@ import { getConvexSize, v, type Value } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { classifyReviewVertical } from "./reviewVerticals.ts";
 import { assertApiLease, syncApiJobState } from "./apiJobState.ts";
+import { failInterruptedBatchItems, type InterruptedBatchJob } from "./batches.ts";
 import { hasReviewReleases } from "./reviewReleaseState.ts";
 
 type ResultStatus = "green" | "yellow" | "red";
 const MAX_OFFER_RESULT_BYTES = 800_000;
-const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 
 type OfferResultEntry = {
   internalDisposition: string | null;
@@ -1063,7 +1063,7 @@ export const failInterrupted = mutation({
     requireSecret(args.secret);
     const now = Date.now();
     const failedJobIds: string[] = [];
-    const batchItems = new Map<string, Map<string, string>>();
+    const interruptedJobs: InterruptedBatchJob[] = [];
     for (const snapshot of (args.snapshots ?? []).slice(0, 100)) {
       const review = await observedInterruptedReview(ctx, snapshot, now, args.idleInstanceId);
       if (!review) continue;
@@ -1085,31 +1085,9 @@ export const failInterrupted = mutation({
       });
       await syncReviewOfferStats(ctx, updated, now);
       failedJobIds.push(jobId);
-      if (review.batchId && review.batchItemId) {
-        const items = batchItems.get(review.batchId) ?? new Map<string, string>();
-        items.set(review.batchItemId, jobId);
-        batchItems.set(review.batchId, items);
-      }
+      interruptedJobs.push({ batchId: review.batchId, batchItemId: review.batchItemId, jobId });
     }
-
-    for (const [batchId, failedItems] of batchItems) {
-      const batch = await ctx.db
-        .query("reviewBatches")
-        .withIndex("by_batch_id", (query) => query.eq("batchId", batchId))
-        .unique();
-      if (!batch) continue;
-      const items = batch.items.map((item) => failedItems.has(item.itemId) ? {
-        ...item,
-        jobId: failedItems.get(item.itemId),
-        message: args.message,
-        status: "failed",
-      } : item);
-      await ctx.db.patch(batch._id, {
-        items,
-        notificationReady: items.every((item) => TERMINAL_BATCH_STATUSES.has(item.status)),
-        updatedAt: now,
-      });
-    }
+    await failInterruptedBatchItems(ctx, interruptedJobs, args.message, now);
     return { failedJobIds };
   },
 });
