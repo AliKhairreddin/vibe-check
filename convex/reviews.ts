@@ -1,4 +1,4 @@
-import { interruptedReviews, isInterrupted } from "./reviewRecovery.ts";
+import { interruptedReviews, observedInterruptedReview } from "./reviewRecovery.ts";
 import { resolveReviewSource } from "./reviewSources.ts";
 import { attributeInternalReview } from './publisherOwnership.ts';
 import { paginationOptsValidator } from "convex/server";
@@ -1042,13 +1042,9 @@ export const claimInterrupted = mutation({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     requireSecret(args.secret);
-    const review = await ctx.db.query("reviews")
-      .withIndex("by_job_id", q => q.eq("jobId", args.jobId)).unique();
     const now = Date.now();
-    // Recovery downloads manifests before enqueueing. Recheck in a transaction
-    // so progress, completion, a fresh heartbeat, or another claim wins the race.
-    if (!review || review.updatedAt !== args.expectedUpdatedAt
-      || !await isInterrupted(ctx, review, now, args.instanceId)) return false;
+    const review = await observedInterruptedReview(ctx, args, now, args.instanceId);
+    if (!review) return false;
     await ctx.db.patch(review._id, { processingInstanceId: args.instanceId, updatedAt: now });
     return true;
   },
@@ -1057,7 +1053,8 @@ export const claimInterrupted = mutation({
 export const failInterrupted = mutation({
   args: {
     secret: v.string(),
-    jobIds: v.array(v.string()),
+    snapshots: v.optional(v.array(v.object({ jobId: v.string(), expectedUpdatedAt: v.number() }))),
+    jobIds: v.optional(v.array(v.string())),
     message: v.string(),
     idleInstanceId: v.optional(v.string()),
   },
@@ -1067,17 +1064,10 @@ export const failInterrupted = mutation({
     const now = Date.now();
     const failedJobIds: string[] = [];
     const batchItems = new Map<string, Map<string, string>>();
-    for (const jobId of [...new Set(args.jobIds)].slice(0, 100)) {
-      const review = await ctx.db
-        .query("reviews")
-        .withIndex("by_job_id", (query) => query.eq("jobId", jobId))
-        .unique();
-      if (
-        !review
-        || !await isInterrupted(ctx, review, now, args.idleInstanceId)
-      ) {
-        continue;
-      }
+    for (const snapshot of (args.snapshots ?? []).slice(0, 100)) {
+      const review = await observedInterruptedReview(ctx, snapshot, now, args.idleInstanceId);
+      if (!review) continue;
+      const jobId = snapshot.jobId;
       const updated = {
         ...review,
         message: args.message,

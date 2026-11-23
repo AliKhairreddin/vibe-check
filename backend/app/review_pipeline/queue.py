@@ -345,19 +345,19 @@ async def recover_interrupted_jobs() -> dict[str, int]:
         )
         payloads.update(reconstructed)
         requeued = 0
-        unrecoverable_ids: set[str] = set()
+        unrecoverable = []
         for review in interrupted:
             job_id = review.job_id
             payload = payloads.get(job_id)
             if payload is None:
-                unrecoverable_ids.add(job_id)
+                unrecoverable.append(review)
                 continue
             if (
                 payload.media_kind != 'copy_only'
                 and payload.drive_file is None
                 and payload.media_url is None
             ):
-                unrecoverable_ids.add(job_id)
+                unrecoverable.append(review)
                 continue
             if not await asyncio.to_thread(claim_interrupted_review, review):
                 continue
@@ -394,7 +394,7 @@ async def recover_interrupted_jobs() -> dict[str, int]:
                 )
         failed = await asyncio.to_thread(
             fail_unrecoverable_jobs,
-            list(unrecoverable_ids),
+            unrecoverable,
         )
         for job_id in failed:
             review = next((value for value in interrupted if value.job_id == job_id), None)
