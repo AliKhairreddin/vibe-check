@@ -607,7 +607,7 @@ function RecentReviewRow({
             </>
           ) : null}
         </div>
-        <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4 xl:flex xl:flex-wrap">
+        <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-1 sm:grid-cols-4 xl:flex xl:flex-wrap">
           {offerColumns.map((offer) => (
             <div
               key={offer.offer_id}
@@ -628,7 +628,7 @@ function RecentReviewRow({
   const target = review.report_ready ? '/reviews/$jobId/report' : '/reviews/$jobId';
 
   return (
-    <div className="group/review flex items-center gap-3 px-3 py-3 transition-colors hover:bg-muted/40">
+    <div className="group/review grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 px-3 py-3 transition-colors hover:bg-muted/40 sm:flex">
       <CreativeThumbnail
         alt={`Preview of ${review.file_name || review.job_id}`}
         driveUrl={review.source_kind === 'google_drive_file' ? review.source_url : null}
@@ -638,8 +638,12 @@ function RecentReviewRow({
       <Link to={target} params={{ jobId: review.job_id }} className={linkClassName}>
         {content}
       </Link>
-      {review.status === 'complete' ? <ReleaseButton jobIds={[review.job_id]} hasReleased={hasReviewReleases(review)} /> : null}
-      {review.status === 'complete' ? <ShareButton jobIds={[review.job_id]} label="Share" size="xs" /> : null}
+      {review.status === 'complete' ? (
+        <div className="col-span-full flex justify-end gap-3">
+          <ReleaseButton jobIds={[review.job_id]} hasReleased={hasReviewReleases(review)} />
+          <ShareButton jobIds={[review.job_id]} label="Share" size="xs" />
+        </div>
+      ) : null}
     </div>
   );
 }
