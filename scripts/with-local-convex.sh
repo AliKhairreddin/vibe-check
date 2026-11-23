@@ -17,7 +17,11 @@ project=$(mktemp -d)
 trap 'rm -rf "$project"' EXIT
 cd "$root"
 if [[ -n "$ref" ]]; then
-  git archive "$ref" convex convex.json shared frontend/src backend/app package.json | tar -x -C "$project"
+  sources=(convex convex.json frontend/src backend/app package.json)
+  if git cat-file -e "$ref:shared" 2>/dev/null; then sources+=(shared); fi
+  git archive --output="$project/source.tar" "$ref" "${sources[@]}"
+  tar -xf "$project/source.tar" -C "$project"
+  rm "$project/source.tar"
 else
   cp -R convex shared convex.json package.json "$project/"
   mkdir "$project/frontend" "$project/backend"
@@ -37,8 +41,8 @@ cd "$project"
   echo 'touch check-passed'
 } > run-check.sh
 env -i PATH="$PATH" CONVEX_AGENT_MODE=anonymous CONVEX_SOURCE_ROOT="$root" \
-  ./node_modules/.bin/convex dev --once --codegen enable --typecheck disable \
-  --local-backend-version precompiled-2026-11-21-cf39368 --start 'bash run-check.sh'
+  python3 "$root/scripts/local-convex-ports.py" ./node_modules/.bin/convex dev --once --codegen enable --typecheck disable \
+  --local-backend-version "${CONVEX_TEST_BACKEND_VERSION:-precompiled-2026-11-21-cf39368}" --start 'bash run-check.sh'
 if [[ ! -f check-passed ]]; then
   echo "The local Convex check did not finish successfully." >&2
   exit 1
