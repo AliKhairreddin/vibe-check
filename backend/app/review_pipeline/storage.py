@@ -576,8 +576,13 @@ def _update_local_batch_item(
     message:str='',
     claim_notification:bool=False,
 )->tuple[ReviewBatch,bool]:
-    # Persist the assessment snapshot, never the decision overlay returned to viewers.
     batch=get_batch(batch_id)
+    target=next((item for item in batch.items if item.item_id == item_id), None)
+    if target is None:
+        raise KeyError(item_id)
+    if (target.job_id is not None and target.job_id != job_id) or (target.status == 'complete' and status != 'complete'):
+        return batch,False
+    # Persist the assessment snapshot, never the decision overlay returned to viewers.
     for item in batch.items:
         for outcome in item.offer_outcomes:
             outcome.overall_status=outcome.automated_status or outcome.overall_status
@@ -588,33 +593,25 @@ def _update_local_batch_item(
             outcome.client_feedback_note=None
             outcome.client_feedback_reason=None
     normalized_result=_normalize_result_status(result)
-    found=False
-    for item in batch.items:
-        if item.item_id != item_id:
-            continue
-        found=True
-        item.status=status
-        if job_id:
-            item.job_id=job_id
-        if normalized_result:
-            item.result=normalized_result
-        if offer_outcomes is not None:
-            item.offer_outcomes=[outcome.model_copy(deep=True) for outcome in offer_outcomes]
-        elif normalized_result:
-            unrated_evaluated=[
-                outcome
-                for outcome in item.offer_outcomes
-                if outcome.evaluation_state == 'evaluated' and outcome.overall_status is None
-            ]
-            # Legacy callers only provide the primary result. Fill it when the
-            # eligibility snapshot has exactly one possible target; otherwise
-            # leave the per-offer cells unrated instead of guessing.
-            if len(unrated_evaluated) == 1:
-                unrated_evaluated[0].overall_status=normalized_result
-        item.message=message
-        break
-    if not found:
-        raise KeyError(item_id)
+    target.status=status
+    if job_id:
+        target.job_id=job_id
+    if normalized_result:
+        target.result=normalized_result
+    if offer_outcomes is not None:
+        target.offer_outcomes=[outcome.model_copy(deep=True) for outcome in offer_outcomes]
+    elif normalized_result:
+        unrated_evaluated=[
+            outcome
+            for outcome in target.offer_outcomes
+            if outcome.evaluation_state == 'evaluated' and outcome.overall_status is None
+        ]
+        # Legacy callers only provide the primary result. Fill it when the
+        # eligibility snapshot has exactly one possible target; otherwise
+        # leave the per-offer cells unrated instead of guessing.
+        if len(unrated_evaluated) == 1:
+            unrated_evaluated[0].overall_status=normalized_result
+    target.message=message
     batch.updated_at=now_ms()
     should_notify=(
         claim_notification
@@ -641,8 +638,9 @@ def update_batch_item(batch_id:str, item_id:str, *, status:str, job_id:str|None=
     return ReviewBatch.model_validate(remote) if remote is not None else local
 
 
-def claim_batch_item_retry(batch_id:str, item_id:str)->bool:
+def claim_batch_item_retry(batch_id:str, item_id:str, job_id:str)->bool:
     remote=_convex_call_with_retry('mutation', 'batches:claimItemRetry', {
+        'jobId':job_id,
         'batchId':batch_id,
         'itemId':item_id,
     })
@@ -652,10 +650,12 @@ def claim_batch_item_retry(batch_id:str, item_id:str)->bool:
     for item in batch.items:
         if item.item_id != item_id:
             continue
+        if item.status == 'retrying' and item.job_id == job_id:
+            return True
         if item.status != 'upload_failed':
             return False
         item.status='retrying'
-        item.job_id=None
+        item.job_id=job_id
         item.result=None
         item.message='Retrying Drive submission'
         batch.notification_claim_id=None
