@@ -417,8 +417,6 @@ def clean_live_source_url(value:str|None)->str|None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # OCR retries on the next creative. Its readiness remains visible to the
-    # deployment health check, but an OCR outage must not stop the job workers.
     try:
         await asyncio.to_thread(initialize_ocr)
     except Exception:

@@ -125,17 +125,6 @@ def build_review_message(
     return '\n'.join(lines)
 
 
-@_best_effort_notification
-def send_review_message(
-    record: JobRecord,
-    report: dict[str, Any],
-    ad_copy_text: str = '',
-    media_kind: MediaKind | None = None,
-) -> bool:
-    # Successful processing is visible in the app; release is the milestone.
-    return False
-
-
 def build_live_scan_message(
     record: JobRecord,
     report: dict[str, Any],
@@ -174,16 +163,6 @@ def build_live_scan_message(
             f'<a href="{html.escape(report_url,quote=True)}">Open report</a>'
         )
     return '\n'.join(lines)
-
-
-@_best_effort_notification
-def send_live_scan_message(
-    record: JobRecord,
-    report: dict[str, Any],
-    meta: ReviewRequestMeta,
-    media_kind: MediaKind | None = None,
-) -> bool:
-    return False
 
 
 def build_batch_message(

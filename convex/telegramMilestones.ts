@@ -277,7 +277,6 @@ export async function digestSections(ctx: Context, batchId: string, since: numbe
   return entries;
 }
 
-// Read-only operator preview; it does not enqueue or send anything.
 export const previewBatch = internalQuery({
   args: { batchId: v.string() }, returns: v.array(v.object({ offerId: v.string(), name: v.string(), message: v.string() })),
   handler: (ctx, args) => digestSections(ctx, args.batchId, Date.now() - 86400000, Date.now()),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 from .models import OfferOverride, OfferProfileInput
 
@@ -75,7 +76,14 @@ def _common_rules(*, prohibit_agent_terms: bool = False) -> list[dict[str, objec
     ]
 
 
-OFFER_POLICY_SEEDS: dict[str, dict[str, object]] = {
+class OfferPolicySeed(TypedDict):
+    display_name: str
+    official_file: str
+    is_default: bool
+    overrides: list[dict[str, object]]
+
+
+OFFER_POLICY_SEEDS: dict[str, OfferPolicySeed] = {
     'acp': {
         'display_name': 'ACP',
         'official_file': 'general_publisher_ad_creative_guidelines.md',
@@ -303,15 +311,15 @@ OFFER_POLICY_SEEDS: dict[str, dict[str, object]] = {
 def seeded_offer_inputs() -> dict[str, OfferProfileInput]:
     profiles: dict[str, OfferProfileInput] = {}
     for offer_id, seed in OFFER_POLICY_SEEDS.items():
-        official_path = POLICY_DIR / str(seed['official_file'])
+        official_path = POLICY_DIR / seed['official_file']
         profiles[offer_id] = OfferProfileInput(
-            display_name=str(seed['display_name']),
+            display_name=seed['display_name'],
             official_guidelines=official_path.read_text(encoding='utf-8').strip(),
             internal_overrides=[
                 OfferOverride.model_validate(rule)
-                for rule in seed['overrides']  # type: ignore[union-attr]
+                for rule in seed['overrides']
             ],
             enabled=True,
-            is_default=bool(seed['is_default']),
+            is_default=seed['is_default'],
         )
     return profiles

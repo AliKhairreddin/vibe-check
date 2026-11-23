@@ -103,7 +103,6 @@ test('October 23 retraction removes only the 20 verified Kissterra releases and 
   assert.equal(preview.matched, 20);
   assert.equal(preview.changed, 20);
   assert.deepEqual(tables, before);
-  // Even the last invalid target must fail before the first target changes.
   tables.reviews[19].fileName = 'unexpected.mp4';
   const mismatched = structuredClone(tables);
   await assert.rejects(invoke(retractKissterraOctober23Agt, ctx, { dryRun: false }), /verified retraction target/);
@@ -377,7 +376,6 @@ test('batch responses include releases beyond the loaded history page and retain
   const privateBatch = { items: listed.items.filter((item: any) => ['private', 'failed'].includes(item.job_id)) };
   assert.equal(hasBatchReleases(loadedReviews, privateBatch), false);
   assert.deepEqual(deletableBatchReviewIds(loadedReviews, privateBatch), ['private', 'failed']);
-  // Fresh history release data must also protect against an older batch response.
   assert.deepEqual(deletableBatchReviewIds([{ status: 'complete', report_ready: true }], privateBatch), []);
 });
 
@@ -458,7 +456,6 @@ test('shared API category filtering happens before pagination and keeps releases
   await add('home-private', { ...acp, vertical: 'home-insurance', releasedOfferIds: [] });
   await add('home-deleted', { ...acp, vertical: 'home-insurance', deletedAt: 100 });
   await add('home-other-offer', { vertical: 'home-insurance', releasedOfferIds: ['kissterra'] });
-  // A newer auto creative must not consume the first home page.
   await add('auto-selected', { ...acp, vertical: 'auto-insurance' });
   const args = { partnerId: 'coveragepro', offerId: 'acp', paginationOpts: { numItems: 1, cursor: null }, vertical: 'home-insurance' };
   const first = await invoke(listSharedOfferReviews, ctx, args);

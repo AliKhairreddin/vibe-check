@@ -6,6 +6,7 @@ import re
 import json
 import logging
 from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,11 @@ class RecoveredReviewPayload:
     meta: ReviewRequestMeta
     media_url: str | None = None
     drive_file: DriveFile | None = None
+
+
+class ManifestAvailability(Enum):
+    MISSING = 'missing'
+    RETRY_LATER = 'retry_later'
 
 
 @dataclass(frozen=True)
@@ -342,7 +348,13 @@ def _list_payload_rows_sync(job_ids: list[str]) -> list[dict[str, Any]]:
         )
         if not isinstance(rows, list):
             raise RuntimeError('Review payload lookup returned an invalid response.')
-        payload_rows.extend(row for row in rows if isinstance(row, dict))
+        requested = set(job_ids[offset:offset + 100])
+        for row in rows:
+            if (not isinstance(row, dict) or not isinstance(row.get('jobId'), str)
+                    or row['jobId'] not in requested or not isinstance(row.get('manifestUrl'), str)):
+                raise RuntimeError('Review payload lookup returned an invalid manifest record.')
+            requested.remove(row['jobId'])
+            payload_rows.append(row)
     return payload_rows
 
 
@@ -350,12 +362,10 @@ async def _load_payload_row(
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
     row: dict[str, Any],
-) -> RecoveredReviewPayload | None:
-    job_id = row.get('jobId')
+) -> RecoveredReviewPayload | ManifestAvailability:
+    job_id = row['jobId']
     try:
-        manifest_url = row.get('manifestUrl')
-        if not isinstance(job_id, str) or not isinstance(manifest_url, str):
-            return None
+        manifest_url = row['manifestUrl']
         async with semaphore:
             async with asyncio.timeout(MANIFEST_DOWNLOAD_DEADLINE_SECONDS):
                 response = await client.get(manifest_url)
@@ -387,20 +397,26 @@ async def _load_payload_row(
             media_url=media_url if isinstance(media_url, str) else None,
             drive_file=_drive_file(manifest.get('drive_file')),
         )
-    except Exception:
-        logger.exception(
-            'Could not load durable recovery manifest for job %s.',
-            job_id if isinstance(job_id, str) else 'unknown',
-        )
-        return None
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in {404, 410}:
+            return ManifestAvailability.MISSING
+        logger.warning('Deferred recovery manifest for job %s after HTTP %s.', job_id, exc.response.status_code)
+    except (httpx.RequestError, TimeoutError) as exc:
+        logger.warning('Deferred recovery manifest for job %s after %s.', job_id, type(exc).__name__)
+    except (KeyError, TypeError, ValueError, RuntimeError):
+        logger.warning('Deferred invalid recovery manifest for job %s.', job_id)
+    return ManifestAvailability.RETRY_LATER
 
 
 async def load_recovery_payloads(
     job_ids: list[str],
-) -> dict[str, RecoveredReviewPayload]:
-    if not job_ids:
-        return {}
+) -> dict[str, RecoveredReviewPayload | ManifestAvailability]:
+    results: dict[str, RecoveredReviewPayload | ManifestAvailability] = dict.fromkeys(
+        job_ids, ManifestAvailability.MISSING,
+    )
     rows = await asyncio.to_thread(_list_payload_rows_sync, job_ids)
+    if not rows:
+        return results
     semaphore = asyncio.Semaphore(MANIFEST_DOWNLOAD_CONCURRENCY)
     async with httpx.AsyncClient(
         timeout=MANIFEST_DOWNLOAD_TIMEOUT,
@@ -410,32 +426,24 @@ async def load_recovery_payloads(
             max_keepalive_connections=MANIFEST_DOWNLOAD_CONCURRENCY,
         ),
     ) as client:
-        tasks = [
-            asyncio.create_task(_load_payload_row(client, semaphore, row))
+        tasks = {
+            asyncio.create_task(_load_payload_row(client, semaphore, row)): row['jobId']
             for row in rows
-        ]
-        done, pending = await asyncio.wait(
-            tasks,
-            timeout=MANIFEST_BATCH_DEADLINE_SECONDS,
-        )
-        if pending:
-            logger.warning(
-                'Durable recovery manifest batch deadline expired with %s request(s) pending.',
-                len(pending),
-            )
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-        loaded = [
-            task.result()
-            for task in done
-            if not task.cancelled()
-        ]
-    return {
-        payload.job_id: payload
-        for payload in loaded
-        if payload is not None
-    }
+        }
+        try:
+            done, pending = await asyncio.wait(tasks, timeout=MANIFEST_BATCH_DEADLINE_SECONDS)
+            for task in done:
+                results[tasks[task]] = task.result()
+            if pending:
+                logger.warning('Deferred %s recovery manifests after the batch deadline.', len(pending))
+                for task in pending:
+                    results[tasks[task]] = ManifestAvailability.RETRY_LATER
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    return results
 
 
 def _restore_media_sync(payload: RecoveredReviewPayload, destination: Path) -> None:
@@ -473,15 +481,18 @@ async def restore_media(
     await asyncio.to_thread(_restore_media_sync, payload, destination)
 
 
-def fail_unrecoverable_jobs(job_ids: list[str]) -> list[str]:
+def fail_unrecoverable_jobs(reviews: list[InterruptedReview]) -> list[str]:
     from ..platform_monitoring import INSTANCE_ID
     failed: list[str] = []
-    for offset in range(0, len(job_ids), 100):
+    for offset in range(0, len(reviews), 100):
         result = storage._convex_call(
             'mutation',
             'reviews:failInterrupted',
             {
-                'jobIds': job_ids[offset:offset + 100],
+                'snapshots': [
+                    {'jobId': review.job_id, 'expectedUpdatedAt': review.updated_at}
+                    for review in reviews[offset:offset + 100]
+                ],
                 'message': INTERRUPTED_MESSAGE,
                 'idleInstanceId': INSTANCE_ID,
             },

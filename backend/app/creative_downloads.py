@@ -92,7 +92,6 @@ async def creative_archive(items: list[tuple[str, dict]], request: Request, medi
                 if total > MAX_ARCHIVE_BYTES:
                     raise HTTPException(413, 'This download exceeds 1 GB. Download smaller selections or individual originals.')
                 text_filename = str(Path(filename).with_suffix('.txt'))
-                # Preserve unusual originals that already have a .txt extension.
                 if text_filename == filename:
                     text_filename = filename + '.txt'
                 archive.writestr(text_filename, body)

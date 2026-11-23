@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { enqueue, claim, finish, isApiReview } from '../convex/telegramNotifications.ts';
 
-// Run the registered Convex handlers against a small indexed database fixture.
 const handler = (fn: unknown) => (fn as { _handler: (ctx: unknown, args: Record<string, unknown>) => Promise<any> })._handler;
 function database() {
   const tables: Record<string, any[]> = { telegramNotifications: [], apiReviewLinks: [] };
