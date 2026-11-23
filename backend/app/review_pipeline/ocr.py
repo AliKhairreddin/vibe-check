@@ -181,14 +181,12 @@ def dedupe_ocr(items: list[dict]) -> list[dict]:
 def run_ocr(frames_dir: Path, frame_records: list[dict]) -> OcrResult:
     rows = []
     recognized = {}
-    # Include expected but missing frames in coverage, too.
     ts_by_name = {r['filename']: r.get('timestamp') for r in frame_records}
     names = sorted(set(ts_by_name) | {p.name for p in frames_dir.glob('*.jpg')})
     records = [{'filename': name, 'timestamp': ts_by_name.get(name)} for name in names]
     result = OcrResult(total_frames=len(records))
     if not records:
         return result
-    # Retry model initialization once per creative, not once per video frame.
     for attempt in range(1, OCR_ATTEMPTS + 1):
         try:
             pool = initialize_ocr()
@@ -204,7 +202,6 @@ def run_ocr(frames_dir: Path, frame_records: list[dict]) -> OcrResult:
             try:
                 with Image.open(frame) as image:
                     key = (image.mode, image.size, sha256(image.tobytes()).digest())
-                # Cache only successful recognition, including legitimate blank frames.
                 if key not in recognized:
                     recognized[key] = normalize_text(pool.recognize(frame))
                 rows.append({**record, 'text': recognized[key]})

@@ -308,7 +308,6 @@ async def _review_offer(
     report.internal_disposition=_internal_disposition(report)
     if ((ocr_coverage or {}).get('status') in {'partial', 'unavailable'}
             and report.internal_disposition in {'clear', 'accepted_with_override'}):
-        # A completed review with unread text is not a fully cleared creative.
         report.internal_disposition='human_review'
     return OfferComplianceResult.model_validate(
         report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
@@ -465,7 +464,6 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             try:
                 ocr_result=await _timed_thread_call(timer, 'ocr', run_ocr, jd/'frames', frames)
             except Exception:
-                # Preserve review completion even for an unexpected OCR-stage error.
                 logger.exception('OCR stage failed for %s; continuing with available evidence.', job_id)
                 ocr_result=OcrResult.unavailable(frames, 'stage_error')
             ocr=ocr_result.rows

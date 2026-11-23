@@ -8,8 +8,6 @@ type ReadEnvironment = Pick<Env, 'CONVEX_URL' | 'CONVEX_HTTP_SECRET' | 'CORS_ALL
 
 export function reviewReadRoute(request: Request): { jobId: string; kind: 'status' | 'report' } | null {
   const url = new URL(request.url);
-  // Scope only the two existing operator endpoints. History, media, client,
-  // public-share and partner APIs keep their own authorization and behavior.
   if (request.method !== 'GET' || url.hostname !== 'admin.adchecked.com') return null;
   const match = /^\/api\/reviews\/([0-9a-f]{32})(\/report)?$/.exec(url.pathname);
   return match ? { jobId: match[1], kind: match[2] ? 'report' : 'status' } : null;

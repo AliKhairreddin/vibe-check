@@ -66,7 +66,6 @@ export const saveEvidence = mutation({
     if (getConvexSize(args) > 70_000) throw new Error('Learning evidence exceeds the bounded snapshot size.');
     const existing = await ctx.db.query('learningEvidence').withIndex('by_job_id_and_offer_id', q =>
       q.eq('jobId', args.jobId).eq('offerId', args.offerId)).unique();
-    // A completed review's evidence is immutable, including across retries.
     if (!existing) await ctx.db.insert('learningEvidence', { ...args, createdAt: Date.now() });
     return null;
   },

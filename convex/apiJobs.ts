@@ -132,7 +132,6 @@ async function findAsset(ctx: QueryCtx, partnerId: string, assetId: string, offe
 
 async function cardWithLegacyPreview(ctx: QueryCtx, link: Doc<"apiReviewLinks">) {
   if (link.executionStatus || link.status === "deleted") return assetCard(link);
-  // Older ownership rows predate the compact projection. Read only small stats.
   const stats = await ctx.db.query("reviewOfferStats").withIndex("by_job_id", q => q.eq("jobId", link.jobId)).take(10);
   const stat = stats.find(s => s.offerId === link.requestedOfferId) ?? stats[0];
   const status = executionStatus(stat?.status ?? (link.status === "active" ? "queued" : link.status));

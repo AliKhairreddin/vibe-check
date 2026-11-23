@@ -215,7 +215,6 @@ test('multi-batch stale sends refresh every summary in separate transactions usi
   assert.equal(f.ctx.paginationCalls, 0);
   assert.ok(f.tables.telegramBatchDeliveries.every((row: any) => row.status === 'uncertain'));
   assert.equal(f.refreshes.length, 4);
-  // A confirmation can arrive before queued "sending" or "uncertain" refreshes.
   await recordEmailDelivery(f.ctx, { ...email, status: 'sent', sentAt: Date.now() });
   await f.flushRefreshes();
   const releases = f.posts().filter((post: any) => post.eventKey.startsWith('release:'));
@@ -297,7 +296,6 @@ test('roundup includes only today’s batches and keeps its window when resumed 
     const run = f.tables.telegramDigestRuns[1];
     assert.equal(run.day, '2026-09-15');
     assert.equal(run.since, start);
-    // Stored bounds must survive retries even after the local date has changed.
     now += 86400000;
     while (f.scheduled.length) await invoke(advanceRun, f.ctx, f.scheduled.shift());
     assert.equal(run.status, 'complete');

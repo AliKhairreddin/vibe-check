@@ -95,7 +95,6 @@ export const receiveEvent = internalMutation({
     if (!row || row.accessMode !== 'subscription' || row.isTest === args.livemode || isGrandfathered(row.clientId)) return null;
     await ctx.db.insert('billingEvents', { eventId: args.eventId, createdAt: Date.now() });
     if (args.deleted) {
-      // Provider deletion revokes access and removes provider identifiers locally.
       await ctx.db.patch(row._id, { customerId: undefined, customerGeneration: (row.customerGeneration ?? 0) + 1, subscriptionId: undefined, priceId: undefined, paidThrough: 0, status: 'deleted', checkoutId: undefined, checkoutUrl: undefined, checkoutAttempt: undefined, checkoutExpiresAt: undefined, syncLease: undefined, syncLeaseUntil: 0, syncedAt: Date.now(), nextSyncAt: Number.MAX_SAFE_INTEGER, revision: row.revision + 1 });
     } else {
       await ctx.db.patch(row._id, { nextSyncAt: Date.now(), revision: row.revision + 1 });
