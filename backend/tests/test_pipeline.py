@@ -951,8 +951,21 @@ def test_drive_get_file_rejects_files_outside_root(monkeypatch):
     with pytest.raises(DriveLookupError, match='outside the configured Drive folder'):
         client.get_file('outside')
 
+@pytest.fixture(params=[None, 'reviews:setSource', 'reviews:getStatus'])
+def unavailable_drive_storage(request, monkeypatch):
+    call = review_storage._convex_call
+
+    def simulate_outage(kind, path, args):
+        if path == request.param:
+            raise OSError('storage unavailable')
+        return call(kind, path, args)
+
+    monkeypatch.setattr(review_storage, '_convex_call', simulate_outage)
+    return request.param
+
+
 @pytest.mark.anyio
-async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monkeypatch):
+async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monkeypatch, unavailable_drive_storage):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
@@ -991,7 +1004,7 @@ async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monk
 
     monkeypatch.setattr('app.main.get_google_drive_client', fake_drive_client)
     monkeypatch.setattr('app.main.enqueue_job', fake_enqueue)
-    transport=httpx.ASGITransport(app=app)
+    transport=httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
         response=await client.post('/api/drive/reviews', json={
             'drive_id':'kissterra',
@@ -1009,8 +1022,10 @@ async def test_drive_review_endpoint_enqueues_exact_selected_file(tmp_path, monk
     assert enqueued['ad_copy'] == 'Caption text'
     assert enqueued['vertical'] == 'home-insurance'
     assert enqueued['media_path'].name == 'selected creative.mp4'
-    assert body['source_file_id'] == 'drive-file-id'
-    assert body['source_url'] == selected.web_view_link
+    assert body['job_id'] == enqueued['job_id']
+    linked = unavailable_drive_storage != 'reviews:setSource'
+    assert body['source_file_id'] == (selected.file_id if linked else None)
+    assert body['source_url'] == (selected.web_view_link if linked else None)
 
 class FakeDriveClient:
     def __init__(self, matches):
@@ -4886,7 +4901,7 @@ async def test_batch_api_registers_pending_uploads_before_reviews_start(tmp_path
 
 
 @pytest.mark.anyio
-async def test_failed_drive_item_retries_in_place_with_saved_batch_context(tmp_path, monkeypatch):
+async def test_failed_drive_item_retries_in_place_with_saved_batch_context(tmp_path, monkeypatch, unavailable_drive_storage):
     monkeypatch.setattr('app.review_pipeline.storage.JOB_DATA_DIR', tmp_path)
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_URL', '')
     monkeypatch.setattr('app.review_pipeline.storage.CONVEX_HTTP_SECRET', '')
@@ -4932,7 +4947,7 @@ async def test_failed_drive_item_retries_in_place_with_saved_batch_context(tmp_p
 
     monkeypatch.setattr('app.main.get_google_drive_client',lambda drive_id='default':FakeDrive())
     monkeypatch.setattr('app.main.enqueue_job',fake_enqueue)
-    transport=httpx.ASGITransport(app=app)
+    transport=httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport,base_url='http://test') as client:
         created=await client.post('/api/batches',json={
             'batch_id':batch_id,
@@ -4973,6 +4988,7 @@ async def test_failed_drive_item_retries_in_place_with_saved_batch_context(tmp_p
     assert failed.status_code == 200
     assert retried.status_code == 200
     assert retried.json()['status'] == 'queued'
+    assert retried.json()['source_url'] == (None if unavailable_drive_storage == 'reviews:setSource' else selected.web_view_link)
     assert enqueued == {
         'ad_copy':'Save more today.',
         'batch_id':batch_id,
