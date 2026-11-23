@@ -11,10 +11,15 @@ permissions:
 
 concurrency:
   group: deploy-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  database:
+    uses: ./.github/workflows/batch-db.yml
+  browser:
+    uses: ./.github/workflows/browser.yml
   deploy:
+    needs: [database, browser]
     name: Deploy Convex and Cloudflare
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -51,6 +56,9 @@ jobs:
 
       - name: Verify
         run: pnpm run verify
+
+      - name: Stamp the backend build context
+        run: git rev-parse HEAD > backend/app/image-revision
 
       - name: Verify bundled PaddleOCR and concurrent processing
         run: |

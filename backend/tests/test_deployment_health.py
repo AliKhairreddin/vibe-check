@@ -37,6 +37,7 @@ def test_actions_masks_the_validated_secret(monkeypatch, capsys):
 
 
 def test_health_check_suppresses_header_values_in_protocol_errors(monkeypatch):
+    monkeypatch.setenv('GITHUB_SHA', 'c' * 40)
     monkeypatch.setattr(check_backend_health, 'read_backend_secret', lambda: 'private-credential')
     monkeypatch.setenv('CONFIGURED_BACKEND_SHARDS', '40')
     monkeypatch.setattr(check_backend_health.time, 'sleep', lambda _: None)
@@ -50,10 +51,11 @@ def test_health_check_suppresses_header_values_in_protocol_errors(monkeypatch):
 
 
 def test_health_check_verifies_workers_shards_and_ocr(monkeypatch):
+    monkeypatch.setenv('GITHUB_SHA', 'c' * 40)
     monkeypatch.setattr(check_backend_health, 'read_backend_secret', lambda: 'private-credential')
     monkeypatch.setenv('CONFIGURED_BACKEND_SHARDS', '40')
     monkeypatch.setattr(check_backend_health.time, 'sleep', lambda _: None)
-    state = {'workers': 5, 'configured_shards': 40, 'ocr': {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2}}
+    state = {'image_revision': 'c' * 40, 'workers': 5, 'configured_shards': 40, 'ocr': {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2}}
     monkeypatch.setattr(check_backend_health.httpx, 'get', lambda *a, **kw: SimpleNamespace(raise_for_status=lambda: None, json=lambda: state))
     calls = []
     def signup_probe(url, **kwargs):
@@ -74,6 +76,33 @@ def test_health_check_verifies_workers_shards_and_ocr(monkeypatch):
     state['configured_shards'] = 10
     with pytest.raises(RuntimeError, match='Wrong shard configuration'):
         check_backend_health.check_backend_health()
+
+
+def test_activation_rejects_a_signup_capable_backend_from_another_revision(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+
+    expected = 'a' * 40
+    monkeypatch.setenv('GITHUB_SHA', expected)
+    monkeypatch.setenv('CONFIGURED_BACKEND_SHARDS', '40')
+    monkeypatch.setenv('REVIEW_BACKEND_SHARDS', '40')
+    monkeypatch.setenv('CONVEX_HTTP_SECRET', 'health-fixture')
+    monkeypatch.setattr(main, 'queue_state', lambda: {'workers': 5})
+    monkeypatch.setattr(main, 'ocr_state', lambda: {
+        'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2,
+    })
+    client = TestClient(main.app)
+    monkeypatch.setattr(check_backend_health.httpx, 'get', lambda url, headers, timeout: client.get(url, headers=headers))
+    monkeypatch.setattr(check_backend_health.httpx, 'post', lambda url, headers, json, timeout: client.post(url, headers=headers, json=json))
+    monkeypatch.setattr(check_backend_health, 'read_backend_secret', lambda: 'health-fixture')
+    monkeypatch.setattr(check_backend_health.time, 'sleep', lambda _: None)
+
+    for image_revision in (None, 'b' * 40):
+        monkeypatch.setattr(main, 'IMAGE_REVISION', image_revision, raising=False)
+        with pytest.raises(RuntimeError, match='image revision'):
+            check_backend_health.check_backend_health()
+    monkeypatch.setattr(main, 'IMAGE_REVISION', expected)
+    check_backend_health.check_backend_health()
 
 
 def test_policy_sync_retries_diagnostic_output_before_calling_convex(tmp_path):

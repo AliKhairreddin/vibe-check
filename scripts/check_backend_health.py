@@ -10,6 +10,7 @@ from convex_secret import read_backend_secret
 def check_backend_health():
     secret = read_backend_secret()
     expected_shards = int(os.environ['CONFIGURED_BACKEND_SHARDS'])
+    expected_revision = os.environ['GITHUB_SHA']
     failure = 'Backend health check failed'
     for attempt in range(7):
         try:
@@ -20,15 +21,14 @@ def check_backend_health():
             assert state['workers'] > 0, 'No live job workers'
             assert state['configured_shards'] == expected_shards, 'Wrong shard configuration'
             assert state['ocr'] == {'engine': 'PP-OCRv6_small', 'ready': True, 'workers': 2, 'cpu_threads': 2}, 'Wrong OCR engine or readiness'
-            # A reused warm container can pass the queue/OCR checks while still
-            # serving the previous image. Probe the new route without creating
-            # an account, hashing a password, or consuming durable signup quota.
+            if state.get('image_revision') != expected_revision:
+                raise AssertionError('Activated backend image revision differs from the checked-out release')
             signup = httpx.post('https://app.adchecked.com/api/client/signup',
                                 headers={'origin': 'https://app.adchecked.com'}, json={}, timeout=120)
             assert signup.status_code == 422, 'Activated backend does not serve the current signup route'
             missing = {tuple(item.get('loc', [])) for item in signup.json().get('detail', []) if item.get('type') == 'missing'}
             assert {('body', field) for field in ('workspace_name', 'email', 'password')} <= missing, 'Activated backend has an unexpected signup schema'
-            print('Activated backend is healthy; shard, OCR and signup route configuration verified.')
+            print(f'Activated backend {expected_revision} passed shard, OCR and signup route checks.')
             return
         except AssertionError as exc:
             failure = str(exc)
