@@ -102,7 +102,7 @@ from .review_pipeline.drive import (
     configured_drive_options,
     get_google_drive_client,
 )
-from .review_pipeline.source_links import resolve_review_sources
+from .review_pipeline.source_links import link_queued_drive_review, resolve_review_sources
 from .review_pipeline.telegram import finish_batch_item_and_notify
 from .review_pipeline.pdf_reports import (
     PdfArtifact,
@@ -3447,16 +3447,7 @@ async def create_drive_review(payload: CreateDriveReview):
         file_size=drive_file.size,
         drive_file=drive_file,
     )
-    set_review_source(job_id, ReviewSource(
-        kind='google_drive_file',
-        status='linked',
-        url=drive_file.web_view_link,
-        file_id=drive_file.file_id,
-        label='Open creative in Google Drive',
-        message=f'Selected “{file_name}” directly from the shared Drive folder.',
-        checked_at=now_ms(),
-    ))
-    return get_status(record.job_id)
+    return link_queued_drive_review(record, drive_file, f'Selected “{file_name}” directly from the shared Drive folder.')
 
 
 @app.post('/api/client/{client_id}/uploads')
@@ -3835,16 +3826,7 @@ async def retry_batch_drive_item(
         except Exception:
             logger.exception('Could not restore failed batch status for %s/%s',batch_id,item_id)
         raise
-    set_review_source(job_id,ReviewSource(
-        kind='google_drive_file',
-        status='linked',
-        url=drive_file.web_view_link,
-        file_id=drive_file.file_id,
-        label='Open creative in Google Drive',
-        message=f'Retried “{file_name}” in its original batch.',
-        checked_at=now_ms(),
-    ))
-    return get_status(record.job_id)
+    return link_queued_drive_review(record, drive_file, f'Retried “{file_name}” in its original batch.')
 
 
 @app.get('/api/learning/{offer_id}')

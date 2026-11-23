@@ -334,13 +334,7 @@ def set_status(job_id:str, status:JobStatus, progress:int, message:str='', file_
 def set_review_source(job_id:str, source:ReviewSource)->None:
     local_path=JOB_DATA_DIR/job_id/'status.json'
     if local_path.exists():
-        current=JobRecord.model_validate(read_json(local_path))
-        current.source_kind=source.kind
-        current.source_status=source.status
-        current.source_url=source.url
-        current.source_file_id=source.file_id
-        current.source_message=source.message
-        current.source_checked_at=source.checked_at
+        current=JobRecord.model_validate(read_json(local_path)).with_source(source)
         current.updated_at=now_ms()
         write_json(local_path, current.model_dump(mode='json'))
     args:dict[str, Any]={

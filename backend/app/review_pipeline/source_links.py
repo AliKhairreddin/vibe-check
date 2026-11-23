@@ -3,11 +3,25 @@ from __future__ import annotations
 import logging
 import os
 
-from .drive import DriveLookupError, GoogleDriveClient, get_google_drive_client
+from .drive import DriveFile, DriveLookupError, GoogleDriveClient, get_google_drive_client
 from .models import JobRecord, ReviewSource, ReviewSources
 from .storage import get_status, now_ms, set_review_source
 
 logger = logging.getLogger(__name__)
+
+
+def link_queued_drive_review(record: JobRecord, drive_file: DriveFile, message: str) -> JobRecord:
+    source = ReviewSource(
+        kind='google_drive_file', status='linked', url=drive_file.web_view_link,
+        file_id=drive_file.file_id, label='Open creative in Google Drive',
+        message=message, checked_at=now_ms(),
+    )
+    try:
+        set_review_source(record.job_id, source)
+    except Exception:
+        logger.exception('Could not attach Drive source metadata to queued job %s', record.job_id)
+        return record
+    return record.with_source(source)
 
 
 def _cached_source(record: JobRecord) -> ReviewSource | None:
