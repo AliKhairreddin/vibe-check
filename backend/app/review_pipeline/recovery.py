@@ -473,15 +473,18 @@ async def restore_media(
     await asyncio.to_thread(_restore_media_sync, payload, destination)
 
 
-def fail_unrecoverable_jobs(job_ids: list[str]) -> list[str]:
+def fail_unrecoverable_jobs(reviews: list[InterruptedReview]) -> list[str]:
     from ..platform_monitoring import INSTANCE_ID
     failed: list[str] = []
-    for offset in range(0, len(job_ids), 100):
+    for offset in range(0, len(reviews), 100):
         result = storage._convex_call(
             'mutation',
             'reviews:failInterrupted',
             {
-                'jobIds': job_ids[offset:offset + 100],
+                'snapshots': [
+                    {'jobId': review.job_id, 'expectedUpdatedAt': review.updated_at}
+                    for review in reviews[offset:offset + 100]
+                ],
                 'message': INTERRUPTED_MESSAGE,
                 'idleInstanceId': INSTANCE_ID,
             },

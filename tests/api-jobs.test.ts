@@ -240,6 +240,9 @@ test('generic recovery cannot take ownership of durable batch jobs', async () =>
   const { ctx, tables, args } = fixture();
   await invoke(submit, ctx, args());
   assert.deepEqual(await invoke(listInterrupted, ctx, { limit: 100 }), []);
-  await invoke(failInterrupted, ctx, { jobIds: args().creatives.map(c => c.jobId), message: 'interrupted' });
+  await invoke(failInterrupted, ctx, {
+    snapshots: tables.reviews.map(r => ({ jobId: r.jobId, expectedUpdatedAt: r.updatedAt })),
+    message: 'interrupted',
+  });
   assert.ok(tables.reviews.every(r => r.status === 'queued'));
 });

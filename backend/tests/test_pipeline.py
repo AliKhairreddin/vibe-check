@@ -4013,7 +4013,8 @@ async def test_startup_recovery_requeues_durable_jobs_and_fails_missing_jobs(
     async def fake_enqueue(*args, **kwargs):
         enqueued.append((args, kwargs))
 
-    def fake_fail(job_ids):
+    def fake_fail(reviews):
+        job_ids = [review.job_id for review in reviews]
         failed.extend(job_ids)
         return job_ids
 

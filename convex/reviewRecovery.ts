@@ -18,7 +18,7 @@ const INTERRUPTIBLE_STATUSES = [
   "reviewing_with_llm",
 ];
 
-export async function isInterrupted(
+async function isInterrupted(
   ctx: QueryCtx,
   review: Doc<"reviews">,
   now: number,
@@ -41,6 +41,19 @@ export async function isInterrupted(
   const live = Boolean(owner && owner.updatedAt > now - RECOVERY_GRACE_MS);
   liveOwners?.set(review.processingInstanceId, live);
   return !live;
+}
+
+export async function observedInterruptedReview(
+  ctx: QueryCtx,
+  snapshot: { jobId: string; expectedUpdatedAt: number },
+  now: number,
+  idleInstanceId?: string,
+) {
+  const review = await ctx.db.query("reviews")
+    .withIndex("by_job_id", q => q.eq("jobId", snapshot.jobId))
+    .unique();
+  if (!review || review.updatedAt !== snapshot.expectedUpdatedAt) return null;
+  return await isInterrupted(ctx, review, now, idleInstanceId) ? review : null;
 }
 
 export async function interruptedReviews(ctx: QueryCtx, limit: number, now: number, idleInstanceId?: string) {

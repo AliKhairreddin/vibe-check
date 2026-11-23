@@ -67,7 +67,7 @@ def test_status_records_the_same_owner_as_platform_heartbeats(tmp_path, monkeypa
     assert calls[0][2]['processingInstanceId'] == platform_monitoring.INSTANCE_ID
 
 
-def test_recovery_preserves_status_owner_and_snapshot_for_atomic_claim(monkeypatch):
+def test_recovery_sends_the_observed_snapshot_for_both_terminal_decisions(monkeypatch):
     calls = []
 
     def convex_call(kind, path, args):
@@ -75,6 +75,8 @@ def test_recovery_preserves_status_owner_and_snapshot_for_atomic_claim(monkeypat
         if path == 'reviews:listInterrupted':
             return [{'jobId': 'job', 'status': 'processing_video', 'updatedAt': 456,
                      'processingInstanceId': 'old-container'}]
+        if path == 'reviews:failInterrupted':
+            return {'failedJobIds': [item['jobId'] for item in args['snapshots']]}
         return True
 
     monkeypatch.setattr(storage, 'convex_enabled', lambda: True)
@@ -87,3 +89,6 @@ def test_recovery_preserves_status_owner_and_snapshot_for_atomic_claim(monkeypat
     assert calls[1] == ('mutation', 'reviews:claimInterrupted', {
         'jobId': 'job', 'expectedUpdatedAt': 456, 'instanceId': platform_monitoring.INSTANCE_ID,
     })
+
+    assert recovery.fail_unrecoverable_jobs([review]) == ['job']
+    assert calls[2][2]['snapshots'] == [{'jobId': 'job', 'expectedUpdatedAt': 456}]
