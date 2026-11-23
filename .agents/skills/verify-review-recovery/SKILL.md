@@ -43,3 +43,13 @@ The model explores two recovery passes. A local HTTP server returns a complete m
 In `71b21e9`, a timeout or 503 followed by a healthy storage response could never recover the job. The first scan had already failed it. In a scratch checkout, replace `ManifestAvailability.RETRY_LATER` with `ManifestAvailability.MISSING` in the pending-task branch in `load_recovery_payloads`. The deadline case must report the extra failed job. Restore the original branch and rerun the model.
 
 Last checked against `a1761481817aafa1b890f40c416bb7068fadf6b4`. Compare `_load_payload_row`, `load_recovery_payloads` and `recover_interrupted_jobs` before advancing this reference. The model assumes a successful payload-index query lists every stored manifest for the requested IDs. It bounds source availability, not the duration of an outage. Permanently unreadable responses remain eligible for another scheduled scan.
+
+## Verify that older manifest failures yield to other reviews
+
+Run `PYTEST_ADDOPTS='-k test_recovery_fairness' scripts/test-batch-db.sh` with the locked JavaScript and Python dependencies installed. The tests run the recovery scheduler, claims and review selection against an isolated Convex database. A synthetic HTTP transport supplies manifest responses, and the enqueue recorder observes which reviews reach the queue.
+
+One trace puts a healthy source after 16 hanging reads with eight download slots. It must reach the queue within three scans. Another puts the healthy source after 501 unavailable manifests with a 500-review scan limit. It must reach the queue within two scans. Both assume a finite backlog and cover the order in which healthy work waits longest. A third case checks that a previously attempted review becomes selectable after the three-minute grace interval and that replaying a deferral cannot extend a newer attempt.
+
+Run `PYTEST_ADDOPTS='-k recovery_reaches' scripts/test-batch-db.sh 973b03b` to replay the two starvation traces. On that revision neither healthy review reached the queue. To exercise the third case, remove the comparison with `snapshot.expectedLastTriedAt` in `reviews:deferInterrupted` in a scratch checkout. The stale attempt is then accepted.
+
+Last checked against `7a89a611f7370cd76aae271039253f6972eb0290`. When the queue or recovery index changes, compare the start of each HTTP read, its persisted attempt timestamp, and the order returned by `interruptedReviews` with these traces. The retry order uses a separate timestamp so a failed read preserves the owner's status and progress time.

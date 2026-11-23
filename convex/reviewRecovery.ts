@@ -60,21 +60,31 @@ export async function interruptedReviews(ctx: QueryCtx, limit: number, now: numb
   const reviews = [];
   const liveOwners = new Map<string, boolean>();
   for (const status of INTERRUPTIBLE_STATUSES) {
-    const remaining = limit - reviews.length;
-    if (remaining <= 0) break;
+    if (reviews.length >= limit) return reviews;
     const matches = await ctx.db
       .query("reviews")
-      .withIndex("by_status_deleted_automation_api_batch_updated", (query) =>
+      .withIndex("by_recovery_attempt", (query) =>
         query
-          .eq("status", status)
           .eq("deletedAt", undefined)
           .eq("automationRunId", undefined)
           .eq("apiBatchId", undefined)
+          .eq("recoveryLastTriedAt", undefined)
+          .eq("status", status)
           .lte("updatedAt", now - RECOVERY_GRACE_MS)
       )
       .order("asc")
       .take(500);
     for (const review of matches) {
+      if (await isInterrupted(ctx, review, now, idleInstanceId, liveOwners)) reviews.push(review);
+      if (reviews.length >= limit) break;
+    }
+  }
+  if (reviews.length < limit) {
+    const deferred = await ctx.db.query("reviews").withIndex("by_recovery_attempt", q =>
+      q.eq("deletedAt", undefined).eq("automationRunId", undefined).eq("apiBatchId", undefined)
+        .gte("recoveryLastTriedAt", 0).lte("recoveryLastTriedAt", now - RECOVERY_GRACE_MS),
+    ).order("asc").take(500);
+    for (const review of deferred) {
       if (await isInterrupted(ctx, review, now, idleInstanceId, liveOwners)) reviews.push(review);
       if (reviews.length >= limit) break;
     }
