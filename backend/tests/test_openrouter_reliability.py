@@ -33,14 +33,20 @@ def use_transport(monkeypatch, handler):
 @pytest.mark.anyio
 async def test_slow_provider_can_finish_on_longer_recovery_attempt(monkeypatch):
     calls = []
+    loop = asyncio.get_running_loop()
+    monotonic = loop.time
+    provider_time = 0
+    monkeypatch.setattr(loop, 'time', lambda: monotonic() + provider_time)
 
     async def provider(request):
+        nonlocal provider_time
         calls.append(json.loads(request.content))
-        await asyncio.sleep(0.06)
+        provider_time += 60
+        await asyncio.sleep(0.001)
         return httpx.Response(200, json=completed_response())
 
     use_transport(monkeypatch, provider)
-    monkeypatch.setattr(llm, '_request_deadline_seconds', lambda: 0.04)
+    monkeypatch.setattr(llm, '_request_deadline_seconds', lambda: 40)
 
     report = await llm.review_with_openrouter({'offer': {'offer_id': 'acp'}}, 'selected-model')
 
