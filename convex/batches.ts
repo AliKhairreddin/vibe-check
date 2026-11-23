@@ -128,7 +128,17 @@ const publicBatchValidator = v.object({
   updated_at: v.number(),
 });
 
-const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
+const terminalBatchStatuses = new Set(["complete", "failed", "upload_failed"]);
+
+function acceptsBatchStatus(
+  item: { jobId?: string; status: string },
+  jobId: string | undefined,
+  status: string,
+): boolean {
+  return (item.jobId === undefined || item.jobId === jobId)
+    && (item.status !== "complete" || status === "complete");
+}
+
 const NOTIFICATION_LEASE_MS = 15 * 60 * 1000;
 const MAX_NOTIFICATION_ATTEMPTS = 3;
 const PURGE_CHUNK_SIZE = 10;
@@ -292,6 +302,34 @@ async function findBatch(ctx: MutationCtx | QueryCtx, batchId: string) {
     .unique();
 }
 
+export type InterruptedBatchJob = Pick<Doc<"reviews">, "batchId" | "batchItemId" | "jobId">;
+
+export async function failInterruptedBatchItems(
+  ctx: MutationCtx, jobs: InterruptedBatchJob[], message: string, updatedAt: number,
+) {
+  const failures = new Map<string, Map<string, string[]>>();
+  for (const { batchId, batchItemId, jobId } of jobs) {
+    if (!batchId || !batchItemId) continue;
+    const byItem = failures.get(batchId) ?? new Map<string, string[]>();
+    const jobIds = byItem.get(batchItemId) ?? [];
+    jobIds.push(jobId);
+    byItem.set(batchItemId, jobIds);
+    failures.set(batchId, byItem);
+  }
+  for (const [batchId, byItem] of failures) {
+    const batch = await findBatch(ctx, batchId);
+    if (!batch) continue;
+    const items = batch.items.map(item => {
+      const jobId = byItem.get(item.itemId)?.find(id => acceptsBatchStatus(item, id, "failed"));
+      return jobId ? { ...item, jobId, message, status: "failed" } : item;
+    });
+    if (items.every((item, i) => item === batch.items[i])) continue;
+    await ctx.db.patch(batch._id, {
+      items, notificationReady: items.every(item => terminalBatchStatuses.has(item.status)), updatedAt,
+    });
+  }
+}
+
 async function findArtifactsForOwner(
   ctx: MutationCtx,
   ownerType: "batch" | "review",
@@ -430,10 +468,10 @@ async function hydrateBatchItems(
     }
   }
   return items.map((item) => {
-    const review = reviewByItemId.get(item.itemId) ?? (item.jobId ? reviewByJobId.get(item.jobId) : undefined);
-    const hydratedItem = !review || (
-      TERMINAL_BATCH_STATUSES.has(item.status)
-      && !TERMINAL_BATCH_STATUSES.has(review.status)
+    const review = item.jobId ? reviewByJobId.get(item.jobId) : reviewByItemId.get(item.itemId);
+    const hydratedItem = !review || !acceptsBatchStatus(item, review.jobId, review.status) || (
+      terminalBatchStatuses.has(item.status)
+      && !terminalBatchStatuses.has(review.status)
     ) ? item : {
         ...item,
         jobId: review.jobId,
@@ -621,7 +659,7 @@ export const purgeBatch = mutation({
         remainingReviews: 0,
       };
     }
-    if (batch.items.some((item) => !TERMINAL_BATCH_STATUSES.has(item.status))) {
+    if (batch.items.some((item) => !terminalBatchStatuses.has(item.status))) {
       throw new Error("Only terminal review batches can be purged");
     }
 
@@ -737,16 +775,18 @@ export const updateItemStatus = mutation({
     requireSecret(args.secret);
     const batch = await findBatch(ctx, args.batchId);
     if (!batch) throw new Error("Review batch not found");
-    const items = batch.items.map((item) => item.itemId === args.itemId ? {
+    const target = batch.items.find(item => item.itemId === args.itemId);
+    if (!target) throw new Error("Batch item not found");
+    if (!acceptsBatchStatus(target, args.jobId, args.status)) return publicBatch(batch);
+    const items = batch.items.map(item => item === target ? {
       ...item,
       jobId: args.jobId ?? item.jobId,
       message: args.message,
       status: args.status,
     } : item);
-    if (!items.some((item) => item.itemId === args.itemId)) throw new Error("Batch item not found");
     const updatedAt = Date.now();
     const notificationReady = items.every((item) =>
-      TERMINAL_BATCH_STATUSES.has(item.status)
+      terminalBatchStatuses.has(item.status)
     );
     await ctx.db.patch(batch._id, { items, notificationReady, updatedAt });
     return publicBatch({ ...batch, items, updatedAt });
@@ -756,6 +796,7 @@ export const updateItemStatus = mutation({
 export const claimItemRetry = mutation({
   args: {
     secret: v.string(),
+    jobId: v.optional(v.string()),
     batchId: v.string(),
     itemId: v.string(),
   },
@@ -769,12 +810,16 @@ export const claimItemRetry = mutation({
     if (!batch) throw new Error("Review batch not found");
     const target = batch.items.find((item) => item.itemId === args.itemId);
     if (!target) throw new Error("Batch item not found");
+    if (!args.jobId) return { claimed: false, status: target.status };
+    if (target.jobId === args.jobId && target.status === "retrying") {
+      return { claimed: true, status: target.status };
+    }
     if (target.status !== "upload_failed") {
       return { claimed: false, status: target.status };
     }
     const items = batch.items.map((item) => item.itemId === args.itemId ? {
       ...item,
-      jobId: undefined,
+      jobId: args.jobId,
       message: "Retrying Drive submission",
       result: undefined,
       status: "retrying",
@@ -826,10 +871,7 @@ export const finishItem = mutation({
     if (!batch) throw new Error("Review batch not found");
     const target = batch.items.find(item => item.itemId === args.itemId);
     if (!target) throw new Error("Batch item not found");
-    // An old worker must not overwrite a retry's new job, or turn a completed
-    // review into a failure after losing its completion response.
-    if ((target.jobId && args.jobId && target.jobId !== args.jobId)
-      || (target.status === 'complete' && args.status !== 'complete')) {
+    if (!acceptsBatchStatus(target, args.jobId, args.status)) {
       return { batch: publicBatch(batch), shouldNotify: false };
     }
     const itemChanged = target.jobId !== (args.jobId ?? target.jobId)
@@ -845,7 +887,7 @@ export const finishItem = mutation({
       status: args.status,
     } : item);
     const notificationReady = items.every((item) =>
-      TERMINAL_BATCH_STATUSES.has(item.status)
+      terminalBatchStatuses.has(item.status)
     );
     const currentNotificationAttempts = batch.notificationAttempts ?? 0;
     const notificationExhausted = (

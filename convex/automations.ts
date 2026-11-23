@@ -1,10 +1,10 @@
+import { failInterruptedBatchItems, type InterruptedBatchJob } from "./batches.ts";
 import { interruptedReviews } from "./reviewRecovery.ts";
 import { mutation, query } from "./_generated/server.js";
 import { v } from "convex/values";
 
 const AUTOMATION_RUN_LEASE_MS = 30 * 60 * 1000;
 const MAX_AUTOMATION_RUN_ATTEMPTS = 3;
-const TERMINAL_BATCH_STATUSES = new Set(["complete", "failed", "upload_failed"]);
 
 const automationFields = {
   automationId: v.string(),
@@ -649,13 +649,13 @@ export const recoverInterrupted = mutation({
         ...jobStates.map((state) => state.jobId),
         ...claims.flatMap((claim) => claim.jobId ? [claim.jobId] : []),
       ])];
-      const failedBatchItems = new Map<string, Map<string, string>>();
+      const interruptedJobs: InterruptedBatchJob[] = [];
+      const interruption = "Automation review was interrupted by a container restart and will be retried.";
       for (const state of jobStates) {
         if (["complete", "failed"].includes(state.status)) continue;
-        const message = "Automation review was interrupted by a container restart and will be retried.";
         if (state.reviewId) {
           await ctx.db.patch(state.reviewId, {
-            message,
+            message: interruption,
             progress: 100,
             reportReady: false,
             status: "failed",
@@ -670,32 +670,9 @@ export const recoverInterrupted = mutation({
         for (const stat of stats) {
           await ctx.db.patch(stat._id, { status: "failed", updatedAt: now });
         }
-        if (state.batchId && state.batchItemId) {
-          const items = failedBatchItems.get(state.batchId) ?? new Map<string, string>();
-          items.set(state.batchItemId, state.jobId);
-          failedBatchItems.set(state.batchId, items);
-        }
+        interruptedJobs.push(state);
       }
-      for (const [batchId, failedItems] of failedBatchItems) {
-        const batch = await ctx.db
-          .query("reviewBatches")
-          .withIndex("by_batch_id", (q) => q.eq("batchId", batchId))
-          .unique();
-        if (batch) {
-          const message = "Automation review was interrupted by a container restart and will be retried.";
-          const items = batch.items.map((item) => {
-            const jobId = failedItems.get(item.itemId);
-            return jobId ? { ...item, jobId, message, status: "failed" } : item;
-          });
-          await ctx.db.patch(batch._id, {
-            items,
-            notificationReady: items.every((item) =>
-              TERMINAL_BATCH_STATUSES.has(item.status)
-            ),
-            updatedAt: now,
-          });
-        }
-      }
+      await failInterruptedBatchItems(ctx, interruptedJobs, interruption, now);
 
       for (const claim of claims) {
         const state = claim.jobId ? statesByJobId.get(claim.jobId) : null;
