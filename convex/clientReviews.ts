@@ -268,8 +268,6 @@ export const list = query({
               q.eq("jobId", stat.jobId).eq("offerId", args.offerId)
             )
             .unique())),
-      // Resolve decisions for the displayed jobs. An account-wide take(1000)
-      // silently drops saved decisions once the account outgrows that prefix.
       Promise.all(stats.map((stat) => ctx.db
         .query("clientReviewDecisions")
         .withIndex("by_client_id_and_offer_id_and_job_id", (q) =>
