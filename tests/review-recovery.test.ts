@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import { listInterrupted, claimInterrupted, failInterrupted } from '../convex/reviews.ts';
+import { listInterrupted, claimInterrupted, deferInterrupted, failInterrupted } from '../convex/reviews.ts';
 import { tickState } from '../convex/automations.ts';
 
 const secret = 'test-secret';
@@ -19,6 +19,7 @@ function fixture() {
       const predicates: Array<(row: any) => boolean> = [];
       const index = {
         eq(key: string, value: unknown) { predicates.push(row => row[key] === value); return index; },
+        gte(key: string, value: number) { predicates.push(row => row[key] >= value); return index; },
         lte(key: string, value: number) { predicates.push(row => row[key] <= value); return index; },
       };
       const matches = () => (tables[table] ?? []).filter(row => predicates.every(p => p(row)))
@@ -144,7 +145,7 @@ test('a draining container without a recovery snapshot leaves the review for the
 
 test('recovery operations require the backend secret', async () => {
   const { ctx } = fixture();
-  for (const operation of [listInterrupted, claimInterrupted, failInterrupted]) {
+  for (const operation of [listInterrupted, claimInterrupted, deferInterrupted, failInterrupted]) {
     await assert.rejects(invoke(operation, ctx, { secret: 'wrong' }), /Unauthorized/);
   }
 });

@@ -302,6 +302,7 @@ export default defineSchema({
     historySource: v.optional(v.string()),
     historySourceKind: v.optional(v.union(v.literal("internal"), v.literal("api"), v.literal("publisher"))),
     processingInstanceId: v.optional(v.string()),
+    recoveryLastTriedAt: v.optional(v.number()),
     apiBatchId: v.optional(v.string()),
     automationRunId: v.optional(v.string()),
     batchId: v.optional(v.string()),
@@ -342,8 +343,8 @@ export default defineSchema({
       "automationRunId",
       "updatedAt",
     ])
-    .index("by_status_deleted_automation_api_batch_updated", [
-      "status", "deletedAt", "automationRunId", "apiBatchId", "updatedAt",
+    .index("by_recovery_attempt", [
+      "deletedAt", "automationRunId", "apiBatchId", "recoveryLastTriedAt", "status", "updatedAt",
     ])
     .index("by_history_source_and_deleted_at_and_created_at", ["historySource", "deletedAt", "createdAt"])
     .index("by_history_source_kind_and_deleted_at_and_created_at", ["historySourceKind", "deletedAt", "createdAt"])

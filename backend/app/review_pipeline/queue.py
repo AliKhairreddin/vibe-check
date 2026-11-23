@@ -20,6 +20,7 @@ from .recovery import (
     RecoveredReviewPayload,
     claim_interrupted_review,
     delete_job_payload,
+    defer_interrupted_reviews,
     fail_unrecoverable_jobs,
     list_interrupted_reviews,
     load_recovery_payloads,
@@ -346,11 +347,15 @@ async def recover_interrupted_jobs() -> dict[str, int]:
         )
         payloads.update(reconstructed)
         requeued = 0
+        deferred = []
         unrecoverable = []
         for review in interrupted:
             job_id = review.job_id
             payload = payloads[job_id]
             if payload is ManifestAvailability.RETRY_LATER:
+                deferred.append(review)
+                continue
+            if payload is ManifestAvailability.NOT_STARTED:
                 continue
             if payload is ManifestAvailability.MISSING:
                 unrecoverable.append(review)
@@ -395,6 +400,7 @@ async def recover_interrupted_jobs() -> dict[str, int]:
                     send_job_event, job_id, payload.meta, 'recovered',
                     'Processing resumed from the saved review source. Final results will follow.',
                 )
+        await asyncio.to_thread(defer_interrupted_reviews, deferred)
         failed = await asyncio.to_thread(
             fail_unrecoverable_jobs,
             unrecoverable,
@@ -529,7 +535,7 @@ async def _restore_recovery_file(job: QueuedReviewJob) -> None:
             return
         sources = await load_recovery_payloads([job.job_id])
         payload = sources[job.job_id]
-        if payload is ManifestAvailability.RETRY_LATER:
+        if payload in (ManifestAvailability.RETRY_LATER, ManifestAvailability.NOT_STARTED):
             raise ManifestReadDeferred('The saved upload could not be read during recovery')
         if payload is ManifestAvailability.MISSING or not payload.media_url:
             raise FileNotFoundError('The saved upload is unavailable for this review')

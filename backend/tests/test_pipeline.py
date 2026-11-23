@@ -3958,7 +3958,10 @@ async def test_recovery_manifest_batch_has_one_bounded_deadline(monkeypatch):
     )
 
     assert recovered == {
-        f'job-{index}': review_recovery.ManifestAvailability.RETRY_LATER for index in range(12)
+        f'job-{index}': (review_recovery.ManifestAvailability.RETRY_LATER
+                         if index < review_recovery.MANIFEST_DOWNLOAD_CONCURRENCY
+                         else review_recovery.ManifestAvailability.NOT_STARTED)
+        for index in range(12)
     }
 
 

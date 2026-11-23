@@ -47,6 +47,7 @@ class RecoveredReviewPayload:
 class ManifestAvailability(Enum):
     MISSING = 'missing'
     RETRY_LATER = 'retry_later'
+    NOT_STARTED = 'not_started'
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class InterruptedReview:
     status: str = 'queued'
     updated_at: int = 0
     processing_instance_id: str | None = None
+    recovery_last_tried_at: int | None = None
 
 
 def _upload_blob(value: bytes | Path, content_type: str) -> str:
@@ -234,6 +236,7 @@ def list_interrupted_reviews(limit: int = 500) -> list[InterruptedReview]:
             status=str(row.get('status') or 'queued'),
             updated_at=int(row.get('updatedAt') or 0),
             processing_instance_id=row.get('processingInstanceId'),
+            recovery_last_tried_at=row.get('recoveryLastTriedAt'),
             vertical=(
                 row['vertical']
                 if isinstance(row.get('vertical'), str) and re.fullmatch(VERTICAL_ID_PATTERN, row['vertical'])
@@ -362,11 +365,13 @@ async def _load_payload_row(
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
     row: dict[str, Any],
+    started: set[str],
 ) -> RecoveredReviewPayload | ManifestAvailability:
     job_id = row['jobId']
     try:
         manifest_url = row['manifestUrl']
         async with semaphore:
+            started.add(job_id)
             async with asyncio.timeout(MANIFEST_DOWNLOAD_DEADLINE_SECONDS):
                 response = await client.get(manifest_url)
         response.raise_for_status()
@@ -426,8 +431,9 @@ async def load_recovery_payloads(
             max_keepalive_connections=MANIFEST_DOWNLOAD_CONCURRENCY,
         ),
     ) as client:
+        started: set[str] = set()
         tasks = {
-            asyncio.create_task(_load_payload_row(client, semaphore, row)): row['jobId']
+            asyncio.create_task(_load_payload_row(client, semaphore, row, started)): row['jobId']
             for row in rows
         }
         try:
@@ -437,7 +443,9 @@ async def load_recovery_payloads(
             if pending:
                 logger.warning('Deferred %s recovery manifests after the batch deadline.', len(pending))
                 for task in pending:
-                    results[tasks[task]] = ManifestAvailability.RETRY_LATER
+                    job_id = tasks[task]
+                    results[job_id] = (ManifestAvailability.RETRY_LATER if job_id in started
+                                       else ManifestAvailability.NOT_STARTED)
         finally:
             for task in tasks:
                 if not task.done():
@@ -479,6 +487,19 @@ async def restore_media(
     destination: Path,
 ) -> None:
     await asyncio.to_thread(_restore_media_sync, payload, destination)
+
+
+def defer_interrupted_reviews(reviews: list[InterruptedReview]) -> None:
+    from ..platform_monitoring import INSTANCE_ID
+    for offset in range(0, len(reviews), 100):
+        storage._convex_call('mutation', 'reviews:deferInterrupted', {
+            'snapshots': [{
+                'jobId': review.job_id, 'expectedUpdatedAt': review.updated_at,
+                **({'expectedLastTriedAt': review.recovery_last_tried_at}
+                   if review.recovery_last_tried_at is not None else {}),
+            } for review in reviews[offset:offset + 100]],
+            'idleInstanceId': INSTANCE_ID,
+        })
 
 
 def fail_unrecoverable_jobs(reviews: list[InterruptedReview]) -> list[str]:

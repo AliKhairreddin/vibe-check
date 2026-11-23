@@ -695,6 +695,7 @@ export const upsertStatus = mutation({
     const value = {
       ...source,
       processingInstanceId: args.processingInstanceId ?? existing?.processingInstanceId,
+      recoveryLastTriedAt: undefined,
       automationRunId: jobState?.runId ?? existing?.automationRunId,
       batchId: args.batchId ?? existing?.batchId,
       batchItemId: args.batchItemId ?? existing?.batchItemId,
@@ -1026,6 +1027,7 @@ export const listInterrupted = query({
       jobId: review.jobId,
       offerIds: review.offerIds,
       processingInstanceId: review.processingInstanceId,
+      recoveryLastTriedAt: review.recoveryLastTriedAt,
       sourceFileId: review.sourceFileId,
       sourceKind: review.sourceKind,
       sourceUrl: review.sourceUrl,
@@ -1045,8 +1047,31 @@ export const claimInterrupted = mutation({
     const now = Date.now();
     const review = await observedInterruptedReview(ctx, args, now, args.instanceId);
     if (!review) return false;
-    await ctx.db.patch(review._id, { processingInstanceId: args.instanceId, updatedAt: now });
+    await ctx.db.patch(review._id, { processingInstanceId: args.instanceId, recoveryLastTriedAt: undefined, updatedAt: now });
     return true;
+  },
+});
+
+export const deferInterrupted = mutation({
+  args: {
+    secret: v.string(),
+    snapshots: v.array(v.object({
+      jobId: v.string(), expectedUpdatedAt: v.number(), expectedLastTriedAt: v.optional(v.number()),
+    })),
+    idleInstanceId: v.optional(v.string()),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    requireSecret(args.secret);
+    const now = Date.now();
+    let deferred = 0;
+    for (const snapshot of args.snapshots) {
+      const review = await observedInterruptedReview(ctx, snapshot, now, args.idleInstanceId);
+      if (!review || review.recoveryLastTriedAt !== snapshot.expectedLastTriedAt) continue;
+      await ctx.db.patch(review._id, { recoveryLastTriedAt: now });
+      deferred++;
+    }
+    return deferred;
   },
 });
 
@@ -1080,6 +1105,7 @@ export const failInterrupted = mutation({
         message: updated.message,
         progress: updated.progress,
         reportReady: updated.reportReady,
+        recoveryLastTriedAt: undefined,
         status: updated.status,
         updatedAt: updated.updatedAt,
       });
