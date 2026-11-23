@@ -14,7 +14,7 @@
     "test:routing": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck:worker": "tsc -p tsconfig.worker.json --noEmit",
     "typecheck:convex": "tsc -p convex/tsconfig.json --noEmit",
-    "verify": "pnpm run wrangler:types && pnpm run typecheck:worker && pnpm run typecheck:convex && pnpm run test:routing && pnpm run test && pnpm run build",
+    "verify": "wrangler types worker-configuration.d.ts --check && pnpm run typecheck:worker && pnpm run typecheck:convex && pnpm run test:routing && pnpm run test && pnpm run build",
     "wrangler:types": "wrangler types worker-configuration.d.ts"
   },
   "devDependencies": {

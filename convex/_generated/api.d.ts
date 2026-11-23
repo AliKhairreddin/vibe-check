@@ -18,6 +18,7 @@ import type * as batches from "../batches.js";
 import type * as billing from "../billing.js";
 import type * as billingPolicy from "../billingPolicy.js";
 import type * as clientReviews from "../clientReviews.js";
+import type * as creativeText from "../creativeText.js";
 import type * as crons from "../crons.js";
 import type * as demo from "../demo.js";
 import type * as demoData from "../demoData.js";
@@ -72,6 +73,7 @@ declare const fullApi: ApiFromModules<{
   billing: typeof billing;
   billingPolicy: typeof billingPolicy;
   clientReviews: typeof clientReviews;
+  creativeText: typeof creativeText;
   crons: typeof crons;
   demo: typeof demo;
   demoData: typeof demoData;
