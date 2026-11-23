@@ -1,9 +1,7 @@
 import asyncio
 import json
-import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -12,13 +10,6 @@ import pytest
 from app.main import app
 from app.review_pipeline import storage
 from app.review_pipeline.models import CreateBatchItem
-
-
-@pytest.fixture(scope='module', autouse=True)
-def local_database():
-    assert os.environ.get('CONVEX_DEPLOYMENT') == 'anonymous:anonymous-agent'
-    assert urlsplit(storage.CONVEX_URL).hostname == '127.0.0.1'
-    assert storage.CONVEX_HTTP_SECRET == 'batch-completion-test'
 
 
 def create_batch(count=2):

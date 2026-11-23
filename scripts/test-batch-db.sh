@@ -13,5 +13,6 @@ fi
 exec "$root/scripts/with-local-convex.sh" "$@" -- bash -ec '
   export PYTHONPATH="$PWD/backend" JOB_DATA_DIR="$PWD/jobs" CONVEX_HTTP_SECRET=batch-completion-test
   ./node_modules/.bin/convex env set CONVEX_HTTP_SECRET "$CONVEX_HTTP_SECRET"
-  exec "$1" -m pytest -q "$CONVEX_SOURCE_ROOT/tests/e2e/test_batch_completion.py"
-' bash "$python"
+  export PYTEST_ADDOPTS="$2"
+  exec "$1" -m pytest -q "$CONVEX_SOURCE_ROOT/tests/e2e"
+' bash "$python" "${PYTEST_ADDOPTS:-}"

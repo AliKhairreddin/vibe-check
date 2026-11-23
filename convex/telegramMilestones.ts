@@ -238,10 +238,6 @@ export const checkDelivery = internalMutation({
 });
 
 async function queueReleaseRefresh(ctx: MutationCtx, batchId: string) {
-  // Convex permits one paginated query per transaction. Email claims, finishes,
-  // digest backfills and delivery checks can each touch multiple batches.
-  // Schedule each refresh atomically with its delivery record, then render in
-  // separate transactions so summary pagination cannot roll back email state.
   await ctx.scheduler.runAfter(0, makeFunctionReference<'mutation'>('telegramMilestones:refreshReleasePage'), { batchId, cursor: null });
 }
 
