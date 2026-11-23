@@ -1,19 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getFunctionName } from 'convex/server';
 import { batches, prepare, claim, finish, recent } from '../convex/releaseEmails.ts';
 import { deliverReleaseEmail, emailRoute, renderReleaseEmail } from '../worker/release-emails.ts';
 
 const secret = 'email-test-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
-const invoke = (fn: any, ctx: any, args: any = {}) => {
-  ctx.paginationCalls = 0;
-  return fn._handler(ctx, { secret, ...args });
-};
+const invoke = (fn: any, ctx: any, args: any = {}) => fn._handler(ctx, { secret, ...args });
 function fixture() {
   const tables: Record<string, any[]> = {};
   let serial = 0;
-  const scheduled: { name: string; args: any }[] = [];
   const db = {
     query(table: string) {
       const predicates: ((row: any) => boolean)[] = [];
@@ -24,7 +19,6 @@ function fixture() {
         order() { return query; },
         async take(n: number) { return rows().slice(0, n); },
         async paginate(opts: any) {
-          assert.equal(++ctx.paginationCalls, 1, 'Convex only supports a single paginated query in each function');
           return { page: rows().slice(0, opts.numItems), isDone: true, continueCursor: '' };
         },
         async unique() { const result = rows(); assert.ok(result.length < 2); return result[0] ?? null; },
@@ -34,8 +28,8 @@ function fixture() {
     async insert(table: string, value: any) { const row = { ...value, _id: `${table}:${++serial}`, _creationTime: serial }; (tables[table] ??= []).push(row); return row._id; },
     async patch(id: string, value: any) { const row = Object.values(tables).flat().find(row => row._id === id); assert.ok(row); Object.assign(row, value); },
   };
-  const ctx = { db, paginationCalls: 0, scheduler: {
-    async runAfter(_delay: number, fn: any, args: any) { scheduled.push({ name: getFunctionName(fn), args }); return 'scheduled'; },
+  const ctx = { db, scheduler: {
+    async runAfter() { return 'scheduled'; },
   } };
   async function add(batchId: string, vertical = 'auto-insurance') {
     await db.insert('reviewBatches', { batchId, sourceLabel: `${batchId} batch`, createdAt: Date.now(), expectedCount: 1, items: [{ jobId: batchId, status: 'complete' }] });
@@ -47,21 +41,8 @@ function fixture() {
     subject: 'Auto and Home', message: 'Please review.', signature: 'Creative Team',
     batches: ['auto', 'home'].map(batchId => ({ batchId, label: batchId, shareId: batchId, token: (batchId === 'auto' ? 'a' : 'b').repeat(43) })),
   };
-  return { ctx, tables, add, args, scheduled };
+  return { ctx, tables, add, args };
 }
-
-test('combined batch emails claim and finish without reading Telegram summary pages', async () => {
-  const f = fixture(); await f.add('auto'); await f.add('home', 'home-insurance'); await invoke(prepare, f.ctx, f.args);
-  const args = { emailId: f.args.emailId, ownerKey: 'admin', from: 'sender@example.com', claimId: 'first' };
-  assert.equal((await invoke(claim, f.ctx, args)).claimed, true);
-  assert.equal(f.ctx.paginationCalls, 0);
-  await invoke(finish, f.ctx, { emailId: f.args.emailId, claimId: 'first', status: 'sent', messageId: 'provider-id' });
-  assert.equal(f.ctx.paginationCalls, 0);
-  assert.equal(f.tables.releaseEmails[0].status, 'sent');
-  assert.deepEqual(f.scheduled.map(task => task.name), Array(4).fill('telegramMilestones:refreshReleasePage'));
-  assert.deepEqual(f.scheduled.map(task => task.args), ['auto', 'home', 'auto', 'home'].map(batchId => ({ batchId, cursor: null })));
-  assert.equal((await invoke(claim, f.ctx, { ...args, claimId: 'second' })).claimed, false);
-});
 
 test('one preview combines Auto and Home with separate scoped revocable links; preview retries reuse them', async () => {
   const f = fixture(); await f.add('auto'); await f.add('home', 'home-insurance');

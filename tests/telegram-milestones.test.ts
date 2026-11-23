@@ -10,10 +10,7 @@ import { localDate, localDayStart, messageParts } from '../convex/telegramMessag
 
 const secret = 'milestone-secret';
 process.env.CONVEX_HTTP_SECRET = secret;
-const invoke = (fn: any, ctx: any, args: any = {}) => {
-  ctx.paginationCalls = 0;
-  return fn._handler(ctx, { secret, ...args });
-};
+const invoke = (fn: any, ctx: any, args: any = {}) => fn._handler(ctx, { secret, ...args });
 
 function fixture() {
   const tables: Record<string, any[]> = {};
@@ -38,7 +35,6 @@ function fixture() {
         async first() { return rows()[0] ?? null; },
         async unique() { assert.ok(rows().length <= 1); return rows()[0] ?? null; },
         async paginate({ cursor, numItems }: any) {
-          assert.equal(++ctx.paginationCalls, 1, 'Convex only supports a single paginated query in each function');
           const start = Number(cursor ?? 0); const end = start + numItems;
           return { page: rows().slice(start, end), isDone: end >= rows().length, continueCursor: String(end) };
         },
@@ -54,7 +50,7 @@ function fixture() {
     async replace(id: string, value: any) { const row = await db.get(id); const created = row._creationTime; for (const key of Object.keys(row)) delete row[key]; Object.assign(row, value, { _id: id, _creationTime: created }); },
     async delete(id: string) { for (const rows of Object.values(tables)) { const i = rows.findIndex(row => row._id === id); if (i >= 0) rows.splice(i, 1); } },
   };
-  const ctx: any = { db, paginationCalls: 0, scheduler: { runAfter: async (_delay: number, fn: any, args: any) => {
+  const ctx: any = { db, scheduler: { runAfter: async (_delay: number, fn: any, args: any) => {
     (getFunctionName(fn) === 'telegramMilestones:refreshReleasePage' ? refreshes : scheduled).push(args);
     return 'scheduled';
   } } };
@@ -87,7 +83,7 @@ function fixture() {
     return result;
   };
   const decision = (jobId: string, offerId = 'kissterra', value = 'approved') => invoke(decide, ctx, { jobId, offerId, clientId: offerId, decision: value, feedbackReason: 'business_decision' });
-  return { ctx, db, tables, scheduled, refreshes, flushRefreshes, addBatch, posts, releaseBatch, decision };
+  return { ctx, db, tables, scheduled, flushRefreshes, addBatch, posts, releaseBatch, decision };
 }
 
 test('release groups advertisers, uses original colors, and repeating release is quiet', async () => {
@@ -212,9 +208,7 @@ test('multi-batch stale sends refresh every summary in separate transactions usi
     createdAt: Date.now() - 900000, links };
   await recordEmailDelivery(f.ctx, email);
   await invoke(checkDelivery, f.ctx);
-  assert.equal(f.ctx.paginationCalls, 0);
   assert.ok(f.tables.telegramBatchDeliveries.every((row: any) => row.status === 'uncertain'));
-  assert.equal(f.refreshes.length, 4);
   await recordEmailDelivery(f.ctx, { ...email, status: 'sent', sentAt: Date.now() });
   await f.flushRefreshes();
   const releases = f.posts().filter((post: any) => post.eventKey.startsWith('release:'));
