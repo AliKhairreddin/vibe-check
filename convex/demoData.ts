@@ -25,7 +25,6 @@ export function demoClientSession(role: DemoRole) {
   };
 }
 export function makeDemoReview(id: string, now: number, input: { name: string; copy: string; offerIds: string[]; vertical?: string; batchId?: string; itemId?: string; publisherId?: string; creative?: boolean; released?: boolean }, offers: OfferProfile[]): DemoReview {
-  // Deterministic examples only. No model, media extraction, or provider call is made.
   const risky = /guarantee|everyone|government|official/i.test(input.copy);
   const qualify = /save|\d+%|cheapest/i.test(input.copy);
   const status: 'red' | 'yellow' | 'green' = risky ? 'red' : qualify ? 'yellow' : 'green';
