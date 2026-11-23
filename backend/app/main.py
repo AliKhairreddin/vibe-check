@@ -237,6 +237,10 @@ CLIENT_PORTALS = {
 }
 CLIENT_PORTAL_ORDER = ('kissterra', 'acp', 'lead-economy', 'smart-financial')
 logger = logging.getLogger(__name__)
+try:
+    IMAGE_REVISION = Path(__file__).with_name('image-revision').read_text(encoding='ascii').strip()
+except FileNotFoundError:
+    IMAGE_REVISION = None
 background_tasks:set[asyncio.Task]=set()
 
 
@@ -2894,6 +2898,7 @@ def internal_queue_state(request:Request):
     require_automation_secret(request)
     return {
         **queue_state(), 'background': len(background_tasks),
+        'image_revision': IMAGE_REVISION,
         'configured_shards': int(os.getenv('REVIEW_BACKEND_SHARDS', '1')),
         'ocr': ocr_state(),
     }

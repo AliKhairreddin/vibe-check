@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: deploy-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -51,6 +51,9 @@ jobs:
 
       - name: Verify
         run: pnpm run verify
+
+      - name: Stamp the backend build context
+        run: git rev-parse HEAD > backend/app/image-revision
 
       - name: Verify bundled PaddleOCR and concurrent processing
         run: |
