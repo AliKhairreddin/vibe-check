@@ -154,7 +154,6 @@ def _frame_content(
         try:
             data_url = _frame_data_url(frame_path, max_edge, quality)
         except (OSError, ValueError):
-            # A corrupt frame skipped by OCR must not fail the subsequent vision stage.
             limitations.append(f'Frame {filename} could not be read for vision review.')
             continue
 

@@ -40,7 +40,6 @@ export const retractKissterraOctober23Agt = internalMutation({
       || batchTargets.length !== expected.size || batchTargets.some(item => !item.jobId || expected.get(item.jobId) !== item.fileName)) {
       throw new Error('Kissterra batch did not match the verified retraction target');
     }
-    // Validate every target and its access projection before changing anything.
     const targets = [];
     for (const [jobId, fileName] of expected) {
       const review = await ctx.db.query('reviews').withIndex('by_job_id', q => q.eq('jobId', jobId)).unique();

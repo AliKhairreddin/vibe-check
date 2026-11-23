@@ -26,7 +26,6 @@ export const checkout = action({
     try {
       let customerId = row.customerId;
       if (!customerId) {
-        // One idempotent customer per workspace, even after network failures.
         const customer = await stripe.customers.create({ metadata: { adchecked_workspace: args.clientId } }, { idempotencyKey: `adchecked-customer-${row._id}-${row.customerGeneration ?? 0}` });
         if (customer.livemode === row.isTest) throw new Error('Stripe environment mismatch');
         customerId = customer.id;

@@ -1,12 +1,13 @@
+import json
 from html.parser import HTMLParser
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from app.review_pipeline import telegram, storage, jobs
+from app.review_pipeline import telegram, storage, jobs, live_scan_storage
 from app.review_pipeline.models import (
-    BatchReviewContext, JobRecord, JobStatus, OfferOutcome, ReviewBatch,
+    BatchReviewContext, ComplianceReport, JobRecord, JobStatus, OfferOutcome, ReviewBatch,
     ReviewBatchItem, ReviewRequestMeta,
 )
 
@@ -227,21 +228,48 @@ def test_scheduled_noop_and_failure_alerts(monkeypatch, status):
 
 def test_notification_exception_cannot_escape_into_review_job(monkeypatch):
     monkeypatch.setattr(telegram, '_send_event', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('bad notification')))
-    assert not telegram.send_job_event(JobRecord(job_id='one'), ReviewRequestMeta(), 'retrying', 'Retrying')
-    assert not telegram.send_review_message(JobRecord(job_id='one'), {'overall_status': 'green'})
+    assert not telegram.send_job_event(JobRecord(job_id='one'), ReviewRequestMeta(), 'failed', 'Failed')
 
 
-def test_failed_individual_job_sends_failure_event(monkeypatch):
-    import asyncio
-    storage.set_status('failed-job', JobStatus.queued, 0, 'Queued', 'Copy', has_creative=False)
-    async def fail_review(*args):
-        raise RuntimeError('Provider unavailable')
-    monkeypatch.setattr(jobs, 'review_with_openrouter', fail_review)
-    sent = []
-    monkeypatch.setattr(jobs, 'send_job_event', lambda record, meta, event, message: sent.append(event))
-    asyncio.run(jobs.process_job('failed-job', None, 'copy_only', ReviewRequestMeta(ad_copy='Test copy')))
-    assert storage.get_status('failed-job').status == JobStatus.failed
-    assert sent == ['failed']
+@pytest.mark.anyio
+@pytest.mark.parametrize('case', ['individual', 'live', 'failed'])
+async def test_completed_reviews_are_quiet_and_failed_reviews_alert(monkeypatch, tmp_path, case):
+    requests = []
+
+    def capture(_transport, request):
+        requests.append(request)
+        return httpx.Response(200, json={'ok': True, 'result': {'message_id': 1}})
+
+    monkeypatch.setenv('TELEGRAM_BOT_TOKEN', 'test-token')
+    monkeypatch.setenv('TELEGRAM_CHAT_ID', 'test-chat')
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', capture)
+    monkeypatch.setattr(live_scan_storage, 'JOB_DATA_DIR', tmp_path)
+
+    async def review(evidence, model):
+        if case == 'failed':
+            raise RuntimeError('Provider unavailable')
+        return ComplianceReport(overall_status='green', summary='Reviewed', findings=[])
+
+    monkeypatch.setattr(jobs, 'review_with_openrouter', review)
+    meta = ReviewRequestMeta(ad_copy='Test copy')
+    if case == 'live':
+        meta.live_scan_kind = 'copy'
+        meta.live_scan_key = 'live'
+    storage.set_status('one', JobStatus.queued, 0, 'Queued', 'Copy', has_creative=False)
+    await jobs.process_job('one', None, 'copy_only', meta)
+    if case == 'failed':
+        assert storage.get_status('one').status == JobStatus.failed
+        assert len(requests) == 1
+        request = requests[0]
+        assert request.url.host == 'api.telegram.org'
+        assert request.url.path.endswith('/sendMessage')
+        body = json.loads(request.content)
+        assert body['chat_id'] == 'test-chat'
+        assert 'Review failed' in body['text']
+    else:
+        assert storage.get_status('one').status == JobStatus.complete
+        assert storage.get_report('one')['overall_status'] == 'green'
+        assert requests == []
 
 
 def test_durable_delivery_enqueues_claims_and_records_failure(monkeypatch):
@@ -290,13 +318,11 @@ def test_missing_credentials_preserve_pending_notification(monkeypatch):
     assert telegram.deliver_pending_telegram_notifications() == 0
 
 
-def test_successful_individual_and_live_reviews_and_starts_are_quiet(monkeypatch):
+def test_individual_and_batch_review_starts_are_quiet(monkeypatch):
     storage.set_status('one', JobStatus.complete, 100, 'Complete')
     sent = []
     monkeypatch.setattr(telegram, '_send_telegram_message', lambda message, context: sent.append(message) or True)
     monkeypatch.setattr(telegram, '_attach_review_pdf', lambda *args: pytest.fail('Unexpected PDF'))
-    assert not telegram.send_review_message(JobRecord(job_id='one'), {'overall_status': 'green'})
-    assert not telegram.send_live_scan_message(JobRecord(job_id='one'), {'overall_status': 'green'}, ReviewRequestMeta())
     assert not telegram.send_review_started(JobRecord(job_id='one'), ReviewRequestMeta())
     assert not telegram.send_review_started(JobRecord(job_id='one'), ReviewRequestMeta(batch_id='batch', batch_item_id='one'))
     assert sent == []

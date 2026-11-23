@@ -53,7 +53,6 @@ def source_blocks(text):
     lines = [line.strip() for line in bounded_text(text).splitlines() if line.strip()]
     if not lines:
         raise HTTPException(422, 'Add guideline text before organizing it.')
-    # Keep every source line even in long documents; larger blocks stay indivisible.
     width = max(1, math.ceil(len(lines) / 800))
     return ['\n'.join(lines[index:index + width]) for index in range(0, len(lines), width)]
 

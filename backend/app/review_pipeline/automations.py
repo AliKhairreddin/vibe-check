@@ -353,15 +353,10 @@ async def run_review_automation(
                 queued_file_ids.add(file.file_id)
             except Exception as exc:
                 failures.append(f'{file.name}: {type(exc).__name__}')
-                try:
-                    mark_automation_run_retry_required(
-                        automation.automation_id,
-                        run_id,
-                    )
-                except Exception:
-                    # Keep the claim if the durable retry marker could not be
-                    # saved. Recovery can safely release this unqueued file.
-                    raise
+                mark_automation_run_retry_required(
+                    automation.automation_id,
+                    run_id,
+                )
                 if batch_id:
                     await asyncio.to_thread(
                         finish_batch_item_and_notify,

@@ -47,7 +47,7 @@ from app.review_pipeline.ocr import OcrResult, normalize_text, dedupe_ocr
 from app.review_pipeline.storage import create_batch, current_offer_outcomes, delete_review, disable_offer_profile, get_batch, get_batches, get_offer_profile_revision, get_review_stats, list_offer_profiles, resolve_active_offer_profiles, resolve_offer_profiles, set_status, get_status, set_report, get_report, list_reviews, list_reviews_page, upsert_offer_profile
 from app.review_pipeline.automation_storage import claim_automation_files, claim_automation_run, finish_automation_run, list_review_automations, upsert_review_automation
 from app.review_pipeline.source_links import resolve_review_sources
-from app.review_pipeline.telegram import build_batch_message, build_live_scan_message, build_review_message, finish_batch_item_and_notify, send_review_message
+from app.review_pipeline.telegram import build_batch_message, build_live_scan_message, build_review_message, finish_batch_item_and_notify
 from app.review_pipeline.video import ffprobe_command, extract_frames_command
 from app.review_pipeline.vision import select_frame_records
 from app.review_pipeline.verticals import classify_review_vertical
@@ -3219,7 +3219,6 @@ async def test_kissterra_client_portal_is_password_protected_and_offer_scoped(tm
         'findings':[],
     })
     set_status(job_id, JobStatus.complete, 100, 'Complete')
-    # This fixture represents a review already released to its evaluated offers.
     record = review_storage.get_status(job_id)
     record.released_offer_ids = record.offer_ids
     review_storage.write_json(tmp_path / job_id / 'status.json', record.model_dump(mode='json'))
@@ -3403,7 +3402,6 @@ def test_client_report_fallback_requires_a_visible_completed_review(tmp_path, mo
     assert review_storage.get_client_review_report('kissterra','kissterra',job_id) is None
 
     set_status(job_id, JobStatus.complete, 100, 'Complete')
-    # This fixture represents a review already released to its evaluated offers.
     record = review_storage.get_status(job_id)
     record.released_offer_ids = record.offer_ids
     review_storage.write_json(tmp_path / job_id / 'status.json', record.model_dump(mode='json'))
@@ -3635,7 +3633,6 @@ def test_video_transcription_overlaps_visual_preparation(tmp_path, monkeypatch):
     monkeypatch.setattr(review_jobs, 'review_with_openrouter', green_review)
     monkeypatch.setattr(review_jobs, 'persist_review_evidence_frames', lambda *args: [])
     monkeypatch.setattr(review_jobs, 'build_and_store_review_pdf_variants', lambda *args, **kwargs: [])
-    monkeypatch.setattr(review_jobs, 'send_review_message', lambda *args: True)
 
     asyncio.run(process_job('overlap', media_path, 'video', ReviewRequestMeta()))
 
@@ -4227,7 +4224,6 @@ async def test_dashboard_media_streams_drive_ranges_and_enforces_client_scope(tm
         'findings':[],
     })
     set_status(job_id, JobStatus.complete, 100, 'Complete')
-    # This fixture represents a review already released to its evaluated offers.
     record = review_storage.get_status(job_id)
     record.released_offer_ids = record.offer_ids
     review_storage.write_json(tmp_path / job_id / 'status.json', record.model_dump(mode='json'))
@@ -4828,7 +4824,7 @@ def test_batched_jobs_suppress_individual_messages_until_last_job(tmp_path, monk
         )
 
     monkeypatch.setattr(review_jobs, 'review_with_openrouter', green_review)
-    monkeypatch.setattr('app.review_pipeline.jobs.send_review_message', lambda *args: individual_messages.append(args))
+    monkeypatch.setattr(review_telegram, '_send_telegram_message', lambda *args: individual_messages.append(args) or True)
     monkeypatch.setattr(review_telegram, 'send_batch_message', lambda batch: batch_messages.append(batch) or True)
     create_batch('batch2', [
         CreateBatchItem(item_id='item1', file_name='Ad copy 1', media_kind='copy_only'),

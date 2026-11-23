@@ -104,7 +104,6 @@ def test_missing_or_disabled_vertical_does_not_fall_back_to_default_or_auto():
     meta.vertical = 'solar'
     with pytest.raises(HTTPException, match='No active advertiser guidelines'):
         select_review_policies(meta, 'AUTO.png')
-    # Legacy historical snapshots have no policy bundle and stay unchanged.
     old = ReviewRequestMeta(offer_profiles=[OfferProfile(offer_id='kissterra', display_name='Kissterra', official_guidelines='Historical policy')])
     assert select_review_policies(old, 'HOME.png') is old
 

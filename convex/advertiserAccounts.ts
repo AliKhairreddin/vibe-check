@@ -90,7 +90,6 @@ export const createComplimentary = internalMutation({
       || !args.name.trim() || args.name.length > 100 || !args.contactName.trim() || args.contactName.length > 160
       || !/^[a-f0-9]{64}$/.test(args.inviteHash)) throw new Error('Invalid complimentary workspace');
     const username = `advertiser.${args.clientId}`;
-    // Refuse to replace any existing customer, policy, or access allocation.
     const conflicts = await Promise.all([
       ctx.db.query('advertiserAccounts').withIndex('by_client_id', q => q.eq('clientId', args.clientId)).unique(),
       ctx.db.query('advertiserAccounts').withIndex('by_username', q => q.eq('username', username)).unique(),

@@ -62,7 +62,6 @@ export const advanceRun = internalMutation({
       const pending = page.isDone ? [] : parts.splice(-1);
       let part = run.part;
       for (const message of parts) await setMessage(ctx, `digest:${run.day}:${part++}`, message);
-      // Store the last incomplete message without its heading for the next page.
       const buffer = pending.map(message => message.slice(header.length).replace(/^ \(continued\)/, '').trim());
       await ctx.db.patch(runId, { cursor: page.continueCursor, status: page.isDone ? 'complete' : 'sending', part, buffer });
     }

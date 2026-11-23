@@ -1,3 +1,6 @@
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,3 +74,44 @@ def test_health_check_verifies_workers_shards_and_ocr(monkeypatch):
     state['configured_shards'] = 10
     with pytest.raises(RuntimeError, match='Wrong shard configuration'):
         check_backend_health.check_backend_health()
+
+
+def test_policy_sync_retries_diagnostic_output_before_calling_convex(tmp_path):
+    pnpm = tmp_path / 'pnpm'
+    pnpm.write_text("""#!/bin/sh
+case "$3" in
+    env)
+        if [ ! -f "$FIXTURE/first-read" ]; then
+            touch "$FIXTURE/first-read"
+            echo 'WebSocket closed with code 1006'
+        fi
+        echo 'synthetic-policy-token'
+        ;;
+    run)
+        if [ "$4" = "$FAIL_FUNCTION" ]; then
+            echo "$5" >&2
+            exit 1
+        fi
+        printf '%s\\n' "$5" >> "$FIXTURE/requests"
+        echo '[]'
+        ;;
+    *) exit 1 ;;
+esac
+""")
+    pnpm.chmod(0o755)
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'sync-offer-policies.py'
+    env = {**os.environ, 'CONVEX_HTTP_SECRET': '', 'GITHUB_ACTIONS': 'false',
+           'FIXTURE': str(tmp_path), 'PATH': f"{tmp_path}{os.pathsep}{os.environ['PATH']}"}
+    subprocess.run([sys.executable, str(script), '--deployment', 'local:fixture'],
+                   cwd=tmp_path, env=env, check=True, capture_output=True)
+    requests = [json.loads(line) for line in (tmp_path / 'requests').read_text().splitlines()]
+    assert requests
+    assert all(request['secret'] == 'synthetic-policy-token' for request in requests)
+
+    for function in ('offers:list', 'offers:upsert'):
+        failed = subprocess.run([sys.executable, str(script), '--deployment', 'local:fixture'],
+                                cwd=tmp_path, env={**env, 'FAIL_FUNCTION': function},
+                                capture_output=True, text=True)
+        assert failed.returncode != 0
+        assert function in failed.stderr
+        assert 'synthetic-policy-token' not in failed.stdout + failed.stderr

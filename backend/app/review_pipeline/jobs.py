@@ -22,12 +22,7 @@ from .storage import (
 from .pdf_reports import build_and_store_review_pdf_variants
 from .evidence_frames import persist_review_evidence_frames
 from .live_scan_storage import finish_live_review
-from .telegram import (
-    finish_batch_item_and_notify,
-    send_live_scan_message,
-    send_review_message,
-    send_job_event,
-)
+from .telegram import finish_batch_item_and_notify, send_job_event
 from .video import metadata, extract_frames
 from .audio import extract_audio, transcribe
 from .guidelines import build_internal_override_context, build_policy_context, built_in_acp_profile
@@ -308,7 +303,6 @@ async def _review_offer(
     report.internal_disposition=_internal_disposition(report)
     if ((ocr_coverage or {}).get('status') in {'partial', 'unavailable'}
             and report.internal_disposition in {'clear', 'accepted_with_override'}):
-        # A completed review with unread text is not a fully cleared creative.
         report.internal_disposition='human_review'
     return OfferComplianceResult.model_validate(
         report.model_dump(exclude={'schema_version','primary_offer_id','offer_results'})
@@ -465,7 +459,6 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
             try:
                 ocr_result=await _timed_thread_call(timer, 'ocr', run_ocr, jd/'frames', frames)
             except Exception:
-                # Preserve review completion even for an unexpected OCR-stage error.
                 logger.exception('OCR stage failed for %s; continuing with available evidence.', job_id)
                 ocr_result=OcrResult.unavailable(frames, 'stage_error')
             ocr=ocr_result.rows
@@ -565,7 +558,7 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                 job_id,
                 type(artifact_results[1]).__name__,
             )
-        rec=await _set_status(job_id, JobStatus.complete, 100, 'Complete')
+        await _set_status(job_id, JobStatus.complete, 100, 'Complete')
         with timer.stage('completion_notifications'):
             try:
                 await anyio.to_thread.run_sync(record_review_automation_job_result, meta, job_id)
@@ -583,13 +576,6 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     )
                 except Exception:
                     logger.exception('Could not finalize live scan review %s',job_id)
-                await asyncio.to_thread(
-                    send_live_scan_message,
-                    rec,
-                    report_json,
-                    meta,
-                    media_kind,
-                )
             elif meta.has_batch:
                 try:
                     await asyncio.to_thread(
@@ -604,14 +590,6 @@ async def process_job(job_id:str, media_path:Path|None, media_kind:MediaKind, me
                     )
                 except Exception:
                     logger.exception('Batch completion notification failed for job %s', job_id)
-            elif not meta.api_partner_id and not meta.publisher_id:
-                await asyncio.to_thread(
-                    send_review_message,
-                    rec,
-                    report_json,
-                    meta.ad_copy,
-                    media_kind,
-                )
         completed=True
     except Exception as e:
         error_type=type(e).__name__

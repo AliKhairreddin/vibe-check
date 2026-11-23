@@ -1,5 +1,6 @@
 """Read the backend credential without treating Convex CLI diagnostics as data."""
 import os
+from pathlib import Path
 import subprocess
 import time
 
@@ -11,6 +12,7 @@ def read_backend_secret(deployment=None):
             result = subprocess.run(
                 ['pnpm', 'exec', 'convex', 'env', 'get', 'CONVEX_HTTP_SECRET'],
                 capture_output=True, text=True, timeout=60, env=env,
+                cwd=Path(__file__).resolve().parents[1],
             )
             value = result.stdout.strip()
             # Transient WebSocket diagnostics can appear on stdout before the
