@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from convex_secret import read_backend_secret
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VENV_PYTHON = ROOT / '.venv' / 'bin' / 'python'
@@ -29,24 +31,6 @@ def _convex_env(deployment: str) -> dict[str, str]:
     return {**os.environ, 'CONVEX_DEPLOYMENT': deployment}
 
 
-def _read_http_secret(deployment: str) -> str:
-    configured = os.getenv('CONVEX_HTTP_SECRET', '').strip()
-    if configured:
-        return configured
-    result = subprocess.run(
-        ['pnpm', 'exec', 'convex', 'env', 'get', 'CONVEX_HTTP_SECRET'],
-        cwd=ROOT,
-        env=_convex_env(deployment),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    secret = result.stdout.strip()
-    if not secret:
-        raise RuntimeError('CONVEX_HTTP_SECRET is not configured for the selected deployment.')
-    return secret
-
-
 def _convex_json(deployment: str, function_name: str, payload: dict[str, object]):
     result = subprocess.run(
         [
@@ -59,10 +43,11 @@ def _convex_json(deployment: str, function_name: str, payload: dict[str, object]
         ],
         cwd=ROOT,
         env=_convex_env(deployment),
-        check=True,
         capture_output=True,
         text=True,
     )
+    if result.returncode:
+        raise RuntimeError(f'Convex function {function_name} failed (exit {result.returncode}).')
     return json.loads(result.stdout)
 
 
@@ -110,7 +95,7 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    secret = _read_http_secret(args.deployment)
+    secret = os.getenv('CONVEX_HTTP_SECRET', '').strip() or read_backend_secret(args.deployment)
     current = _convex_json(
         args.deployment,
         'offers:list',
@@ -148,20 +133,7 @@ def main() -> int:
         if _matches(current_by_id.get(offer_id, {}), payload):
             print(f'{offer_id} is already current.')
             continue
-        subprocess.run(
-            [
-                'pnpm',
-                'exec',
-                'convex',
-                'run',
-                'offers:upsert',
-                json.dumps(payload, ensure_ascii=False),
-            ],
-            cwd=ROOT,
-            env=_convex_env(args.deployment),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+        _convex_json(args.deployment, 'offers:upsert', payload)
         print(f'Published {offer_id}.')
     return 0
 
