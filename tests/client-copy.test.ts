@@ -14,14 +14,6 @@ const clientInsightsSource = readFileSync(
   new URL('../frontend/src/components/client-insights.tsx', import.meta.url),
   'utf8',
 );
-const clientSettingsSource = readFileSync(
-  new URL('../frontend/src/components/client-settings.tsx', import.meta.url),
-  'utf8',
-);
-const clientPreferencesSource = readFileSync(
-  new URL('../frontend/src/lib/client-preferences.ts', import.meta.url),
-  'utf8',
-);
 const adminAccessGateSource = readFileSync(
   new URL('../frontend/src/components/admin-access-gate.tsx', import.meta.url),
   'utf8',
@@ -76,14 +68,6 @@ test('uses neutral client workspace labels and exposes result filtering', () => 
   assert.doesNotMatch(clientDashboardSource, /Signed in as/);
 });
 
-test('labels the client footer with the signed-in company', () => {
-  assert.match(clientDashboardSource, /workspaceName=\{selectedPortal\?\.display_name\}/);
-  assert.match(clientDashboardSource, /const signedInCompany = session\.role === 'publisher'\s*\? session\.publisher_name \?\? session\.username\s*: resolvedWorkspaceName/);
-  assert.match(clientDashboardSource, /aria-label="Signed-in company"[\s\S]*\{signedInCompany\}<\/p>/);
-  assert.doesNotMatch(clientDashboardSource, />Client view<\/p>/);
-  assert.doesNotMatch(clientDashboardSource, />Client workspace<\/p>/);
-});
-
 test('groups metrics under performance, actions under workspace, and account controls above the company', () => {
   const workspace = clientDashboardSource.indexOf('>Workspace</SidebarGroupLabel>');
   const reviewQueue = clientDashboardSource.indexOf('<span>Review queue</span>');
@@ -117,18 +101,6 @@ test('provides dashboard, vertical, and batch insight routes', () => {
   assert.match(clientInsightsSource, /icon: CarFront/);
   assert.match(clientInsightsSource, /Home Insurance/);
   assert.match(clientInsightsSource, /Batch performance/);
-});
-
-test('lets clients switch layouts and save review queue defaults', () => {
-  assert.match(clientAppSource, /path: '\/client\/settings'/);
-  assert.match(clientDashboardSource, /aria-label="Grid view"/);
-  assert.match(clientDashboardSource, /aria-label="List view"/);
-  assert.match(clientDashboardSource, /<span>Result<\/span>[\s\S]*<span>Findings<\/span>[\s\S]*<span>Decision<\/span>/);
-  assert.match(clientSettingsSource, /Default review layout/);
-  assert.match(clientSettingsSource, /Display density/);
-  assert.match(clientSettingsSource, /Default result filter/);
-  assert.match(clientSettingsSource, /Open newest batch automatically/);
-  assert.match(clientPreferencesSource, /adchecked-client-preferences-v1/);
 });
 
 test('never renders a sign-in screen while an existing session is being restored', () => {

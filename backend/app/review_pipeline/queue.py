@@ -16,6 +16,7 @@ from .storage import get_status, job_dir, set_status, write_json
 from .live_scan_storage import finish_live_review
 from .telegram import finish_batch_item_and_notify, send_job_event, send_review_started
 from .recovery import (
+    ManifestAvailability,
     RecoveredReviewPayload,
     claim_interrupted_review,
     delete_job_payload,
@@ -341,15 +342,17 @@ async def recover_interrupted_jobs() -> dict[str, int]:
         payloads = await load_recovery_payloads(job_ids)
         reconstructed = await asyncio.to_thread(
             reconstruct_drive_payloads,
-            [review for review in interrupted if review.job_id not in payloads],
+            [review for review in interrupted if payloads[review.job_id] is ManifestAvailability.MISSING],
         )
         payloads.update(reconstructed)
         requeued = 0
         unrecoverable = []
         for review in interrupted:
             job_id = review.job_id
-            payload = payloads.get(job_id)
-            if payload is None:
+            payload = payloads[job_id]
+            if payload is ManifestAvailability.RETRY_LATER:
+                continue
+            if payload is ManifestAvailability.MISSING:
                 unrecoverable.append(review)
                 continue
             if (
@@ -408,7 +411,8 @@ async def recover_interrupted_jobs() -> dict[str, int]:
                 owner = await asyncio.to_thread(_convex_call, 'query', 'telegramNotifications:isApiReview', {'jobId': job_id})
                 if owner is not False:
                     continue
-                await asyncio.to_thread(send_job_event, job_id, payload.meta if payload else ReviewRequestMeta(), 'failed',
+                meta = payload.meta if isinstance(payload, RecoveredReviewPayload) else ReviewRequestMeta()
+                await asyncio.to_thread(send_job_event, job_id, meta, 'failed',
                                         'Review was interrupted and its saved source is unavailable. Re-upload the creative to retry.')
             except Exception:
                 logger.exception('Could not notify interrupted review %s.', job_id)
@@ -512,14 +516,24 @@ async def _download_drive_file(job: QueuedReviewJob) -> None:
     )
 
 
+class ManifestReadDeferred(Exception):
+    pass
+
+
 async def _restore_recovery_file(job: QueuedReviewJob) -> None:
+    if job.media_path is None or job.drive_file is not None:
+        return
     payload = job.recovery_payload
-    if (
-        payload is None
-        or payload.media_url is None
-        or job.media_path is None
-        or job.drive_file is not None
-    ):
+    if payload is None:
+        if job.attempt == 1:
+            return
+        sources = await load_recovery_payloads([job.job_id])
+        payload = sources[job.job_id]
+        if payload is ManifestAvailability.RETRY_LATER:
+            raise ManifestReadDeferred('The saved upload could not be read during recovery')
+        if payload is ManifestAvailability.MISSING or not payload.media_url:
+            raise FileNotFoundError('The saved upload is unavailable for this review')
+    if payload.media_url is None:
         return
     set_status(
         job.job_id,
@@ -530,43 +544,24 @@ async def _restore_recovery_file(job: QueuedReviewJob) -> None:
     await restore_media(payload, job.media_path)
 
 
-async def _requeue_timed_out_job(job: QueuedReviewJob, worker_index: int) -> bool:
-    max_attempts=_job_max_attempts()
+async def _retry_job(job: QueuedReviewJob, worker_index: int, reason: str) -> bool:
+    max_attempts = _job_max_attempts()
     if job.attempt >= max_attempts:
         return False
 
-    retry_payload=job.recovery_payload
-    if (
-        job.media_kind != 'copy_only'
-        and job.drive_file is None
-        and retry_payload is None
-    ):
-        payloads=await load_recovery_payloads([job.job_id])
-        retry_payload=payloads.get(job.job_id)
-        if retry_payload is None or retry_payload.media_url is None:
-            logger.error(
-                'Timed-out job %s could not be retried because its recovery media is unavailable.',
-                job.job_id,
-            )
-            return False
-
-    next_attempt=job.attempt + 1
-    message=(
-        'Processing exceeded the hard job deadline; retrying automatically '
+    next_attempt = job.attempt + 1
+    message = (
+        f'{reason}; retrying automatically '
         f'(attempt {next_attempt} of {max_attempts})'
     )
     record = set_status(job.job_id, JobStatus.queued, 0, message)
-    await _queue.put(replace(
-        job,
-        recovery_payload=retry_payload,
-        attempt=next_attempt,
-    ))
+    await _queue.put(replace(job, attempt=next_attempt))
     _queue_diagnostics['retry_count'] = int(
         _queue_diagnostics['retry_count']
     ) + 1
     await asyncio.to_thread(send_job_event, record, job.meta, 'retrying', message, attempt=next_attempt)
     logger.warning(
-        'Queue worker %s requeued timed-out job %s for attempt %s of %s.',
+        'Queue worker %s requeued job %s for attempt %s of %s.',
         worker_index + 1,
         job.job_id,
         next_attempt,
@@ -621,12 +616,13 @@ async def _process_queue(worker_index: int) -> None:
                 worker_index + 1,
                 job.job_id,
             )
-            if isinstance(exc, TimeoutError):
+            if isinstance(exc, (TimeoutError, ManifestReadDeferred)):
+                reason = str(exc) if isinstance(exc, ManifestReadDeferred) else 'Processing exceeded the hard job deadline'
                 try:
-                    retrying=await _requeue_timed_out_job(job, worker_index)
+                    retrying = await _retry_job(job, worker_index, reason)
                 except Exception:
                     logger.exception(
-                        'Queue worker %s could not requeue timed-out job %s.',
+                        'Queue worker %s could not requeue job %s.',
                         worker_index + 1,
                         job.job_id,
                     )
@@ -638,6 +634,8 @@ async def _process_queue(worker_index: int) -> None:
                     if isinstance(exc, TimeoutError)
                     else f'Queue processing failed: {type(exc).__name__}'
                 )
+                if isinstance(exc, ManifestReadDeferred):
+                    message = f'{exc} after {job.attempt} attempts'
                 failed_record = set_status(
                     job.job_id,
                     JobStatus.failed,

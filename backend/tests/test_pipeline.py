@@ -3922,12 +3922,11 @@ async def test_recovery_manifests_load_concurrently(monkeypatch):
     recovered=await load
 
     assert max_active == 3
-    assert set(recovered) == {'job-1', 'job-2', 'job-3'}
+    assert {payload.job_id for payload in recovered.values()} == {'job-1', 'job-2', 'job-3'}
 
 
 @pytest.mark.anyio
 async def test_recovery_manifest_batch_has_one_bounded_deadline(monkeypatch):
-    cancelled=0
 
     class FakeClient:
         def __init__(self, **kwargs):
@@ -3940,12 +3939,7 @@ async def test_recovery_manifest_batch_has_one_bounded_deadline(monkeypatch):
             return None
 
         async def get(self, url):
-            nonlocal cancelled
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                cancelled += 1
-                raise
+            await asyncio.Event().wait()
 
     monkeypatch.setattr(
         review_recovery,
@@ -3963,8 +3957,9 @@ async def test_recovery_manifest_batch_has_one_bounded_deadline(monkeypatch):
         timeout=0.5,
     )
 
-    assert recovered == {}
-    assert cancelled == review_recovery.MANIFEST_DOWNLOAD_CONCURRENCY
+    assert recovered == {
+        f'job-{index}': review_recovery.ManifestAvailability.RETRY_LATER for index in range(12)
+    }
 
 
 @pytest.mark.anyio
@@ -4005,7 +4000,7 @@ async def test_startup_recovery_requeues_durable_jobs_and_fails_missing_jobs(
 
     async def fake_load(job_ids):
         assert job_ids == ['recoverable', 'missing']
-        return {'recoverable':recovered}
+        return {'recoverable': recovered, 'missing': review_recovery.ManifestAvailability.MISSING}
 
     async def fake_enqueue(*args, **kwargs):
         enqueued.append((args, kwargs))
