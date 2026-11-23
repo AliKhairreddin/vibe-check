@@ -182,8 +182,6 @@ test('pending keeps the assessment, decisions override it, and reset restores it
 
 test('review lists retain saved decisions beyond 1,000 account decisions, including after changes and reset', async () => {
   const { ctx, tables, add } = fixture();
-  // These older jobs are outside the displayed page but used to consume the
-  // entire account-wide decision lookup before it reached the visible job.
   for (let i = 0; i < 1_005; i++) {
     await ctx.db.insert('clientReviewDecisions', {
       clientId: 'kissterra', offerId: 'kissterra', jobId: `a-${String(i).padStart(4, '0')}`,
@@ -199,7 +197,6 @@ test('review lists retain saved decisions beyond 1,000 account decisions, includ
     if (decision) await invoke(decide, ctx, { ...args, decision, feedbackNote: 'Keep my feedback' });
     else await invoke(clearDecision, ctx, args);
     for (const publisherId of [undefined, 'publisher']) {
-      // A fresh list read is what made the successful save disappear on screen.
       const [row] = await invoke(list, ctx, { clientId: args.clientId, offerId: args.offerId, publisherId, limit: 1 });
       const detail = await invoke(getDetail, ctx, args);
       assert.equal(row.decision?.decision ?? null, decision);
