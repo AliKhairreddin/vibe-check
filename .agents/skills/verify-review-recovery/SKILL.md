@@ -46,7 +46,7 @@ Last checked against `a1761481817aafa1b890f40c416bb7068fadf6b4`. Compare `_load_
 
 ## Verify that older manifest failures yield to other reviews
 
-Run `PYTEST_ADDOPTS='-k recovery_reaches or deferred_review_reenters' scripts/test-batch-db.sh` with the locked JavaScript and Python dependencies installed. The tests run the recovery scheduler, claims and review selection against an isolated Convex database. A synthetic HTTP transport supplies manifest responses, and the enqueue recorder observes which reviews reach the queue.
+Run `PYTEST_ADDOPTS='-k test_recovery_fairness' scripts/test-batch-db.sh` with the locked JavaScript and Python dependencies installed. The tests run the recovery scheduler, claims and review selection against an isolated Convex database. A synthetic HTTP transport supplies manifest responses, and the enqueue recorder observes which reviews reach the queue.
 
 One trace puts a healthy source after 16 hanging reads with eight download slots. It must reach the queue within three scans. Another puts the healthy source after 501 unavailable manifests with a 500-review scan limit. It must reach the queue within two scans. Both assume a finite backlog and cover the order in which healthy work waits longest. A third case checks that a previously attempted review becomes selectable after the three-minute grace interval and that replaying a deferral cannot extend a newer attempt.
 
