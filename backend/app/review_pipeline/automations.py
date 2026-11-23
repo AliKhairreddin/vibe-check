@@ -39,15 +39,13 @@ from .models import (
     OfferProfile,
     ReviewAutomation,
     ReviewRequestMeta,
-    ReviewSource,
 )
 from .queue import enqueue_job
+from .source_links import link_queued_drive_review
 from .storage import (
     create_batch,
     job_dir,
-    now_ms,
     resolve_review_offer_snapshot,
-    set_review_source,
 )
 from .telegram import finish_batch_item_and_notify, send_automation_event
 
@@ -190,20 +188,7 @@ async def _enqueue_automation_file(
         file_size=drive_file.size,
         drive_file=drive_file,
     )
-    try:
-        set_review_source(job_id, ReviewSource(
-            kind='google_drive_file',
-            status='linked',
-            url=drive_file.web_view_link,
-            file_id=drive_file.file_id,
-            label='Open creative in Google Drive',
-            message=f'Queued automatically by “{automation.name}”.',
-            checked_at=now_ms(),
-        ))
-    except Exception:
-        # The job is already durable and queued. Source-link metadata is useful
-        # but must never make the automation release its claim and enqueue a duplicate.
-        logger.exception('Could not attach Drive source metadata to automated job %s', job_id)
+    link_queued_drive_review(record, drive_file, f'Queued automatically by “{automation.name}”.')
     return record.job_id
 
 

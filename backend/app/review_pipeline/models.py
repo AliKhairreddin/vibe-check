@@ -290,6 +290,17 @@ class JobRecord(BaseModel):
     updated_at: int | None = None
     vertical: ReviewVertical = 'auto-insurance'
 
+    def with_source(self, source: ReviewSource) -> JobRecord:
+        return self.model_copy(update={
+            'source_kind': source.kind,
+            'source_status': source.status,
+            'source_url': source.url,
+            'source_file_id': source.file_id,
+            'source_message': source.message,
+            'source_checked_at': source.checked_at,
+        })
+
+
 class ReviewSource(BaseModel):
     kind: ReviewSourceKind | None = None
     status: ReviewSourceStatus
