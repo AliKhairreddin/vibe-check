@@ -1,5 +1,5 @@
 name: Portal browser tests
-on: [pull_request, workflow_dispatch]
+on: [pull_request, workflow_dispatch, workflow_call]
 permissions:
   contents: read
 jobs:
