@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { listInterrupted, claimInterrupted, failInterrupted } from '../convex/reviews.ts';
 import { tickState } from '../convex/automations.ts';
 
@@ -121,7 +121,10 @@ test('missing recovery media cannot fail a healthy review on another container',
   const completed = add('completed', { status: 'complete' });
   const stale = add('stale');
   const result = await invoke(failInterrupted, ctx, {
-    jobIds: ['active', 'fresh', 'completed', 'stale'], message: 'Missing source',
+    snapshots: [active, fresh, completed, stale].map(row => ({
+      jobId: row.jobId, expectedUpdatedAt: row.updatedAt,
+    })),
+    message: 'Missing source',
   });
   assert.deepEqual(result.failedJobIds, ['stale']);
   assert.equal(active.status, 'reviewing_with_llm');
@@ -130,9 +133,101 @@ test('missing recovery media cannot fail a healthy review on another container',
   assert.equal(stale.status, 'failed');
 });
 
+test('a draining container without a recovery snapshot leaves the review for the next pass', async () => {
+  const { ctx, add } = fixture();
+  const review = add('job');
+  assert.deepEqual(await invoke(failInterrupted, ctx, {
+    jobIds: ['job'], message: 'Missing source',
+  }), { failedJobIds: [] });
+  assert.equal(review.status, 'reviewing_with_llm');
+});
+
 test('recovery operations require the backend secret', async () => {
   const { ctx } = fixture();
   for (const operation of [listInterrupted, claimInterrupted, failInterrupted]) {
     await assert.rejects(invoke(operation, ctx, { secret: 'wrong' }), /Unauthorized/);
+  }
+});
+
+type RecoveryEvent = 'worker A' | 'worker B' | 'owner' | 'grace expires';
+
+function* schedules(events: RecoveryEvent[]): Generator<RecoveryEvent[]> {
+  if (!events.length) yield [];
+  for (const event of events) {
+    for (const rest of schedules(events.filter(other => other !== event))) {
+      yield [event, ...rest];
+    }
+  }
+}
+
+type Decision = 'claim' | 'fail';
+type OwnerEvent = 'heartbeat' | 'progress' | 'complete';
+
+async function checkSchedule(
+  context: TestContext,
+  schedule: RecoveryEvent[],
+  actionA: Decision,
+  actionB: Decision,
+  ownerEvent: OwnerEvent,
+) {
+  context.mock.timers.setTime(10_000_000);
+  const { ctx, tables, add } = fixture();
+  const row = add('job');
+  const observed = await invoke(listInterrupted, ctx, { limit: 1, idleInstanceId: 'worker A' });
+  assert.equal(observed.length, 1);
+  const snapshot = { jobId: 'job', expectedUpdatedAt: observed[0].updatedAt };
+  let snapshotConsumed = false;
+  let ownerHasHeartbeat = false;
+  const trace = [];
+  for (const event of schedule) {
+    if (event === 'grace expires') {
+      context.mock.timers.setTime(Date.now() + 3 * 60_000);
+      ownerHasHeartbeat = false;
+      trace.push(event);
+    } else if (event === 'owner') {
+      if (row.processingInstanceId !== 'old' || row.status === 'failed') continue;
+      trace.push(ownerEvent);
+      if (ownerEvent === 'heartbeat') {
+        ownerHasHeartbeat = true;
+        tables.platformInstances.push({ instanceId: 'old', updatedAt: Date.now() });
+      } else {
+        snapshotConsumed = true;
+        row.updatedAt = Date.now();
+        if (ownerEvent === 'complete') row.status = 'complete';
+      }
+    } else {
+      const action = event === 'worker A' ? actionA : actionB;
+      trace.push(`${event} ${action}`);
+      const allowed = !snapshotConsumed && !ownerHasHeartbeat;
+      const before = structuredClone(row);
+      const accepted = action === 'claim'
+        ? await invoke(claimInterrupted, ctx, { ...snapshot, instanceId: event })
+        : (await invoke(failInterrupted, ctx, {
+          snapshots: [snapshot], idleInstanceId: event, message: 'Missing source',
+        })).failedJobIds.includes('job');
+      const counterexample = trace.join(' -> ');
+      assert.equal(accepted, allowed, counterexample);
+      if (allowed) {
+        snapshotConsumed = true;
+        if (action === 'claim') assert.equal(row.processingInstanceId, event, counterexample);
+        else assert.equal(row.status, 'failed', counterexample);
+      } else {
+        assert.deepEqual(row, before, counterexample);
+      }
+    }
+  }
+}
+
+test('recovery model accepts a decision only for the observed interrupted review', async t => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const actions = ['fail', 'claim'] as const;
+  for (const actionA of actions) {
+    for (const actionB of actions) {
+      for (const ownerEvent of ['heartbeat', 'progress', 'complete'] as const) {
+        for (const schedule of schedules(['worker A', 'worker B', 'owner', 'grace expires'])) {
+          await checkSchedule(t, schedule, actionA, actionB, ownerEvent);
+        }
+      }
+    }
   }
 });
