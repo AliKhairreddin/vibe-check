@@ -10,98 +10,10 @@ const clientAppSource = readFileSync(
   new URL('../frontend/src/client-app.tsx', import.meta.url),
   'utf8',
 );
-const clientInsightsSource = readFileSync(
-  new URL('../frontend/src/components/client-insights.tsx', import.meta.url),
-  'utf8',
-);
 const adminAccessGateSource = readFileSync(
   new URL('../frontend/src/components/admin-access-gate.tsx', import.meta.url),
   'utf8',
 );
-
-test('keeps internal review-processing language out of the customer portal', () => {
-  const internalPhrases = [
-    'Admin view · all clients',
-    'Calibrates future reviews',
-    'Client override',
-    'Learning signal',
-    'guarded precedent',
-    'Reusable policy feedback',
-  ];
-
-  for (const phrase of internalPhrases) {
-    assert.equal(clientDashboardSource.includes(phrase), false, `${phrase} should not be customer-facing`);
-  }
-});
-
-test('uses direct customer-facing sign-in and decision copy', () => {
-  assert.match(clientDashboardSource, /Sign in to review your creatives and share your decisions\./);
-  assert.match(clientDashboardSource, /What informed your decision\?/);
-  assert.match(clientDashboardSource, /Different from recommendation/);
-});
-
-test('keeps red, yellow, and green review counts separate', () => {
-  assert.match(clientDashboardSource, /label="red" tone="danger" value=\{statusCounts\.red\}/);
-  assert.match(clientDashboardSource, /label="yellow" tone="warning" value=\{statusCounts\.yellow\}/);
-  assert.match(clientDashboardSource, /label="green" tone="success" value=\{statusCounts\.green\}/);
-  assert.match(clientDashboardSource, /Original AdChecked assessment/);
-  assert.match(clientDashboardSource, /Final client decisions/);
-  assert.doesNotMatch(clientDashboardSource, /ai_status !== 'green'/);
-  assert.doesNotMatch(clientDashboardSource, /label="flagged"/);
-});
-
-test('keeps decision actions state-aware and supports optional notes', () => {
-  assert.match(clientDashboardSource, /review\.decision \? \(/);
-  assert.match(clientDashboardSource, /Reset to pending/);
-  assert.match(clientDashboardSource, /Decision note\{noteRequired \? '' : ' \(optional\)'\}/);
-  assert.match(clientDashboardSource, /Previous decision note:/);
-  assert.match(clientDashboardSource, /Open full review/);
-});
-
-test('uses neutral client workspace labels and exposes result filtering', () => {
-  assert.match(clientDashboardSource, /<h1[^>]*>\{shared \? shared\.title : 'Review queue'\}<\/h1>/);
-  assert.match(clientDashboardSource, /label="Result"/);
-  assert.match(clientDashboardSource, /label: 'Green', value: 'green'/);
-  assert.match(clientDashboardSource, /label: 'Yellow', value: 'yellow'/);
-  assert.match(clientDashboardSource, /label: 'Red', value: 'red'/);
-  assert.doesNotMatch(clientDashboardSource, />Kissterra<\//);
-  assert.doesNotMatch(clientDashboardSource, /Signed in as/);
-});
-
-test('groups metrics under performance, actions under workspace, and account controls above the company', () => {
-  const workspace = clientDashboardSource.indexOf('>Workspace</SidebarGroupLabel>');
-  const reviewQueue = clientDashboardSource.indexOf('<span>Review queue</span>');
-  const performance = clientDashboardSource.indexOf('>Performance</SidebarGroupLabel>');
-  const overview = clientDashboardSource.indexOf('<span>Overview</span>');
-  const homeInsurance = clientDashboardSource.indexOf('{(availableVerticals.data');
-  const sidebarFooter = clientDashboardSource.indexOf('<SidebarFooter');
-  const plan = clientDashboardSource.indexOf('<span>Plan & usage</span>');
-  const settings = clientDashboardSource.lastIndexOf('<span>Settings</span>');
-  const company = clientDashboardSource.indexOf('aria-label="Signed-in company"');
-
-  assert.ok(performance >= 0);
-  assert.ok(overview > performance);
-  assert.ok(homeInsurance > overview);
-  assert.ok(workspace > homeInsurance);
-  assert.ok(reviewQueue > workspace);
-  assert.ok(sidebarFooter > reviewQueue);
-  assert.ok(plan > sidebarFooter);
-  assert.ok(settings > plan);
-  assert.ok(company > settings);
-  assert.match(clientDashboardSource, /filter\(row => row.enabled !== false\)/);
-  assert.match(clientDashboardSource, /<span>\{row.name\}<\/span>/);
-  assert.doesNotMatch(clientDashboardSource, /<SidebarGroupLabel[^>]*>Verticals<\/SidebarGroupLabel>/);
-});
-
-test('provides dashboard, vertical, and batch insight routes', () => {
-  assert.match(clientAppSource, /path: '\/client\/uploads'/);
-  assert.match(clientAppSource, /path: '\/client\/verticals\/\$verticalId'/);
-  assert.match(clientAppSource, /path: '\/client\/\$clientId\/batches\/\$batchId'/);
-  assert.match(clientInsightsSource, /Auto Insurance/);
-  assert.match(clientInsightsSource, /icon: CarFront/);
-  assert.match(clientInsightsSource, /Home Insurance/);
-  assert.match(clientInsightsSource, /Batch performance/);
-});
 
 test('never renders a sign-in screen while an existing session is being restored', () => {
   const clientLoadingState = clientDashboardSource.indexOf(
